@@ -5,7 +5,7 @@ import { platformRequest } from '../../../lib/platform-request';
 import { projectItemPath } from '../dashboard-routes';
 
 import { SessionAssets } from './SessionAssets';
-import { Suspense, use, useCallback, useEffect, useOptimistic, useRef, useState, useSyncExternalStore, useTransition, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useOptimistic, useRef, useState, useSyncExternalStore, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
@@ -25,7 +25,7 @@ import { useLoadErrorToast } from '../../../lib/use-error-toast';
 import {
   agentSessionListSchema, agentSessionDetailSchema, fetchAgentData,
   mergeAgentMessages, safeSourceUrl, isActiveAgentRun, sendAgentMessage, watchAgentRun, AgentSendError,
-  type AgentSessionList, type AgentSessionDetail, type AgentSessionSeed, type AgentMessage, type AgentAdmission, type AgentProgress,
+  type AgentSessionList, type AgentSessionDetail, type AgentMessage, type AgentAdmission, type AgentProgress,
 } from '../../../lib/agent-sessions';
 
 export function AgentShell({ children }: { children: ReactNode }) {
@@ -54,14 +54,14 @@ export function AgentShell({ children }: { children: ReactNode }) {
 
 type ServerAccess = 'agent' | 'admin';
 
-export default function SessionsClient({ sessionId, sessionSeed, serverAccess }: {
-  sessionId?: string; sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess;
+export default function SessionsClient({ sessionId, initialSession, serverAccess }: {
+  sessionId?: string; initialSession?: AgentSessionDetail; serverAccess?: ServerAccess;
 }) {
   const { agentAccess, adminAccess, accessReady } = useDashboardSession();
-  // The session page verified access on the server, so its thread renders (and streams with the
-  // page) before the client check settles. That check still wins once it does.
+  // The session page verified access on the server, so its thread renders with the page HTML
+  // before the client check settles. That check still wins once it does.
   const allowed = accessReady ? agentAccess || (sessionId && adminAccess) : !!serverAccess;
-  if (allowed) return <SessionRoute sessionSeed={sessionSeed} serverAccess={serverAccess} />;
+  if (allowed) return <SessionRoute initialSession={initialSession} serverAccess={serverAccess} />;
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
     {!accessReady ? <SessionLoading /> : <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>}
   </section>;
@@ -72,7 +72,7 @@ function sessionIdFromPath(pathname: string) { return pathname.match(/^\/dashboa
 
 // A session started from the home view keeps its thread mounted while only the URL changes,
 // so the first message never waits on a route render. Any other URL change starts a fresh thread.
-function SessionRoute({ sessionSeed, serverAccess }: { sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess }) {
+function SessionRoute({ initialSession, serverAccess }: { initialSession?: AgentSessionDetail; serverAccess?: ServerAccess }) {
   const pathname = usePathname();
   const started = useRef<{ path: string; key: number }>(null);
   const [view, setView] = useState({ key: 0, pathname });
@@ -95,9 +95,8 @@ function SessionRoute({ sessionSeed, serverAccess }: { sessionSeed?: AgentSessio
     window.history.pushState(null, '', path);
   };
   // Only the thread for the server-rendered URL uses the server's read.
-  const thread = <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted}
-    sessionSeed={view.key === 0 ? sessionSeed : undefined} serverAccess={serverAccess} />;
-  return sessionSeed ? <Suspense fallback={<section className='agent-sessions agent-thread'><SessionLoading /></section>}>{thread}</Suspense> : thread;
+  return <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted}
+    seeded={view.key === 0 ? initialSession : undefined} serverAccess={serverAccess} />;
 }
 
 function SessionSearch() {
@@ -152,13 +151,12 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   </>;
 }
 
-function SessionThread({ initialSessionId, onStarted, sessionSeed, serverAccess }: {
-  initialSessionId?: string; onStarted: (sessionId: string) => void; sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess;
+function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
+  initialSessionId?: string; onStarted: (sessionId: string) => void; seeded?: AgentSessionDetail; serverAccess?: ServerAccess;
 }) {
   const cache = useAgentSessionCache();
   const { agentAccess, accessReady } = useDashboardSession();
   const agentNavigation = accessReady ? agentAccess : serverAccess === 'agent';
-  const seeded = sessionSeed ? use(sessionSeed) : null;
   const messagesRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [session, setSession] = useState<AgentSessionDetail | undefined>(() => seeded ?? (initialSessionId ? cache.readSessionPreview(initialSessionId) : undefined));

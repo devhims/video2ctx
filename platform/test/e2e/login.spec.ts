@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { waitForHydration } from './support/hydration';
 
 const signedIn = { name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' };
 
@@ -93,6 +94,7 @@ for (const retryMenuState of ['open', 'closed'] as const) {
   test(`logout preserves the dashboard during failure and goes directly home on success with the retry menu ${retryMenuState}`, async ({ page, context }) => {
     await context.addCookies([signedIn]);
     await page.goto('/dashboard/developer');
+    await waitForHydration(page);
     const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
     const accountSummary = sidebar.getByLabel('Account: Fixture account', { exact: true });
     const accountMenu = sidebar.locator('details').filter({ has: page.getByLabel('Account: Fixture account', { exact: true }) });

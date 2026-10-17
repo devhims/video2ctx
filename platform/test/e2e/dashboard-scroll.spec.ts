@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { waitForHydration } from './support/hydration';
 
 // Locator callbacks use a scrolling contract rather than adding DOM types to the Worker compiler.
 type ScrollPanel = { scrollTop: number; scrollHeight: number; clientHeight: number };
@@ -57,8 +58,10 @@ test('desktop keeps native page scrolling while the sidebar and gradient stay fi
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
-  expect(await root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
+  // Streamed settings cards keep arriving after the heading, so wait for the full height.
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
   await expect(sidebar).toHaveCSS('position', 'fixed');
   const initial = await sidebar.boundingBox();
@@ -132,7 +135,9 @@ test('all dashboard routes retain page scrolling and keyboard navigation', async
     }
   }
   await page.goto('/dashboard/settings');
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   const content = page.getByRole('region', { name: 'Dashboard content' });
   await content.focus();
   await expect(content).toBeFocused();

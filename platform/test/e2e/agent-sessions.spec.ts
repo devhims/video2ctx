@@ -4,19 +4,19 @@ test('session loading uses one compact placeholder and dashboard headers scroll 
   await login(context, 'allowed');
   // Streaming can retain hidden fallback and completed headers in the DOM.
   const header = page.locator('.topbar:visible');
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => { await pending; await route.continue(); });
+  const scenario = await sessionScenario(page, context, { delays: [`/v1/agent/sessions/${sessionId}`] });
   try {
-    await page.goto(`/dashboard/sessions/${sessionId}`);
+    // The page streams until the held read is released, so do not wait for the load event.
+    await page.goto(`/dashboard/sessions/${sessionId}`, { waitUntil: 'commit' });
     await expect(page.getByRole('status', { name: 'Loading session' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Loading session…' })).toHaveCount(0);
     await expect(page.getByText('Loading messages…')).toHaveCount(0);
     await expect(header).toHaveCount(1);
     await expect(header).toHaveCSS('position', 'static');
     await page.screenshot({ path: testInfo.outputPath('session-loading.png') });
-  } finally { release(); }
+  } finally { await scenario.release(); }
   await expect(page.locator('.agent-markdown').first()).toBeVisible();
+  await scenario.clear();
   await page.goto('/dashboard/developer');
   await expect(header).toHaveCount(1);
   await expect(header).toHaveCSS('position', 'static');
@@ -89,17 +89,28 @@ async function login(context: import('@playwright/test').BrowserContext, role: s
   await context.addCookies([{ name: 'agent-ui', value: role, domain: '127.0.0.1', path: '/' }]);
 }
 
+// Session pages read the conversation on the Next server, where page.route cannot reach. Fixture
+// scenarios hold or replace reads for every request carrying the scenario cookie, server reads included.
+async function sessionScenario(page: import('@playwright/test').Page, context: import('@playwright/test').BrowserContext,
+  input: { delays?: string[]; responses?: Record<string, { status?: number; body: unknown }> }) {
+  const id = crypto.randomUUID();
+  const url = `http://127.0.0.1:8797/__test__/account/${id}`;
+  await page.request.post(url, { data: input });
+  await context.addCookies([{ name: 'account-test', value: id, domain: '127.0.0.1', path: '/' }]);
+  return { release: () => page.request.patch(url), clear: () => page.request.delete(url) };
+}
+
+async function fixtureSession(page: import('@playwright/test').Page, id: string) {
+  const response = await page.request.get(`http://127.0.0.1:8797/v1/agent/sessions/${id}?limit=10`, { headers: { cookie: 'agent-ui=allowed' } });
+  return response.json();
+}
+
 test('session navigation automatically loads sources and activity for every displayed answer', async ({ page, context }) => {
   await login(context, 'allowed');
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => {
-    const response = await route.fetch();
-    const session = await response.json();
-    if (!new URL(route.request().url()).searchParams.has('cursor')) {
-      const answer = session.messages.find((message: { role: string }) => message.role === 'assistant');
-      session.messages.unshift({ ...answer, messageId: earlierMessageId, runId: earlierRunId, conversationTurn: 1 });
-    }
-    await route.fulfill({ response, json: session });
-  });
+  const session = await fixtureSession(page, sessionId);
+  const answer = session.messages.find((message: { role: string }) => message.role === 'assistant');
+  session.messages.unshift({ ...answer, messageId: earlierMessageId, runId: earlierRunId, conversationTurn: 1 });
+  const scenario = await sessionScenario(page, context, { responses: { [`/v1/agent/sessions/${sessionId}`]: { body: { ...session, nextCursor: null } } } });
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const answers = page.getByRole('article', { name: 'Agent message', exact: true });
   await expect(answers).toHaveCount(2);
@@ -108,6 +119,7 @@ test('session navigation automatically loads sources and activity for every disp
     await expect(answer.getByRole('heading', { name: 'Sources', exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: 'View sources and tool activity' })).toHaveCount(0);
+  await scenario.clear();
 });
 
 const earlierRunId = '5a04cf06-ea91-4b07-b892-ce87f63954de';
@@ -820,7 +832,7 @@ for (const failure of [
   // so earlier tests that submit follow-ups cannot change the run under test.
   const runId = 'af8c1283-784d-4baf-8632-28173714766d';
   const stamp = 1789111800000;
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, route => route.fulfill({ json: {
+  await sessionScenario(page, context, { responses: { [`/v1/agent/sessions/${sessionId}`]: { body: {
     sessionId, title: 'Finalization failure', latestMessagePreview: 'Compare the videos.',
     lastRunId: runId, runCount: 2, createdAt: stamp, updatedAt: stamp, nextCursor: null,
     messages: ['user', 'assistant'].map((role, index) => ({
@@ -828,7 +840,7 @@ for (const failure of [
       parentMessageId: null, conversationTurn: 2, role, status: 'completed',
       content: index ? 'Saved response' : 'Compare the videos.', createdAt: stamp, updatedAt: stamp,
     })),
-  } }));
+  } } } });
   let partial = false;
   let outcome = 'partial';
   const reason = failure.reason;

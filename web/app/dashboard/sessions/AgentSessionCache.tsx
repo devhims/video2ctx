@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import { useDashboardSession } from '../DashboardSessionProvider';
 import { agentSessionListSchema, fetchAgentData, type AgentSessionList, type AgentSessionDetail, type AgentAdmission } from '../../../lib/agent-sessions';
 
@@ -59,8 +59,12 @@ const SessionCache = createContext<ReturnType<typeof createSessionCache> | null>
 
 export function AgentSessionCacheProvider({ children }: { children: ReactNode }) {
   const { user, agentAccess } = useDashboardSession();
-  // Memory only, discarded when the account/access changes or this workspace closes.
-  const key = `${user?.id ?? 'signed-out'}:${agentAccess}`;
+  // Memory only, discarded when the account changes, access is withdrawn, or this workspace
+  // closes. Gaining access (including the first check after load) keeps the view mounted, so
+  // the server-rendered page is hydrated rather than rebuilt.
+  const [access, setAccess] = useState({ revocations: 0, granted: agentAccess });
+  if (access.granted !== agentAccess) setAccess({ revocations: access.revocations + (access.granted ? 1 : 0), granted: agentAccess });
+  const key = `${user?.id ?? 'signed-out'}:${access.revocations}`;
   const cache = useMemo(createSessionCache, [key]);
   return <SessionCache.Provider key={key} value={cache}>{children}</SessionCache.Provider>;
 }

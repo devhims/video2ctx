@@ -15,5 +15,6 @@ export default async function AgentSessionPage({ params }: { params: Promise<{ s
   await requireDashboardSession();
   const access = await fetchServerSessionReadAccess(requestHeaders);
   if (!access || !sessionSeed) notFound();
-  return <SessionsClient key={sessionId} sessionId={sessionId} sessionSeed={sessionSeed} serverAccess={access} />;
+  // The read started before the checks, so waiting here rarely adds time; loading.tsx covers it.
+  return <SessionsClient key={sessionId} sessionId={sessionId} initialSession={await sessionSeed ?? undefined} serverAccess={access} />;
 }

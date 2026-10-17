@@ -6,9 +6,11 @@ import { chromium } from '@playwright/test';
 const base = process.env.BASE_URL ?? 'http://127.0.0.1:3021';
 const runs = Number(process.env.RUNS ?? 8);
 const sessionId = process.env.SESSION_ID ?? 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8';
-// Lighthouse's mobile profile: 150 ms RTT, 1.6 Mbps down, 750 Kbps up, 4x CPU slowdown.
+// desktop: broadband at 40 ms RTT. mobile: Lighthouse's profile, 150 ms RTT, 1.6 Mbps down,
+// 750 Kbps up and a 4x CPU slowdown.
 const profiles = {
   unthrottled: null,
+  desktop: { latency: 40, downloadThroughput: 10_000_000 / 8, uploadThroughput: 5_000_000 / 8, cpu: 1 },
   mobile: { latency: 150, downloadThroughput: 1_600_000 / 8, uploadThroughput: 750_000 / 8, cpu: 4 },
 };
 
@@ -37,6 +39,9 @@ try {
           heading: '.agent-heading h2',
         };
         const check = () => {
+          // The first heading node comes from the server HTML. If hydration reuses it, it is
+          // the node left on screen; a client re-render replaces it with a new one.
+          window.__firstHeading ??= document.querySelector('.agent-heading h2') ?? undefined;
           for (const [name, selector] of Object.entries(milestones)) {
             if (marks[name] !== undefined) continue;
             const element = [...document.querySelectorAll(selector)].find(node => node.checkVisibility());
@@ -49,6 +54,8 @@ try {
           for (const entry of list.getEntries()) window.__lcp = entry.startTime;
         }).observe({ type: 'largest-contentful-paint', buffered: true });
       });
+      const pageErrors = [];
+      page.on('pageerror', error => pageErrors.push(error.message.slice(0, 200)));
       const sessionRequests = [];
       page.on('request', request => {
         if (request.url().includes(`/v1/agent/sessions/${sessionId}?`)) sessionRequests.push(request.url());
@@ -64,9 +71,11 @@ try {
           lcp: window.__lcp,
           domContentLoaded: nav.domContentLoadedEventEnd,
           ...window.__marks,
+          serverHtmlReused: [...document.querySelectorAll('.agent-heading h2')].find(node => node.checkVisibility()) === window.__firstHeading,
+          headingCopies: document.querySelectorAll('.agent-heading h2').length,
         };
       });
-      results.push({ profile, run, ...metrics, browserSessionRequests: sessionRequests.length });
+      results.push({ profile, run, ...metrics, browserSessionRequests: sessionRequests.length, pageErrors });
       await context.close();
     }
   }
@@ -84,7 +93,11 @@ const summary = Object.fromEntries(Object.keys(profiles).map(profile => {
   const rows = results.filter(row => row.profile === profile);
   return [profile, Object.fromEntries(['ttfb', 'fcp', 'lcp', 'domContentLoaded', 'firstMessage', 'firstAnswer', 'heading', 'browserSessionRequests']
     .map(key => [key, median(rows.map(row => row[key]))])
-    .concat([['sessionSkeletonShown', rows.filter(row => row.sessionSkeleton !== undefined).length + `/${rows.length}`]]))];
+    .concat([
+      ['sessionSkeletonShown', rows.filter(row => row.sessionSkeleton !== undefined).length + `/${rows.length}`],
+      ['serverHtmlReused', rows.filter(row => row.serverHtmlReused).length + `/${rows.length}`],
+      ['pageErrors', [...new Set(rows.flatMap(row => row.pageErrors))]],
+    ]))];
 }));
 console.log(JSON.stringify({
   base, sessionId, runs, measuredAt: new Date().toISOString(),
