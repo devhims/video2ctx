@@ -839,7 +839,7 @@ function PlaylistInspector({ inspector, saving, onClose, onSave, onOpenVideo }: 
     </section>
 
     <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide playlist-api-guide'>
-      <div><p>Playlist details include a video page and a continuation token for more results.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+      <div><p>Playlist details include a video page and a continuation token for more results.</p><Link href='/dashboard/developer' prefetch={false}>Create or manage an API key →</Link></div>
       <div className='source-api-endpoints'><div data-selected='true'><span>Playlist details and videos<b>selected</b></span><code>GET /v1/playlists/{inspector.id}?provider=youtube</code></div><div><span>Then open a video</span><code>GET /v1/videos/{'{videoId}'}?provider=youtube</code></div></div>
     </div></details>
   </section>;
@@ -934,7 +934,7 @@ function SourceApiGuide({ inspector, channelId }: { inspector: Inspector; channe
     ...(channelId ? [{ option: 'channel' as const, label: 'Channel About data', path: `/v1/channels/${channelId}?provider=${encodeURIComponent(inspector.provider)}` }] : []),
   ];
   return <details className={pageStyles.disclosure}><summary>API details</summary><div className='source-api-guide'>
-    <div><p>Comments use continuation tokens for pagination. Transcript and channel endpoints return complete responses.</p><Link href='/dashboard/developer'>Create or manage an API key →</Link></div>
+    <div><p>Comments use continuation tokens for pagination. Transcript and channel endpoints return complete responses.</p><Link href='/dashboard/developer' prefetch={false}>Create or manage an API key →</Link></div>
     <div className='source-api-endpoints'>{endpoints.map((endpoint) => <div key={endpoint.path} data-selected={endpoint.option === null || inspector.requestedData.includes(endpoint.option)}><span>{endpoint.label}{endpoint.option && inspector.requestedData.includes(endpoint.option) ? <b>selected</b> : null}</span><code>GET {endpoint.path}</code></div>)}</div>
   </div></details>;
 }

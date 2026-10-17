@@ -503,6 +503,29 @@ test('a session started in place follows browser history and New session', async
   await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
 });
 
+test('the Agent home arrives with its recent sessions, and Back shows the remembered list', async ({ page, context }) => {
+  await login(context, 'allowed');
+  const listReads: string[] = [];
+  page.on('request', request => { if (/\/v1\/agent\/sessions\?/.test(request.url())) listReads.push(request.url()); });
+  const scenario = await sessionScenario(page, context, { delays: ['/v1/agent/sessions'] });
+  try {
+    await page.goto('/dashboard/sessions', { waitUntil: 'commit' });
+    await expect(page.getByRole('status', { name: 'Loading sessions' })).toBeVisible();
+  } finally { await scenario.release(); }
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  // The server's read is reused, so the browser does not request the list again.
+  expect(listReads).toHaveLength(0);
+  await scenario.clear();
+  await page.getByRole('link', { name: /Fable and Astra: key takeaways/ }).click();
+  await expect(page.getByRole('link', { name: 'All sessions', exact: true })).toBeVisible();
+  // Back restores the document's original list; the page shows the session cache instead, which
+  // admissions keep current and which refreshes once it is 30 seconds old.
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await expect(page.getByRole('status', { name: /Loading sessions/ })).toHaveCount(0);
+});
+
 test('Back to a server-rendered session revalidates it instead of showing the original page', async ({ page, context }) => {
   await login(context, 'allowed');
   await page.goto(`/dashboard/sessions/${sessionId}`);

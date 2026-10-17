@@ -12,7 +12,7 @@ import { AgentPromptBar } from './AgentPromptBar';
 import { AgentMarkdown } from './AgentMarkdown';
 import { StreamingAgentMarkdown } from './StreamingAgentMarkdown';
 import { useAgentSessionCache } from './AgentSessionCache';
-import { SessionLoading } from './SessionLoading';
+import { SessionLoading, SessionsHomeLoading } from './SessionLoading';
 import { DashboardSkeleton } from '../DashboardSkeleton';
 import { HistoryEmptyState } from '../HistoryEmptyState';
 import { FramePreviews } from './FramePreviews';
@@ -54,16 +54,16 @@ export function AgentShell({ children }: { children: ReactNode }) {
 
 type ServerAccess = 'agent' | 'admin';
 
-export default function SessionsClient({ sessionId, initialSession, serverAccess }: {
-  sessionId?: string; initialSession?: AgentSessionDetail; serverAccess?: ServerAccess;
+export default function SessionsClient({ sessionId, initialSession, initialList, serverAccess }: {
+  sessionId?: string; initialSession?: AgentSessionDetail; initialList?: AgentSessionList; serverAccess?: ServerAccess;
 }) {
   const { agentAccess, adminAccess, accessReady } = useDashboardSession();
-  // The session page verified access on the server, so its thread renders with the page HTML
-  // before the client check settles. That check still wins once it does.
+  // Agent pages verify access on the server, so they render with the page HTML before the client
+  // check settles. That check still wins once it does.
   const allowed = accessReady ? agentAccess || (sessionId && adminAccess) : !!serverAccess;
-  if (allowed) return <SessionRoute initialSession={initialSession} serverAccess={serverAccess} />;
+  if (allowed) return <SessionRoute initialSession={initialSession} initialList={initialList} serverAccess={serverAccess} />;
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
-    {!accessReady ? <SessionLoading /> : <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>}
+    {!accessReady ? sessionId ? <SessionLoading /> : <SessionsHomeLoading /> : <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>}
   </section>;
 }
 
@@ -72,7 +72,7 @@ function sessionIdFromPath(pathname: string) { return pathname.match(/^\/dashboa
 
 // A session started from the home view keeps its thread mounted while only the URL changes,
 // so the first message never waits on a route render. Any other URL change starts a fresh thread.
-function SessionRoute({ initialSession, serverAccess }: { initialSession?: AgentSessionDetail; serverAccess?: ServerAccess }) {
+function SessionRoute({ initialSession, initialList, serverAccess }: { initialSession?: AgentSessionDetail; initialList?: AgentSessionList; serverAccess?: ServerAccess }) {
   const pathname = usePathname();
   const started = useRef<{ path: string; key: number }>(null);
   const [view, setView] = useState({ key: 0, pathname });
@@ -96,27 +96,33 @@ function SessionRoute({ initialSession, serverAccess }: { initialSession?: Agent
   };
   // Only the thread for the server-rendered URL uses the server's read.
   return <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted}
-    seeded={view.key === 0 ? initialSession : undefined} serverAccess={serverAccess} />;
+    seeded={view.key === 0 ? initialSession : undefined} initialList={view.key === 0 ? initialList : undefined} serverAccess={serverAccess} />;
 }
 
-function SessionSearch() {
+function SessionSearch({ initialList }: { initialList?: AgentSessionList }) {
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState('');
   const [revision, setRevision] = useState(0);
   // Remount the paginated list when the query changes so older requests cannot overwrite a new search.
-  return <SessionResults key={`${search}:${revision}`} search={search} searchForm={<form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
+  return <SessionResults key={`${search}:${revision}`} search={search} initialList={revision === 0 ? initialList : undefined} searchForm={<form className='agent-search' onSubmit={(event: FormEvent) => { event.preventDefault(); setSearch(query.trim()); setRevision(value => value + 1); }}>
     <label className='sr-only' htmlFor='session-search'>Search your sessions</label>
     <div><MagnifyingGlassIcon size={17} aria-hidden='true' /><input id='session-search' value={query} maxLength={200} onChange={event => setQuery(event.target.value)} placeholder='Search sessions' /><button type='submit'>Search</button></div>
   </form>} />;
 }
-function SessionResults({ search, searchForm }: { search: string; searchForm: ReactNode }) {
+function SessionResults({ search, searchForm, initialList }: { search: string; searchForm: ReactNode; initialList?: AgentSessionList }) {
   const cache = useAgentSessionCache();
-  const [page, setPage] = useState<AgentSessionList>(() => cache.readList(search) ?? { sessions: [], nextCursor: null });
-  const [loading, setLoading] = useState(true);
+  // Only the list read with this document is current; Back, Forward and client navigation can
+  // restore an older copy, so those mounts prefer the cache and read again.
+  const hydrating = useHydrating();
+  const [seededByDocument] = useState(hydrating && !!initialList);
+  const [page, setPage] = useState<AgentSessionList>(() => (seededByDocument ? initialList : cache.readList(search) ?? initialList) ?? { sessions: [], nextCursor: null });
+  const [loading, setLoading] = useState(!seededByDocument);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useLoadErrorToast(error, 'Retry sessions', () => setRevision(value => value + 1));
   useEffect(() => {
+    // Keep the document's read for later visits instead of requesting it again.
+    if (seededByDocument && revision === 0) { cache.saveList(search, initialList!); return; }
     let cancelled = false;
     setLoading(true); setError('');
     void cache.loadList(search, revision > 0)
@@ -124,7 +130,7 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
       .catch(cause => { if (!cancelled) setError(errorMessage(cause)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [cache, search, revision]);
+  }, [cache, search, revision, seededByDocument, initialList]);
 
   const loadMore = async () => {
     if (!page.nextCursor || loading) return;
@@ -142,7 +148,7 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
     <div className='agent-session-list' aria-busy={loading}>
       {page.sessions.map(session => <Link key={session.sessionId} href={`/dashboard/sessions/${session.sessionId}`} className='agent-session-row'>
         <span className='agent-session-icon'><ChatCircleTextIcon size={19} aria-hidden='true' /></span><div className='agent-session-copy'><h3>{session.title || 'Untitled session'}</h3><p>{session.latestMessagePreview}</p></div>
-        <div className='agent-session-meta'><time dateTime={new Date(session.updatedAt).toISOString()}>{formatTime(session.updatedAt)}</time><span>{session.runCount} {session.runCount === 1 ? 'run' : 'runs'} <ArrowUpRightIcon size={13} aria-hidden='true' /></span></div>
+        <div className='agent-session-meta'><LocalTime timestamp={session.updatedAt} /><span>{session.runCount} {session.runCount === 1 ? 'run' : 'runs'} <ArrowUpRightIcon size={13} aria-hidden='true' /></span></div>
       </Link>)}
       {!page.sessions.length && !loading && !error && <HistoryEmptyState title={search ? 'No matching sessions' : 'No sessions yet'} description={search ? 'Try another topic or clear your search.' : 'Start a session above. Requests from the API also appear here.'} />}
     </div>
@@ -151,8 +157,8 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   </>;
 }
 
-function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
-  initialSessionId?: string; onStarted: (sessionId: string) => void; seeded?: AgentSessionDetail; serverAccess?: ServerAccess;
+function SessionThread({ initialSessionId, onStarted, seeded, initialList, serverAccess }: {
+  initialSessionId?: string; onStarted: (sessionId: string) => void; seeded?: AgentSessionDetail; initialList?: AgentSessionList; serverAccess?: ServerAccess;
 }) {
   const cache = useAgentSessionCache();
   const { agentAccess, accessReady } = useDashboardSession();
@@ -256,7 +262,7 @@ function SessionThread({ initialSessionId, onStarted, seeded, serverAccess }: {
       <MessageComposer sessionId={sessionId} processing={processing} onSending={setSubmitting}
         onSendAction={request => addOptimisticMessage(optimisticMessage(request))} onAdmitted={onAdmitted} />
     </div>}
-    {!sessionId && <div className='agent-history' hidden={started}><SessionSearch /></div>}
+    {!sessionId && <div className='agent-history' hidden={started}><SessionSearch initialList={initialList} /></div>}
   </section>;
 }
 

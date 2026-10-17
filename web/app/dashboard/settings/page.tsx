@@ -7,8 +7,9 @@ import { BillingSkeleton, PreferencesSkeleton } from './SettingsSkeleton';
 import { SettingsShell } from './SettingsShell';
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ emailConsent?: string }> }) {
-  await requireDashboardSession();
+  // Start the reads alongside the sign-in check instead of after it.
   const seeds = startDashboardData(await headers(), ['billing', 'notificationPreferences']);
+  await requireDashboardSession();
   const params = await searchParams;
   return <SettingsShell>
     <Suspense fallback={<BillingSkeleton />}><BillingCard promise={seeds.billing!} /></Suspense>

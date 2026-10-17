@@ -12,8 +12,7 @@ export default async function AgentSessionPage({ params }: { params: Promise<{ s
   const requestHeaders = await headers();
   // Read the conversation alongside the sign-in and access checks rather than after hydration.
   const sessionSeed = valid ? startAgentSessionSeed(requestHeaders, sessionId) : undefined;
-  await requireDashboardSession();
-  const access = await fetchServerSessionReadAccess(requestHeaders);
+  const [, access] = await Promise.all([requireDashboardSession(), fetchServerSessionReadAccess(requestHeaders)]);
   if (!access || !sessionSeed) notFound();
   // The read started before the checks, so waiting here rarely adds time; loading.tsx covers it.
   return <SessionsClient key={sessionId} sessionId={sessionId} initialSession={await sessionSeed ?? undefined} serverAccess={access} />;

@@ -1185,6 +1185,29 @@ test('project creation shows progress and adds the project without another list 
   } finally { release(); await scenario.clear(); }
 });
 
+test('a sidebar click moves the selection at once and shows progress until the page arrives', async ({ page }) => {
+  await page.goto('/dashboard/developer');
+  await expect(page.locator('.workspace-main h2').first()).toBeVisible();
+  await page.waitForFunction(`[...document.querySelectorAll('.workspace-shell')].some(e => Object.keys(e).some(k => k.startsWith('__reactFiber')))`);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/dashboard/settings?_rsc=*', async route => { await held; await route.continue(); });
+  const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
+  const settings = sidebar.getByRole('link', { name: 'Settings', exact: true });
+  const apiKeys = sidebar.getByRole('link', { name: 'API keys', exact: true });
+  const selected = await page.evaluate<string>(`getComputedStyle(document.querySelector('aside a[aria-label="API keys"]')).backgroundColor`);
+  await settings.click();
+  try {
+    await expect(settings.locator('[data-pending]')).toHaveCount(1);
+    await expect(settings).toHaveCSS('background-color', selected);
+    await expect(apiKeys).not.toHaveCSS('background-color', selected);
+    await expect(page).toHaveURL('/dashboard/developer');
+  } finally { release(); }
+  await expect(page).toHaveURL('/dashboard/settings');
+  await expect(settings).toHaveAttribute('aria-current', 'page');
+  await expect(settings.locator('[data-pending]')).toHaveCount(0);
+});
+
 test('settings renders while navigation access checks are pending', async ({page})=>{
  const scenario=await accountScenario(page,{delays:['/v1/agent/access','/v1/admin/access']});
  try{

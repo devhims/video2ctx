@@ -1,14 +1,24 @@
 import 'server-only';
-import { agentSessionDetailSchema, type AgentSessionSeed } from './agent-sessions';
+import type { z } from 'zod';
+import { agentSessionDetailSchema, agentSessionListSchema, type AgentSessionList, type AgentSessionSeed } from './agent-sessions';
 
-// Start the first page of a conversation while the page checks access, so the thread renders
-// with it instead of requesting it after hydration. Any failure resolves to null and the
-// client falls back to its own request, which reports errors as usual.
-export function startAgentSessionSeed(requestHeaders: Headers, sessionId: string): AgentSessionSeed {
+// Start Agent reads while the page checks access, so the page renders with them instead of the
+// browser requesting them after hydration. Any failure resolves to null and the client falls
+// back to its own request, which reports errors as usual.
+function readAgent<T>(requestHeaders: Headers, path: string, schema: z.ZodType<T>): Promise<T | null> {
   const base = process.env.PLATFORM_API_BASE_URL ?? (process.env.NODE_ENV === 'production' ? 'https://api.video2ctx.dev' : 'http://localhost:8787');
-  return fetch(new URL(`/v1/agent/sessions/${sessionId}?limit=10`, base), {
+  return fetch(new URL(`/v1/agent${path}`, base), {
     cache: 'no-store',
     headers: { accept: 'application/json', cookie: requestHeaders.get('cookie') ?? '' },
-  }).then(async response => response.ok ? agentSessionDetailSchema.parse(await response.json()) : null)
+  }).then(async response => response.ok ? schema.parse(await response.json()) : null)
     .catch(() => null);
+}
+
+export function startAgentSessionSeed(requestHeaders: Headers, sessionId: string): AgentSessionSeed {
+  return readAgent(requestHeaders, `/sessions/${sessionId}?limit=10`, agentSessionDetailSchema);
+}
+
+/** The first page of recent sessions, matching the browser cache's default list. */
+export function startAgentSessionListSeed(requestHeaders: Headers): Promise<AgentSessionList | null> {
+  return readAgent(requestHeaders, `/sessions?${new URLSearchParams({ q: '', limit: '20' })}`, agentSessionListSchema);
 }
