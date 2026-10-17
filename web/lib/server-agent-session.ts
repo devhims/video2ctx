@@ -1,6 +1,6 @@
 import 'server-only';
 import type { z } from 'zod';
-import { agentSessionDetailSchema, agentSessionListSchema, type AgentSessionList, type AgentSessionSeed } from './agent-sessions';
+import { agentSessionDetailSchema, agentSessionListSchema, type AgentSessionListSeed, type AgentSessionSeed } from './agent-sessions';
 
 // Start Agent reads while the page checks access, so the page renders with them instead of the
 // browser requesting them after hydration. Any failure resolves to null and the client falls
@@ -19,6 +19,7 @@ export function startAgentSessionSeed(requestHeaders: Headers, sessionId: string
 }
 
 /** The first page of recent sessions, matching the browser cache's default list. */
-export function startAgentSessionListSeed(requestHeaders: Headers): Promise<AgentSessionList | null> {
-  return readAgent(requestHeaders, `/sessions?${new URLSearchParams({ q: '', limit: '20' })}`, agentSessionListSchema);
+export async function startAgentSessionListSeed(requestHeaders: Headers): Promise<AgentSessionListSeed | null> {
+  const list = await readAgent(requestHeaders, `/sessions?${new URLSearchParams({ q: '', limit: '20' })}`, agentSessionListSchema);
+  return list && { list, readId: crypto.randomUUID() };
 }

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { waitForHydration } from './support/hydration';
 
 test('session loading uses one compact placeholder and dashboard headers scroll away', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
@@ -524,6 +525,43 @@ test('the Agent home arrives with its recent sessions, and Back shows the rememb
   await page.goBack();
   await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
   await expect(page.getByRole('status', { name: /Loading sessions/ })).toHaveCount(0);
+});
+
+const unavailableList = { status: 503, body: { error: { code: 'TEMPORARY', message: 'Sessions are temporarily unavailable.' } } };
+
+test('a list restored by Back after leaving Agent is never shown again when the next read fails', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
+  await expect(title).toBeVisible();
+  await waitForHydration(page);
+  // Leaving Agent unmounts its session cache.
+  await page.getByRole('complementary', { name: 'Workspace sidebar' }).getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL('/dashboard/settings');
+  const scenario = await sessionScenario(page, context, { responses: { '/v1/agent/sessions': unavailableList } });
+  await page.goBack();
+  await expect(page).toHaveURL('/dashboard/sessions');
+  await expect(page.getByText('Sessions are temporarily unavailable.').first()).toBeVisible();
+  await expect(title).toHaveCount(0);
+  await scenario.clear();
+});
+
+test('restoring access does not bring back the list shown before it was withdrawn', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
+  await expect(title).toBeVisible();
+  await waitForHydration(page);
+  await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 403, json: { enabled: false } }));
+  await page.evaluate("window.dispatchEvent(new Event('focus'))");
+  await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toBeVisible();
+  const scenario = await sessionScenario(page, context, { responses: { '/v1/agent/sessions': unavailableList } });
+  await page.unroute('**/api/platform/v1/agent/access');
+  await page.evaluate("window.dispatchEvent(new Event('agent-access-changed'))");
+  await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toHaveCount(0);
+  await expect(page.getByText('Sessions are temporarily unavailable.').first()).toBeVisible();
+  await expect(title).toHaveCount(0);
+  await scenario.clear();
 });
 
 test('Back to a server-rendered session revalidates it instead of showing the original page', async ({ page, context }) => {
