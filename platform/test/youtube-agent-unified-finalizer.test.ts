@@ -1890,3 +1890,71 @@ it('rechecks mutable memory before a recovered context reaches the answer prompt
   await executeResearchRun(options);
   expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt)).not.toContain('Deleted budget');
 });
+
+it.each([
+  ['The woman holds the microphone (ref_1).', 'The woman holds the microphone [cite:frame-observation].', 'The woman holds the microphone [1 · 0:30].'],
+  ['The woman holds the microphone, ref_1.', 'The woman holds the microphone, [cite:frame-observation].', 'The woman holds the microphone, [1 · 0:30].'],
+  ['Unknown (ref_9) and range ref_1 to ref_2 stay.', 'Unknown (ref_9) and range ref_1 to ref_2 stay. [cite:frame-observation]', 'Unknown (ref_9) and range ref_1 to ref_2 stay. [1 · 0:30]'],
+])('resolves only known model-written aliases in a persisted answer, without a repair: %s', async (text, persisted, shown) => {
+  const { options, classifier, output } = setup('context_answer', true);
+  // Pass doGenerate to the constructor: the mock records calls only through that wrapper.
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ ...output, blocks: [{ text, evidenceIds: ['ref_1'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(1);
+  expect(vi.mocked(options.finalize).mock.calls[0]![1].answer).toBe(persisted);
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations.map(citation => citation.id)).toEqual(['frame-observation']);
+  expect(compactAgentResult(result).answer).toBe(shown);
+  expect(JSON.stringify(finalizer.doGenerateCalls[0]!.prompt[0])).toContain('Never write reference ranges');
+});
+
+it.each(['generate', 'stream'] as const)('%s resolves a range using supplied aliases without another model attempt', async mode => {
+  const { options, classifier, output, identity } = setup('context_answer', true);
+  const second: EvidencePacket = { ...evidence, packetId: 'other-frame',
+    sources: [{ id: 'other-video', provider: 'youtube', kind: 'frames', videoId: 'zzzzzzzzzzz' }],
+    excerpts: [{ id: 'other-observation', sourceId: 'other-video', text: 'A rabbit stands outdoors.', startMs: 60000 }] };
+  options.recoveredEvidence = [second];
+  // Recovered evidence receives ref_1; conversation evidence receives ref_2.
+  const value = { ...output, blocks: [{ text: 'A rabbit and an interview (ref_1 through ref_2).', evidenceIds: ['ref_1'] }] };
+  const finalizer = new MockLanguageModelV4({
+    doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(value) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }),
+    doStream: async () => ({ stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 'answer' },
+      { type: 'text-delta', id: 'answer', delta: JSON.stringify(value) },
+      { type: 'text-end', id: 'answer' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage },
+    ], initialDelayInMs: null, chunkDelayInMs: null }) }),
+  });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  if (mode === 'stream') options.onDraft = vi.fn();
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity,
+    { userId: 'user', creditsRemaining: 100 }, input, [second, evidence], 0));
+  await executeResearchRun(options);
+  expect(mode === 'stream' ? finalizer.doStreamCalls : finalizer.doGenerateCalls).toHaveLength(1);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  const result: AgentTurnResult = await vi.mocked(options.finalize).mock.results[0]!.value;
+  expect(result.citations.map(c => c.id)).toEqual(['other-observation', 'frame-observation']);
+  expect(compactAgentResult(result).answer).toBe('A rabbit and an interview [1 · 1:00][2 · 0:30].');
+});
+
+it('sends inline prose guidance and supplied-ID constraints to the finalizer', async () => {
+  const { options, finalizer, output } = setup('context_answer', true);
+  output.blocks[0]!.text = 'The woman holds the microphone [cite:ref_1].';
+  await executeResearchRun(options);
+  const call = finalizer.doGenerateCalls[0]!;
+  const prompt = JSON.stringify(call.prompt);
+  expect(prompt).toContain('beside the claim it supports in prose');
+  expect(prompt).toContain('share one natural paragraph');
+  expect(prompt).toContain('include every cited ID in the block evidenceIds array');
+  expect(prompt).not.toContain('Outside tables, omit inline citation markers');
+  expect(prompt).not.toContain('Put prose citations only in evidenceIds');
+  expect(JSON.stringify(call.responseFormat)).toContain('ref_1');
+  expect(JSON.stringify(call.responseFormat)).toContain('List individual supplied evidence IDs');
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    answer: 'The woman holds the microphone [cite:frame-observation].',
+  }));
+});

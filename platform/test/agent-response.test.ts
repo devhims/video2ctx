@@ -104,6 +104,16 @@ describe('compact agent response', () => {
     expect(run).toEqual(before);
   });
 
+  it('keeps the recorded citation kind out of compact and legacy responses without mutating storage', () => {
+    const run = completedRun();
+    run.result!.citations = run.result!.citations.map(citation => ({ ...citation, sourceKind: 'transcript' as const }));
+    const before = structuredClone(run);
+    expect(JSON.stringify(compactAgentRun(run, ['evidence']))).not.toContain('sourceKind');
+    expect(compactAgentRun(run, ['evidence']).result?.evidence).toHaveLength(3);
+    expect(JSON.stringify(legacyAgentRun(run))).not.toContain('sourceKind');
+    expect(legacyAgentRun(run).result?.citations).toHaveLength(3);
+    expect(run).toEqual(before);
+  });
   it.each(['topic_research', 'inspect_video'] as const)('supports the same result contract for %s', intent => {
     const run = completedRun(); run.result!.intent = intent;
     expect(compactAgentRunSchema.safeParse(compactAgentRun(run)).success).toBe(true);

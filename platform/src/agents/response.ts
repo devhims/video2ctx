@@ -8,6 +8,7 @@ import { ApiError } from '../lib/http';
 import {
   agentArtifactSchema, agentCitationSchema, agentRunReceiptSchema, agentTurnResultSchema,
   agentWarningSchema, capabilityRouteDecisionSchema, researchCoverageSchema, type CapabilityRouteDecision, type AgentTurnResult,
+  type AgentCitation,
 } from './contracts';
 import type { AgentRunView } from './agent-runtime-do';
 
@@ -38,7 +39,7 @@ export const compactAgentResultSchema = z.object({
   sources: z.array(compactAgentSourceSchema),
   warnings: z.array(agentWarningSchema),
   artifacts: z.array(agentArtifactSchema).optional(),
-  evidence: z.array(agentCitationSchema).optional().describe('Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.'),
+  evidence: z.array(agentCitationSchema.omit({ sourceKind: true })).optional().describe('Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.'),
 });
 export const compactAgentRunSchema = agentRunReceiptSchema.pick({
   runId: true, agentMessageId: true, status: true, request: true,
@@ -77,15 +78,19 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   const sources: z.infer<typeof compactAgentSourceSchema>[] = [];
   const sourceIds = new Map<string, string>();
   const evidenceIds = new Map<string, string>();
-  // Replace a contiguous group together so several excerpts from one video become one reference.
+  // Replace a contiguous group together so repeated or continuous excerpts become one reference.
   // Earlier formatters escaped model-written table citations into visible IDs.
   // Restore only citations already validated for this stored answer.
   const displayAnswer = mapCitationProse(result.answer, prose => prose.replace(/\(source marker:([^\]]+)\]/g,
     (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]'));
   const answer = mapCitationProse(displayAnswer, prose => prose.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
-    // A video reference names the earliest moment its excerpts in this group cite.
-    const refs = new Map<string, number | undefined>();
+    // Citations in one group are listed by public source number. Each source shows one
+    // reference per distinct cited passage; the stored citations keep every excerpt.
+    const refs = new Map<string, AgentCitation[]>();
+    const seen = new Set<string>();
     for (const match of group.matchAll(/\[cite:([A-Za-z0-9:_-]+)\]/g)) {
+      if (seen.has(match[1]!)) continue;
+      seen.add(match[1]!);
       const citation = citations.get(match[1]!);
       if (!citation) throw new ApiError(500, 'INVALID_AGENT_RESULT', 'A stored answer references missing evidence.');
       const key = citation.videoId ? `video:${citation.videoId}` : citation.channelId ? `channel:${citation.channelId}`
@@ -101,11 +106,12 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
         });
       }
       evidenceIds.set(citation.id, id);
-      const moment = citation.videoId && typeof citation.startMs === 'number' ? citation.startMs : undefined;
-      const earliest = refs.get(id);
-      refs.set(id, moment === undefined ? earliest : Math.min(moment, earliest ?? moment));
+      refs.set(id, [...refs.get(id) ?? [], citation]);
     }
-    return [...refs].map(([id, startMs]) => startMs === undefined ? `[${id}]` : `[${id} · ${clockTime(startMs)}]`).join('');
+    const labels = [...refs].flatMap(([id, cited]) => passageStarts(cited)
+      .map(startMs => startMs === undefined ? `[${id}]` : `[${id} · ${clockTime(startMs)}]`));
+    // Identical labels link to the same place, so repeating one adds nothing.
+    return [...new Set(labels)].join('');
   }));
   const codes = new Set(result.warnings.map(warning => warning.code));
   const outcome = result.intent === 'rejected' ? 'rejected'
@@ -124,8 +130,39 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
     outcome, answer, sources, coverage, warnings: result.warnings.filter(w => w.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
     ...(include.includes('artifacts') ? { artifacts: result.artifacts } : {}),
     ...(include.includes('evidence') ? { evidence: result.citations.filter(citation => evidenceIds.has(citation.id))
-      .map(citation => ({ ...citation, sourceId: evidenceIds.get(citation.id)! })) } : {}),
+      .map(citation => ({ ...publicCitation(citation), sourceId: evidenceIds.get(citation.id)! })) } : {}),
   };
+}
+
+const validTime = (value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+/** Start times to show for one source's citations in a group, earliest first, then untimed.
+ * Only cited excerpts with the same recorded kind, stored source and video merge, and only
+ * when their own intervals overlap or touch. Uncited evidence never fills a gap, and an
+ * excerpt without a valid start and end or a recorded kind keeps its own reference. */
+function passageStarts(cited: readonly AgentCitation[]): Array<number | undefined> {
+  const intervals = new Map<string, Array<{ start: number; end: number }>>();
+  const starts: number[] = [];
+  let untimed = false;
+  for (const citation of cited) {
+    const { startMs, endMs } = citation;
+    if (!citation.videoId || !validTime(startMs)) { untimed = true; continue; }
+    // Without a recorded kind, a source ID alone does not show that two excerpts are the same
+    // kind of evidence, so the excerpt keeps its own reference.
+    if (!validTime(endMs) || startMs > endMs || !citation.sourceKind) { starts.push(startMs); continue; }
+    const key = JSON.stringify([citation.sourceKind, citation.sourceId, citation.videoId]);
+    intervals.set(key, [...intervals.get(key) ?? [], { start: startMs, end: endMs }]);
+  }
+  for (const passage of intervals.values()) {
+    passage.sort((a, b) => a.start - b.start || a.end - b.end);
+    // Compare with the furthest end so far: a long excerpt can contain shorter ones.
+    let end = -1;
+    for (const interval of passage) {
+      if (interval.start > end) starts.push(interval.start);
+      end = Math.max(end, interval.end);
+    }
+  }
+  return [...starts.sort((a, b) => a - b), ...(untimed ? [undefined] : [])];
 }
 
 const videoTitleSchema = z.object({ id: z.string(), title: z.string().trim().min(1).max(1_000) });
@@ -152,10 +189,18 @@ export function withSessionId<T extends { conversationId: string }>(value: T) {
   return { ...rest, sessionId: conversationId };
 }
 
-export function legacyAgentRun(run: AgentRunView) {
-  const { result, ...receipt } = run;
-  return { ...withSessionId(receipt), ...(result ? { result: withSessionId(result) } : {}) };
+/** Public citation fields. The recorded source kind stays internal. */
+function publicCitation(citation: AgentCitation): Omit<AgentCitation, 'sourceKind'> {
+  const { sourceKind: _sourceKind, ...rest } = citation;
+  return rest;
 }
 
+export function legacyAgentRun(run: AgentRunView) {
+  const { result, ...receipt } = run;
+  return { ...withSessionId(receipt), ...(result ? { result: withSessionId({ ...result, citations: result.citations.map(publicCitation) }) } : {}) };
+}
+
+const publicCitationSchema = agentCitationSchema.omit({ sourceKind: true });
 export const publicAgentRunReceiptSchema = agentRunReceiptSchema.omit({ conversationId: true }).extend({ sessionId: z.string().uuid() });
-export const publicAgentTurnResultSchema = agentTurnResultSchema.omit({ conversationId: true }).extend({ sessionId: z.string().uuid() });
+export const publicAgentTurnResultSchema = agentTurnResultSchema.omit({ conversationId: true })
+  .extend({ sessionId: z.string().uuid(), citations: z.array(publicCitationSchema) });

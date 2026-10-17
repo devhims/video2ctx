@@ -2,8 +2,10 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 
 type MarkdownNode = ReturnType<typeof fromMarkdown> | ReturnType<typeof fromMarkdown>['children'][number];
 
-/** Transform prose while copying code directly from the source, without reserializing Markdown. */
-export function mapCitationProse(text: string, transform: (prose: string, start: number, end: number) => string, streaming = false): string {
+/** Transform prose while copying code directly from the source, without reserializing Markdown.
+ * `alsoProtect` copies further node types, such as links, unchanged as well. */
+export function mapCitationProse(text: string, transform: (prose: string, start: number, end: number) => string, streaming = false,
+  alsoProtect: readonly string[] = []): string {
   const protectedRanges: Array<[number, number]> = [];
   function visit(node: MarkdownNode, paragraphEnd = text.length) {
     const start = node.position?.start.offset;
@@ -13,6 +15,10 @@ export function mapCitationProse(text: string, transform: (prose: string, start:
       const lineStart = text.lastIndexOf('\n', start - 1) + 1;
       const protectedStart = node.type === 'code' && /^[ \t]*$/.test(text.slice(lineStart, start)) ? lineStart : start;
       protectedRanges.push([protectedStart, end]);
+      return;
+    }
+    if (alsoProtect.includes(node.type)) {
+      protectedRanges.push([start, end]);
       return;
     }
     if (node.type === 'paragraph') paragraphEnd = end;

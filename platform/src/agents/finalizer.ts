@@ -52,7 +52,7 @@ export function buildAgentTurnResult(
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
       title: source.title, url: source.url, excerpt: excerpt.text,
-      startMs: excerpt.startMs, endMs: excerpt.endMs,
+      startMs: excerpt.startMs, endMs: excerpt.endMs, sourceKind: source.kind,
     });
   }
   if ((input.intent === 'topic_research' || input.intent === 'inspect_video') && citations.length === 0

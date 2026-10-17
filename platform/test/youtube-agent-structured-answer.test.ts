@@ -376,3 +376,211 @@ describe('truncated answer salvage', () => {
     await expect(salvageTruncatedAnswer(undefined, output)).resolves.toBeUndefined();
   });
 });
+
+describe('model-written aliases and passage references', () => {
+  const transcript = (id: string, startMs?: number, endMs?: number, sourceId = 'youtube:videoAAAAAA:transcript') =>
+    ({ id, sourceId, text: `Excerpt ${id}.`, ...(startMs === undefined ? {} : { startMs }), ...(endMs === undefined ? {} : { endMs }) });
+  const evidence: EvidencePacket = { ...packet,
+    sources: [
+      { id: 'youtube:videoAAAAAA:transcript', provider: 'youtube', kind: 'transcript', videoId: 'videoAAAAAA' },
+      { id: 'youtube:videoAAAAAA:frames', provider: 'youtube', kind: 'frames', videoId: 'videoAAAAAA' },
+      { id: 'youtube:video:videoAAAAAA', provider: 'youtube', kind: 'video', videoId: 'videoAAAAAA' },
+      { id: 'youtube:videoBBBBBB:transcript', provider: 'youtube', kind: 'transcript', videoId: 'videoBBBBBB' },
+    ],
+    excerpts: [
+      transcript('t1', 10_000, 15_000), transcript('t2', 15_000, 20_000), transcript('t3', 14_000, 18_000),
+      transcript('t4', 40_000, 45_000), transcript('t5', 15_000, 40_000),
+      transcript('n1', 60_000, 90_000), transcript('n2', 62_000, 64_000), transcript('n3', 70_000, 75_000),
+      transcript('m1', 16_000), transcript('x1', 30_000, 20_000),
+      transcript('f1', 12_000, 12_000, 'youtube:videoAAAAAA:frames'),
+      transcript('u1', undefined, undefined, 'youtube:video:videoAAAAAA'),
+      transcript('b1', 10_000, 15_000, 'youtube:videoBBBBBB:transcript'),
+    ],
+  };
+  const aliases = new Map([['ref_1', 't1'], ['ref_2', 't2'], ['ref_9', 't4'], ['ref_30', 't1'], ['ref_36', 't4'],
+    ['ref_143', 't1'], ['ref_144', 't2']]);
+  function publish(text: string, evidenceIds: string[] = ['t1'], references: ReadonlyMap<string, string> = aliases,
+    packets: EvidencePacket[] = [evidence]) {
+    const input = renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds }] }, references);
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 10 }, input, packets, 1);
+    return { input, result, compact: compactAgentResult(result, ['evidence']) };
+  }
+
+  it('resolves a known parenthesized alias group into one reference for a continuous passage', () => {
+    const { input, result, compact } = publish('Blooms form when water meets a drying wash (ref_143, ref_144).');
+    expect(input.answer).toBe('Blooms form when water meets a drying wash [cite:t1] [cite:t2].');
+    expect(compact.answer).toBe('Blooms form when water meets a drying wash [1 · 0:10].');
+    expect(compact.answer).not.toMatch(/ref_\d/);
+    expect(result.citations.map(citation => citation.id)).toEqual(['t1', 't2']);
+    expect(compact.evidence?.map(({ id, startMs, endMs }) => ({ id, startMs, endMs }))).toEqual([
+      { id: 't1', startMs: 10_000, endMs: 15_000 }, { id: 't2', startMs: 15_000, endMs: 20_000 }]);
+  });
+  it.each([
+    ['See ref_9.', 'See [1 · 0:40]. [1 · 0:10]'],
+    ['ref_9 shows the wash.', '[1 · 0:40] shows the wash. [1 · 0:10]'],
+    ['(see ref_9) and **ref_2**.', '(see [1 · 0:40]) and **[1 · 0:15]**. [1 · 0:10]'],
+    ['| Step | Source |\n| --- | --- |\n| Wash | ref_9 |', '| Step | Source |\n| --- | --- |\n| Wash | [1 · 0:40] |\n\nSources: [1 · 0:10]'],
+  ])('resolves a known bare alias where the model placed it: %s', (text, expected) => {
+    expect(publish(text).compact.answer).toBe(expected);
+  });
+  it('counts resolved aliases as block references for answer checks', () => {
+    expect(blockReferences({ text: 'Claim (ref_143, ref_144), ref_9, (ref_1, ref_404) and ref_30 to ref_36.', evidenceIds: [] }, aliases))
+      .toEqual(['t1', 't2', 't4']);
+  });
+  it.each([
+    'Unknown (ref_404) here.',
+    'Unknown ref_404 here.',
+    'Mixed (ref_1, ref_404) here.',
+    'The demo runs ref_30 to ref_36 here.',
+    'The demo runs ref_30 through ref_36 here.',
+    'The demo runs ref_30-ref_36 here.',
+    'The demo runs ref_30–36 here.',
+    'The demo runs (ref_30 to ref_36) here.',
+    'The demo runs [ref_30-ref_36] here.',
+  ])('leaves unknown, mixed and range forms exactly as written: %s', text => {
+    const { input, result } = publish(text);
+    expect(input.answer).toBe(`${text} [cite:t1]`);
+    expect(result.citations.map(citation => citation.id)).toEqual(['t1']);
+    expect(result.warnings.map(warning => warning.code)).not.toContain('CITATIONS_UNAVAILABLE');
+  });
+  it.each([
+    'Literal `ref_1` and `(ref_1, ref_2)` here.',
+    'Link https://example.com/ref_1 here.',
+    'Link [docs](https://example.com/a?id=ref_1) here.',
+    'Names my_ref_1, xref_1, ref_1x, ref_1.5, ref_1-based and ref_1\'s here.',
+    'Quoted "ref_1" and call(ref_1) and fn(ref_1, ref_2) here.',
+    'Bracketed [see ref_1] stays here.',
+  ])('leaves code, URLs, identifiers and quotations unchanged: %s', text => {
+    expect(publish(text).input.answer).toBe(`${text} [cite:t1]`);
+  });
+  it.each([
+    'Call fn(value, ref_1) here.',
+    'Call fn(ref_1, ref_2, value) here.',
+    'Call fn(ref_1, ref_2) here.',
+    'Call outer(inner(ref_1), ref_2) here.',
+    'Call fn(a, b(c), ref_1) here.',
+    'Call obj.method(ref_1) here.',
+    'Call fn(ref_1 here.',
+  ])('leaves aliases in call-like text unchanged in any argument position: %s', text => {
+    const { input, result, compact } = publish(text);
+    expect(input.answer).toBe(`${text} [cite:t1]`);
+    expect(result.citations.map(citation => citation.id)).toEqual(['t1']);
+    expect(compact.answer).toBe(`${text} [1 · 0:10]`);
+  });
+  it.each([
+    'Call fn(")", ref_1) here.',
+    'Call fn(\'close)\', ref_1) here.',
+    'Call fn("a\\")", ref_1) here.',
+    'Call fn(`)`, ref_1) here.',
+    'Call fn(\n  value, ref_1\n) here.',
+    'Call fn(\n  ")",\n  (ref_1, ref_2)\n) here.',
+    'Call fn(it\'s, ref_1\n) here.',
+  ])('leaves quoted and multiline call-like text unchanged: %s', text => {
+    const { input, result, compact } = publish(text);
+    expect(input.answer).toBe(`${text} [cite:t1]`);
+    expect(result.citations.map(citation => citation.id)).toEqual(['t1']);
+    expect(compact.answer).toBe(`${text} [1 · 0:10]`);
+  });
+  it.each([
+    ['Call fn(")", value) returns, then the wash dries ref_9.', 'Call fn(")", value) returns, then the wash dries [1 · 0:40]. [1 · 0:10]'],
+    ['Call fn(\n  value\n) returns, then the wash dries (ref_9).', 'Call fn(\n  value\n) returns, then the wash dries [1 · 0:40]. [1 · 0:10]'],
+    ['Call fn(value is unclosed.\n\nThe wash dries ref_9.', 'Call fn(value is unclosed.\n\nThe wash dries [1 · 0:40]. [1 · 0:10]'],
+    ['After fn(value) returns, the wash dries ref_9.', 'After fn(value) returns, the wash dries [1 · 0:40]. [1 · 0:10]'],
+    ['The wash dries (ref_9), as fn(x) shows.', 'The wash dries [1 · 0:40], as fn(x) shows. [1 · 0:10]'],
+    ['Blooms appear (see ref_9) after fn(ref_2).', 'Blooms appear (see [1 · 0:40]) after fn(ref_2). [1 · 0:10]'],
+    ['See [docs](https://example.com/wash) and ref_9.', 'See [docs](https://example.com/wash) and [1 · 0:40]. [1 · 0:10]'],
+    ['Visit https://example.com/wash, then ref_9.', 'Visit https://example.com/wash, then [1 · 0:40]. [1 · 0:10]'],
+    ['Visit https://example.com/wash (ref_9).', 'Visit https://example.com/wash [1 · 0:40]. [1 · 0:10]'],
+  ])('still resolves prose aliases beside call-like text, links and URLs: %s', (text, expected) => {
+    expect(publish(text).compact.answer).toBe(expected);
+  });
+  it.each([
+    'See [the wash ref_9](https://example.com/wash) here.',
+    'See [docs](https://example.com/ref_9) here.',
+    'See [docs](ref_9) here.',
+    'See [docs](https://example.com/wash "ref_9") here.',
+    'See [docs](https://example.com/wash "Notes (ref_1, ref_2)") here.',
+    '[See (ref_1)](https://example.com/docs) here.',
+    'See [docs](https://example.com/?value=ok,ref_1) here.',
+    'See ![frame (ref_143, ref_144)](https://example.com/frame.png) here.',
+    'See <https://example.com/ref_9> here.',
+    'See [docs][wash] and [ref_9 notes][wash] here.\n\n[wash]: https://example.com/?value=ok,ref_1 "ref_2"\n\nMore prose.',
+    'Visit https://example.com/?value=ok,ref_1 for notes.',
+    'Visit https://example.com/(ref_1, ref_2) for notes.',
+    'Visit www.example.com/?q=ok,ref_9 for notes.',
+  ])('leaves Markdown links, definitions and bare URLs unchanged: %s', text => {
+    const { input, result, compact } = publish(text);
+    expect(input.answer).toBe(`${text} [cite:t1]`);
+    expect(result.citations.map(citation => citation.id)).toEqual(['t1']);
+    expect(compact.answer).toBe(`${text} [1 · 0:10]`);
+  });
+  it('excludes aliases in call-like text and links from block references', () => {
+    expect(blockReferences({ text: 'fn(value, ref_1), [see ref_2](https://example.com) and ref_9.', evidenceIds: [] }, aliases))
+      .toEqual(['t4']);
+  });
+  it('leaves aliases inside a fenced code block unchanged', () => {
+    const text = 'Example:\n\n```text\n(ref_143, ref_144) ref_9\n```\n\nDone.';
+    expect(publish(text).input.answer).toBe(`${text} [cite:t1]`);
+  });
+  it('does not resolve parenthesized or bare aliases without a supplied alias map', () => {
+    const text = 'Claim (ref_1, ref_2) and ref_9.';
+    expect(publish(text, ['t1'], new Map()).input.answer).toBe(`${text} [cite:t1]`);
+  });
+
+  it.each([
+    ['an exact duplicate', 'Claim [cite:t1] [cite:t1].', ['t1'], 'Claim [1 · 0:10].'],
+    ['touching intervals', 'Claim.', ['t1', 't2'], 'Claim. [1 · 0:10]'],
+    ['overlapping intervals', 'Claim.', ['t1', 't3'], 'Claim. [1 · 0:10]'],
+    ['out-of-order references', 'Claim.', ['t2', 't1'], 'Claim. [1 · 0:10]'],
+    ['nested intervals, judged by the furthest end so far', 'Claim.', ['n2', 'n3', 'n1'], 'Claim. [1 · 1:00]'],
+    ['a gap, never bridged by uncited evidence', 'Claim.', ['t1', 't4'], 'Claim. [1 · 0:10][1 · 0:40]'],
+    ['a gap cited in reverse order', 'Claim.', ['t4', 't1'], 'Claim. [1 · 0:10][1 · 0:40]'],
+    ['another source kind of the same video', 'Claim.', ['t1', 'f1'], 'Claim. [1 · 0:10][1 · 0:12]'],
+    ['another video', 'Claim.', ['t1', 'b1'], 'Claim. [1 · 0:10][2 · 0:10]'],
+    ['a missing end time', 'Claim.', ['t2', 'm1'], 'Claim. [1 · 0:15][1 · 0:16]'],
+    ['an end before the start', 'Claim.', ['t1', 'x1'], 'Claim. [1 · 0:10][1 · 0:30]'],
+    ['an untimed excerpt of the same video', 'Claim.', ['t1', 'u1'], 'Claim. [1 · 0:10][1]'],
+  ])('shows references for %s', (_case, text, evidenceIds, expected) => {
+    const { result, compact } = publish(text, evidenceIds);
+    expect(compact.answer).toBe(expected);
+    expect(result.citations.map(citation => citation.id).sort()).toEqual([...new Set(evidenceIds)].sort());
+    expect(compact.evidence?.map(citation => citation.id).sort()).toEqual([...new Set(evidenceIds)].sort());
+  });
+  it('keeps public source numbers in first-use order across groups', () => {
+    const { compact } = publish('Second video first [cite:b1]. Then [cite:t4] [cite:t1].', ['t1']);
+    expect(compact.answer).toBe('Second video first [1 · 0:10]. Then [2 · 0:10][2 · 0:40].');
+    expect(compact.sources.map(source => source.videoId)).toEqual(['videoBBBBBB', 'videoAAAAAA']);
+  });
+  it('records each citation kind from persisted evidence and keeps it out of public evidence', () => {
+    const { result, compact } = publish('Claim.', ['t1', 'f1', 'u1']);
+    expect(result.citations.map(({ id, sourceKind }) => [id, sourceKind])).toEqual([['t1', 'transcript'], ['f1', 'frames'], ['u1', 'video']]);
+    expect(compact.evidence?.some(citation => 'sourceKind' in citation)).toBe(false);
+  });
+  it('does not merge excerpts of different kinds that share a source ID', () => {
+    const shared = (packetId: string, kind: 'transcript' | 'frames', excerpt: EvidencePacket['excerpts'][number]): EvidencePacket => ({
+      ...packet, packetId, sources: [{ id: 'shared', provider: 'youtube', kind, videoId: 'videoAAAAAA' }], excerpts: [excerpt] });
+    const packets = [shared('p:transcript', 'transcript', transcript('s1', 10_000, 20_000, 'shared')),
+      shared('p:frames', 'frames', transcript('s2', 15_000, 15_000, 'shared'))];
+    const { result, compact } = publish('Claim.', ['s1', 's2'], aliases, packets);
+    expect(result.citations.map(citation => citation.sourceKind)).toEqual(['transcript', 'frames']);
+    expect(compact.answer).toBe('Claim. [1 · 0:10][1 · 0:15]');
+  });
+  it('does not merge stored excerpts without a recorded kind', () => {
+    const { result } = publish('Claim.', ['t1', 't2']);
+    expect(compactAgentResult(result).answer).toBe('Claim. [1 · 0:10]');
+    const stored = structuredClone(result);
+    for (const citation of stored.citations) delete citation.sourceKind;
+    expect(compactAgentResult(stored).answer).toBe('Claim. [1 · 0:10][1 · 0:15]');
+    stored.citations[0]!.sourceKind = 'transcript';
+    expect(compactAgentResult(stored).answer).toBe('Claim. [1 · 0:10][1 · 0:15]');
+  });
+  it('does not merge stored excerpts whose times are not finite', () => {
+    const { result } = publish('Claim.', ['t1', 't2']);
+    const stored = structuredClone(result);
+    stored.citations[1]!.startMs = Number.NaN;
+    stored.citations[0]!.endMs = Number.POSITIVE_INFINITY;
+    expect(compactAgentResult(stored).answer).toBe('Claim. [1 · 0:10][1]');
+  });
+});

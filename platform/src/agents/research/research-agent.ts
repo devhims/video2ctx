@@ -23,7 +23,7 @@ import { withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
 import { finalizationAnswerGuidance } from './answer-guidance';
 import { ApiError } from '../../lib/http';
-import { renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, salvageTruncatedAnswer, blockReferences } from '../structured-answer';
+import { ANSWER_CITATION_GUIDANCE, renderPartialAnswer, renderStructuredAnswer, finalizationOutputSchema, contextFinalizationOutputSchema, conversationalFinalizationOutputSchema, FINALIZATION_SCHEMA_VERSION, numberedItemsMismatch, salvageTruncatedAnswer, blockReferences } from '../structured-answer';
 import { discoverInitialEvidence } from './initial-discovery';
 import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 import { finalizationFailure } from './finalization-failure';
@@ -890,7 +890,8 @@ async function runUnifiedFinalizer(options: {
     const answerSchema = baseOutputSchema.extend({
       blocks: z.array(baseOutputSchema.shape.blocks.element.extend({
         evidenceIds: z.array(reference).min(conversational || intent === 'context_answer' || !allowedIds.length ? 0 : 1)
-          .max(conversational || !allowedIds.length ? 0 : 12),
+          .max(conversational || !allowedIds.length ? 0 : 12)
+          .describe(baseOutputSchema.shape.blocks.element.shape.evidenceIds.description ?? 'Individual supplied evidence IDs supporting this block.'),
       })).min(1).max(conversational ? 1 : 20),
     });
     // Answer and repair calls produce answers only. Unsolicited fields such as
@@ -960,7 +961,7 @@ async function runUnifiedFinalizer(options: {
           'researchContext contains attributed history and memory read during research. Preserve speaker roles and message IDs when quoting. Assistant messages and memory are not independent evidence of video facts. Truncated context is not an exhaustive history.',
           'Metadata carried from conversation memory is historical. Label changing counts with their recorded or fetched time; do not describe a remembered value as current.',
           'Answer the request now. Never return only a plan, progress update, promise to look something up, or a sentence fragment. If context is unavailable, explain that concrete limitation instead.',
-          'Return blocks containing text and evidenceIds. Use the short ref_N excerpt IDs from supplied evidence, including transcriptAnalysis.findings.excerptIds. For Markdown tables, place [cite:ref_N] in each Source cell and include the same references in that block evidenceIds. Use only supplied references. The application validates and renders them as compact source numbers. Outside tables, omit inline citation markers and let the application append citations.',
+          `Return blocks containing text and evidenceIds. Use the short ref_N excerpt IDs from supplied evidence, including transcriptAnalysis.findings.excerptIds. ${ANSWER_CITATION_GUIDANCE}`,
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',

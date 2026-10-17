@@ -189,6 +189,10 @@ export const agentCitationSchema = z.object({
   excerpt: z.string().min(1).max(2_000),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
+  /** Kind of the cited source, copied from persisted evidence. Internal: it decides which
+   * excerpts may share one displayed reference, and public responses omit it. Absent on
+   * answers stored before it was recorded. */
+  sourceKind: evidenceSourceSchema.shape.kind.optional(),
 });
 
 export const memoryUpdateSchema = z.object({
