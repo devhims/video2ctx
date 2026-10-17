@@ -5,7 +5,7 @@ import { platformRequest } from '../../../lib/platform-request';
 import { projectItemPath } from '../dashboard-routes';
 
 import { SessionAssets } from './SessionAssets';
-import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
+import { Suspense, use, useCallback, useEffect, useOptimistic, useRef, useState, useSyncExternalStore, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
@@ -25,7 +25,7 @@ import { useLoadErrorToast } from '../../../lib/use-error-toast';
 import {
   agentSessionListSchema, agentSessionDetailSchema, fetchAgentData,
   mergeAgentMessages, safeSourceUrl, isActiveAgentRun, sendAgentMessage, watchAgentRun, AgentSendError,
-  type AgentSessionList, type AgentSessionDetail, type AgentMessage, type AgentAdmission, type AgentProgress,
+  type AgentSessionList, type AgentSessionDetail, type AgentSessionSeed, type AgentMessage, type AgentAdmission, type AgentProgress,
 } from '../../../lib/agent-sessions';
 
 export function AgentShell({ children }: { children: ReactNode }) {
@@ -52,9 +52,16 @@ export function AgentShell({ children }: { children: ReactNode }) {
   </main>;
 }
 
-export default function SessionsClient({ sessionId }: { sessionId?: string }) {
+type ServerAccess = 'agent' | 'admin';
+
+export default function SessionsClient({ sessionId, sessionSeed, serverAccess }: {
+  sessionId?: string; sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess;
+}) {
   const { agentAccess, adminAccess, accessReady } = useDashboardSession();
-  if (accessReady && (agentAccess || (sessionId && adminAccess))) return <SessionRoute />;
+  // The session page verified access on the server, so its thread renders (and streams with the
+  // page) before the client check settles. That check still wins once it does.
+  const allowed = accessReady ? agentAccess || (sessionId && adminAccess) : !!serverAccess;
+  if (allowed) return <SessionRoute sessionSeed={sessionSeed} serverAccess={serverAccess} />;
   return <section className={`agent-sessions ${sessionId ? 'agent-thread' : 'agent-home'}`}>
     {!accessReady ? <SessionLoading /> : <div className='agent-empty'><h2>Agent sessions are not available</h2><p>Your account must have agent access to view sessions.</p><Link href='/dashboard'>Back to dashboard</Link></div>}
   </section>;
@@ -65,7 +72,7 @@ function sessionIdFromPath(pathname: string) { return pathname.match(/^\/dashboa
 
 // A session started from the home view keeps its thread mounted while only the URL changes,
 // so the first message never waits on a route render. Any other URL change starts a fresh thread.
-function SessionRoute() {
+function SessionRoute({ sessionSeed, serverAccess }: { sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess }) {
   const pathname = usePathname();
   const started = useRef<{ path: string; key: number }>(null);
   const [view, setView] = useState({ key: 0, pathname });
@@ -87,7 +94,10 @@ function SessionRoute() {
     started.current = { path, key: view.key };
     window.history.pushState(null, '', path);
   };
-  return <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted} />;
+  // Only the thread for the server-rendered URL uses the server's read.
+  const thread = <SessionThread key={view.key} initialSessionId={sessionIdFromPath(view.pathname)} onStarted={onStarted}
+    sessionSeed={view.key === 0 ? sessionSeed : undefined} serverAccess={serverAccess} />;
+  return sessionSeed ? <Suspense fallback={<section className='agent-sessions agent-thread'><SessionLoading /></section>}>{thread}</Suspense> : thread;
 }
 
 function SessionSearch() {
@@ -142,16 +152,20 @@ function SessionResults({ search, searchForm }: { search: string; searchForm: Re
   </>;
 }
 
-function SessionThread({ initialSessionId, onStarted }: { initialSessionId?: string; onStarted: (sessionId: string) => void }) {
+function SessionThread({ initialSessionId, onStarted, sessionSeed, serverAccess }: {
+  initialSessionId?: string; onStarted: (sessionId: string) => void; sessionSeed?: AgentSessionSeed; serverAccess?: ServerAccess;
+}) {
   const cache = useAgentSessionCache();
-  const { agentAccess } = useDashboardSession();
+  const { agentAccess, accessReady } = useDashboardSession();
+  const agentNavigation = accessReady ? agentAccess : serverAccess === 'agent';
+  const seeded = sessionSeed ? use(sessionSeed) : null;
   const messagesRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState(initialSessionId);
-  const [session, setSession] = useState<AgentSessionDetail | undefined>(() => initialSessionId ? cache.readSessionPreview(initialSessionId) : undefined);
+  const [session, setSession] = useState<AgentSessionDetail | undefined>(() => seeded ?? (initialSessionId ? cache.readSessionPreview(initialSessionId) : undefined));
   const [messages, addOptimisticMessage] = useOptimistic(session?.messages ?? [], (current, message: AgentMessage) => [...current, message]);
   // Admitted user messages keep their optimistic key so React reuses the element already on screen.
   const [clientKeys, setClientKeys] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(!!initialSessionId);
+  const [loading, setLoading] = useState(!!initialSessionId && !seeded);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   useLoadErrorToast(error, 'Reload session', () => setRevision(value => value + 1));
@@ -181,6 +195,8 @@ function SessionThread({ initialSessionId, onStarted }: { initialSessionId?: str
   };
   useEffect(() => {
     if (!sessionId) return;
+    // The server already read the first page; reloads and sessions started here fetch it.
+    if (seeded && revision === 0 && sessionId === initialSessionId) return;
     const controller = new AbortController();
     setLoading(true); setError('');
     // Merge so messages already on screen (admitted, streamed or paged in) are never dropped by a reload.
@@ -189,7 +205,7 @@ function SessionThread({ initialSessionId, onStarted }: { initialSessionId?: str
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [sessionId, revision]);
+  }, [sessionId, revision, seeded, initialSessionId]);
 
   const pendingKey = messages.find(message => message.messageId.startsWith(clientMessagePrefix))?.messageId;
   useEffect(() => {
@@ -214,7 +230,7 @@ function SessionThread({ initialSessionId, onStarted }: { initialSessionId?: str
   const processing = messages.some(message => message.role === 'assistant' && isActiveAgentRun(message.status));
   // Slots keep fixed positions so the composer stays mounted when a new session becomes a thread.
   return <section className={`agent-sessions ${started ? 'agent-thread' : 'agent-home'}`}>
-    {started && <div className='agent-thread-nav'>{agentAccess
+    {started && <div className='agent-thread-nav'>{agentNavigation
       ? <Link className='agent-back' href='/dashboard/sessions' prefetch={true} onMouseEnter={() => void cache.loadList('').catch(() => {})} onFocus={() => void cache.loadList('').catch(() => {})}><ArrowLeftIcon size={14} aria-hidden='true' />All sessions</Link>
       : <Link className='agent-back' href='/dashboard/admin'><ArrowLeftIcon size={14} aria-hidden='true' />Back to admin</Link>}
       <button className='agent-icon-button' aria-label='Refresh session' title='Refresh session' disabled={!sessionId || loading || olderLoading || submitting} onClick={() => setRevision(value => value + 1)}><ArrowClockwiseIcon size={16} aria-hidden='true' /></button></div>}
@@ -263,7 +279,7 @@ function RunAnswer({ sessionId, message, onProgress }: {
   return <article className='agent-message agent-assistant-message' aria-label='Agent message'>
     <span className='agent-avatar' aria-hidden='true'><StarFourIcon size={14} /></span>
     <div className='agent-message-body'>
-    <header className='agent-message-header'><strong>Agent</strong><time dateTime={new Date(message.updatedAt).toISOString()}>{formatTime(message.updatedAt)}</time><span className={`agent-status status-${status}`}>{status}</span></header>
+    <header className='agent-message-header'><strong>Agent</strong><LocalTime timestamp={message.updatedAt} /><span className={`agent-status status-${status}`}>{status}</span></header>
     <div className='agent-run-details'>
       {error && <p role='alert' className='alert error'>{error} <button onClick={() => setRevision(value => value + 1)}>Try again</button></p>}
       {!run && message.content && <><AgentMarkdown>{message.content}</AgentMarkdown><AnswerActions answer={message.content} /></>}
@@ -298,7 +314,7 @@ function UserMessageContent({ content, createdAt }: { content: string; createdAt
   return <>
     <span className='agent-avatar' aria-hidden='true'><UserIcon size={14} /></span>
     <div className='agent-message-body'>
-      <header className='agent-message-header'><strong>You</strong><time dateTime={new Date(createdAt).toISOString()}>{formatTime(createdAt)}</time></header>
+      <header className='agent-message-header'><strong>You</strong><LocalTime timestamp={createdAt} /></header>
       <div className='agent-user-bubble agent-answer'>{content}</div>
     </div>
   </>;
@@ -436,4 +452,10 @@ function CopyAnswer({ answer }: { answer: string }) {
 }
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }
+const subscribeNever = () => () => {};
+// Server HTML has no viewer timezone, so times fill in once the browser takes over.
+function LocalTime({ timestamp }: { timestamp: number }) {
+  const local = useSyncExternalStore(subscribeNever, () => true, () => false);
+  return <time dateTime={new Date(timestamp).toISOString()}>{local ? formatTime(timestamp) : ''}</time>;
+}
 function formatTime(timestamp: number) { return new Date(timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); }

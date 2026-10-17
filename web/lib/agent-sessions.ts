@@ -26,6 +26,8 @@ export const agentRunSchema = z.object({
 });
 export type AgentSessionList = z.infer<typeof agentSessionListSchema>;
 export type AgentSessionDetail = z.infer<typeof agentSessionDetailSchema>;
+/** First page of a conversation, read by the server page; null means the client should load it. */
+export type AgentSessionSeed = Promise<AgentSessionDetail | null>;
 export type AgentMessage = z.infer<typeof messageSchema>;
 export type AgentRun = z.infer<typeof agentRunSchema>;
 

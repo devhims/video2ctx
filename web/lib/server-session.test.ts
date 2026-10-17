@@ -50,7 +50,7 @@ describe('agent dashboard gate', () => {
         fetch: async input => String(input).endsWith('/v1/admin/access')
           ? Response.json({ enabled: adminAccess }) : Response.json({ enabled: agentAccess }),
       });
-      assert.equal(allowed, agentAccess || adminAccess);
+      assert.equal(allowed, agentAccess ? 'agent' : adminAccess ? 'admin' : undefined);
     }
   });
   test('Agent users never wait on, or fail because of, the admin check', async () => {
@@ -64,7 +64,7 @@ describe('agent dashboard gate', () => {
           : Response.json({ enabled: true });
       },
     });
-    assert.equal(allowed, true);
+    assert.equal(allowed, 'agent');
     assert.deepEqual(paths, ['/v1/agent/access']);
   });
   test('requires an authenticated cookie and a positive backend decision', async () => {
