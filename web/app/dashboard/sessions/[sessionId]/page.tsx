@@ -1,14 +1,19 @@
 import { requireDashboardSession } from '../../../../lib/dashboard-auth';
 import { headers } from 'next/headers';
 import { fetchServerSessionReadAccess } from '../../../../lib/server-session';
+import { startAgentSessionSeed } from '../../../../lib/server-agent-session';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
 import SessionsClient from '../SessionsClient';
 
 export default async function AgentSessionPage({ params }: { params: Promise<{ sessionId: string }> }) {
-  await requireDashboardSession();
-  if (!await fetchServerSessionReadAccess(await headers())) notFound();
   const { sessionId } = await params;
-  if (!z.string().uuid().safeParse(sessionId).success) notFound();
-  return <SessionsClient key={sessionId} sessionId={sessionId} />;
+  const valid = z.string().uuid().safeParse(sessionId).success;
+  const requestHeaders = await headers();
+  // Read the conversation alongside the sign-in and access checks rather than after hydration.
+  const sessionSeed = valid ? startAgentSessionSeed(requestHeaders, sessionId) : undefined;
+  const [, access] = await Promise.all([requireDashboardSession(), fetchServerSessionReadAccess(requestHeaders)]);
+  if (!access || !sessionSeed) notFound();
+  // The read started before the checks, so waiting here rarely adds time; loading.tsx covers it.
+  return <SessionsClient key={sessionId} sessionId={sessionId} initialSession={await sessionSeed ?? undefined} serverAccess={access} />;
 }

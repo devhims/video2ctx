@@ -16,8 +16,11 @@ const tool = { toolCallId: 'transcript-1', name: 'get_video_transcript', operati
 const finishedTool = { ...tool, status: 'completed', finishedAt: stamp + 3800,
   output: { sourceCount: 1, excerptCount: 4, sources: [{ title: 'Fable Vs Astra Debate Is Over', videoId: 'P7bxbDSnZRM' }], warningCodes: [] } };
 const accountScenarios = new Map();
+// Opt-in API latency for performance measurements; tests run without it.
+const latencyMs = Number(process.env.FIXTURE_LATENCY_MS ?? 0);
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1:8797');
+  if (latencyMs && url.pathname !== '/health' && !url.pathname.startsWith('/__test__/')) await new Promise(resolve => setTimeout(resolve, latencyMs));
   const cookie = req.headers.cookie ?? '';
   const allowed = cookie.includes('agent-ui=allowed');
   const signedIn = /agent-ui=(allowed|denied|unavailable)/.test(cookie);

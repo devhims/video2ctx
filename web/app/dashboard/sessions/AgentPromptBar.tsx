@@ -5,9 +5,11 @@
 import { useEffect, useLayoutEffect, useRef, type FormEvent } from 'react';
 import { ArrowUpIcon, ArrowClockwiseIcon, CircleNotchIcon } from '@phosphor-icons/react';
 
-export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, processing, uncertain, error }: {
+export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, disabled, sending, processing, uncertain, error, inactive = false }: {
   value: string; onChange: (value: string) => void; onSubmit: (event: FormEvent) => void;
   label: string; sendLabel: string; disabled: boolean; sending: boolean; processing: boolean; uncertain: boolean; error: string;
+  /** Rendered by the server and not yet hydrated: typing now would be lost and Enter would not send. */
+  inactive?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -34,7 +36,7 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
     <div className='agent-prompt-bar'>
       <textarea ref={inputRef} rows={1} value={value} onChange={event => onChange(event.target.value)}
         aria-label={label} aria-describedby='agent-composer-help' maxLength={10_000}
-        readOnly={sending} placeholder={label === 'Follow-up message' ? 'Ask a follow-up…' : 'Ask about a video or YouTube channel…'}
+        readOnly={sending || inactive} placeholder={label === 'Follow-up message' ? 'Ask a follow-up…' : 'Ask about a video or YouTube channel…'}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
             event.preventDefault();
@@ -44,7 +46,7 @@ export function AgentPromptBar({ value, onChange, onSubmit, label, sendLabel, di
       <div className='agent-prompt-controls'>
         <span className='agent-prompt-shortcut' aria-hidden='true'>Shift + Enter for a new line</span>
         <button className='agent-send' type='submit' aria-label={sendLabel} title={sendLabel}
-          aria-busy={sending || processing} disabled={disabled || sending || processing || !value.trim()}>
+          aria-busy={sending || processing} disabled={disabled || sending || processing || inactive || !value.trim()}>
           {sending || processing ? <CircleNotchIcon size={19} className='agent-spin' aria-hidden='true' /> : uncertain
             ? <ArrowClockwiseIcon size={19} aria-hidden='true' /> : <ArrowUpIcon size={20} weight='bold' aria-hidden='true' />}
         </button>

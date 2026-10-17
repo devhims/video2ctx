@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { waitForHydration } from './support/hydration';
 
 // Locator callbacks use a scrolling contract rather than adding DOM types to the Worker compiler.
 type ScrollPanel = { scrollTop: number; scrollHeight: number; clientHeight: number };
@@ -57,8 +58,10 @@ test('desktop keeps native page scrolling while the sidebar and gradient stay fi
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
-  expect(await root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
+  // Streamed settings cards keep arriving after the heading, so wait for the full height.
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   const sidebar = page.getByRole('complementary', { name: 'Workspace sidebar' });
   await expect(sidebar).toHaveCSS('position', 'fixed');
   const initial = await sidebar.boundingBox();
@@ -87,7 +90,9 @@ test('mobile preserves page scrolling while the drawer isolates its own scrollin
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/dashboard/settings');
   await expect(page.getByRole('heading', { name: 'Workspace settings' })).toBeVisible();
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   await page.mouse.move(300, 400);
   await page.mouse.wheel(0, 600);
   await expect.poll(() => root.evaluate(readScrollTop)).toBeGreaterThan(0);
@@ -132,7 +137,9 @@ test('all dashboard routes retain page scrolling and keyboard navigation', async
     }
   }
   await page.goto('/dashboard/settings');
+  await waitForHydration(page);
   const root = await expectPageScrolling(page);
+  await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
   const content = page.getByRole('region', { name: 'Dashboard content' });
   await content.focus();
   await expect(content).toBeFocused();
@@ -190,7 +197,8 @@ for (const newSession of [true, false]) {
       await expect(message.locator('time')).toBeInViewport();
     };
     try {
-      await expect(message.getByRole('status')).toHaveText('Sending…');
+      await expect(message).toBeVisible();
+      await expect(message.getByRole('status')).toHaveCount(0);
       await page.screenshot({ path: testInfo.outputPath('mobile-pending-long-message-focus.png') });
       await expectClearOfNavigation();
     } finally { release(); }
@@ -208,7 +216,9 @@ test('mobile touch swipes use the document at both scroll boundaries', async ({ 
     await context.addCookies([{ name: 'agent-ui', value: 'allowed', domain: '127.0.0.1', path: '/' }]);
     const page = await context.newPage();
     await page.goto('/dashboard/settings');
+    await waitForHydration(page);
     const root = await expectPageScrolling(page);
+    await expect.poll(() => root.evaluate(readScrollLimit, true)).toBeGreaterThan(0);
     const input = await context.newCDPSession(page);
     const swipe = async (down: boolean) => {
       const start = down ? 650 : 250;

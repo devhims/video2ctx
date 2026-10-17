@@ -2,7 +2,7 @@
 
 import { useAccountResource, useDashboardDraft, useProjectDetail, useDashboardCache } from './DashboardDataProvider';
 
-import Link from 'next/link';
+import Link, { useLinkStatus } from 'next/link';
 import { dashboardPath, SOURCES_HOME_EVENT } from './dashboard-routes';
 import { useDashboardSession } from './DashboardSessionProvider';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -86,7 +86,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       dialog.current?.close();
       if (section === 'discover' && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) window.dispatchEvent(new Event(SOURCES_HOME_EVENT));
     }}>
-      <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}
+      <span className={styles.iconTile}><Icon name={icon} /></span><span className={styles.label}>{label}</span>{suffix}<PendingMark />
     </Link>
   );
   const brand = <><img src='/brand/logo-120.png' alt='' width='28' height='28' /><span className={styles.wordmark}>video2<span>ctx</span></span></>;
@@ -102,7 +102,7 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
       <nav aria-label='Dashboard navigation' className={styles.navigation}>
         <div className={styles.group}>
           {navButton('discover', 'Sources', 'search')}
-          {user && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span></Link>}
+          {user && <Link aria-label='Agent' title={collapsed ? 'Agent' : undefined} data-tooltip='Agent' aria-current={activeSection === 'sessions' ? 'page' : undefined} className={styles.item} href='/dashboard/sessions' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='spark' /></span><span className={styles.label}>Agent</span><PendingMark /></Link>}
           {TRENDS_ENABLED && navButton('trends', 'Trends', 'trend')}
         </div>
         <div className={styles.group}>
@@ -112,9 +112,9 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
         </div>
         <div className={styles.group}>
           <p className={styles.groupLabel}>Manage</p>
-          <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span></Link>
+          <Link aria-label='API keys' title={collapsed ? 'API keys' : undefined} data-tooltip='API keys' aria-current={activeSection === 'developer' ? 'page' : undefined} className={styles.item} href='/dashboard/developer' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><KeyIcon size={18} aria-hidden='true' /></span><span className={styles.label}>API keys</span><PendingMark /></Link>
           {navButton('settings', 'Settings', 'settings')}
-          {adminAccess && <Link aria-label='Admin' title={collapsed ? 'Admin' : undefined} data-tooltip='Admin' aria-current={activeSection === 'admin' ? 'page' : undefined} className={styles.item} href='/dashboard/admin' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='user' /></span><span className={styles.label}>Admin</span></Link>}
+          {adminAccess && <Link aria-label='Admin' title={collapsed ? 'Admin' : undefined} data-tooltip='Admin' aria-current={activeSection === 'admin' ? 'page' : undefined} className={styles.item} href='/dashboard/admin' prefetch={false} onClick={() => dialog.current?.close()}><span className={styles.iconTile}><Icon name='user' /></span><span className={styles.label}>Admin</span><PendingMark /></Link>}
         </div>
       </nav>
       <section className={styles.projects} aria-label='Recent projects'>
@@ -159,4 +159,11 @@ export function DashboardSidebar<Project extends SidebarProject>({ activeSection
     <div className={styles.mobileBar}><button type='button' aria-label='Open navigation' aria-haspopup='dialog' aria-expanded={mobileOpen} onClick={() => { dialog.current?.showModal(); setMobileOpen(true); }}><ListIcon size={22} aria-hidden='true' /></button><Link className={styles.brand} href='/' prefetch={false} aria-label='video2ctx home'>{brand}</Link>{mobileActions && <div className={styles.mobileActions}>{mobileActions}</div>}</div>
     <dialog ref={dialog} className={styles.drawer} aria-label='Dashboard navigation' onClose={() => setMobileOpen(false)} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}><div className={styles.drawerContent}>{content(true)}</div></dialog>
   </>;
+}
+
+// Confirms a click while the next page loads: the item takes the selected style at once, and a
+// fixed-size dot pulses if loading takes long enough to notice.
+function PendingMark() {
+  const { pending } = useLinkStatus();
+  return <span className={styles.pending} data-pending={pending || undefined} aria-hidden='true' />;
 }

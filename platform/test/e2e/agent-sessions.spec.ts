@@ -1,22 +1,23 @@
 import { expect, test } from '@playwright/test';
+import { waitForHydration } from './support/hydration';
 
 test('session loading uses one compact placeholder and dashboard headers scroll away', async ({ page, context }, testInfo) => {
   await login(context, 'allowed');
   // Streaming can retain hidden fallback and completed headers in the DOM.
   const header = page.locator('.topbar:visible');
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => { await pending; await route.continue(); });
+  const scenario = await sessionScenario(page, context, { delays: [`/v1/agent/sessions/${sessionId}`] });
   try {
-    await page.goto(`/dashboard/sessions/${sessionId}`);
+    // The page streams until the held read is released, so do not wait for the load event.
+    await page.goto(`/dashboard/sessions/${sessionId}`, { waitUntil: 'commit' });
     await expect(page.getByRole('status', { name: 'Loading session' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Loading session…' })).toHaveCount(0);
     await expect(page.getByText('Loading messages…')).toHaveCount(0);
     await expect(header).toHaveCount(1);
     await expect(header).toHaveCSS('position', 'static');
     await page.screenshot({ path: testInfo.outputPath('session-loading.png') });
-  } finally { release(); }
+  } finally { await scenario.release(); }
   await expect(page.locator('.agent-markdown').first()).toBeVisible();
+  await scenario.clear();
   await page.goto('/dashboard/developer');
   await expect(header).toHaveCount(1);
   await expect(header).toHaveCSS('position', 'static');
@@ -89,17 +90,28 @@ async function login(context: import('@playwright/test').BrowserContext, role: s
   await context.addCookies([{ name: 'agent-ui', value: role, domain: '127.0.0.1', path: '/' }]);
 }
 
+// Session pages read the conversation on the Next server, where page.route cannot reach. Fixture
+// scenarios hold or replace reads for every request carrying the scenario cookie, server reads included.
+async function sessionScenario(page: import('@playwright/test').Page, context: import('@playwright/test').BrowserContext,
+  input: { delays?: string[]; responses?: Record<string, { status?: number; body: unknown }> }) {
+  const id = crypto.randomUUID();
+  const url = `http://127.0.0.1:8797/__test__/account/${id}`;
+  await page.request.post(url, { data: input });
+  await context.addCookies([{ name: 'account-test', value: id, domain: '127.0.0.1', path: '/' }]);
+  return { release: () => page.request.patch(url), clear: () => page.request.delete(url) };
+}
+
+async function fixtureSession(page: import('@playwright/test').Page, id: string) {
+  const response = await page.request.get(`http://127.0.0.1:8797/v1/agent/sessions/${id}?limit=10`, { headers: { cookie: 'agent-ui=allowed' } });
+  return response.json();
+}
+
 test('session navigation automatically loads sources and activity for every displayed answer', async ({ page, context }) => {
   await login(context, 'allowed');
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, async route => {
-    const response = await route.fetch();
-    const session = await response.json();
-    if (!new URL(route.request().url()).searchParams.has('cursor')) {
-      const answer = session.messages.find((message: { role: string }) => message.role === 'assistant');
-      session.messages.unshift({ ...answer, messageId: earlierMessageId, runId: earlierRunId, conversationTurn: 1 });
-    }
-    await route.fulfill({ response, json: session });
-  });
+  const session = await fixtureSession(page, sessionId);
+  const answer = session.messages.find((message: { role: string }) => message.role === 'assistant');
+  session.messages.unshift({ ...answer, messageId: earlierMessageId, runId: earlierRunId, conversationTurn: 1 });
+  const scenario = await sessionScenario(page, context, { responses: { [`/v1/agent/sessions/${sessionId}`]: { body: { ...session, nextCursor: null } } } });
   await page.goto(`/dashboard/sessions/${sessionId}`);
   const answers = page.getByRole('article', { name: 'Agent message', exact: true });
   await expect(answers).toHaveCount(2);
@@ -108,6 +120,7 @@ test('session navigation automatically loads sources and activity for every disp
     await expect(answer.getByRole('heading', { name: 'Sources', exact: true })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: 'View sources and tool activity' })).toHaveCount(0);
+  await scenario.clear();
 });
 
 const earlierRunId = '5a04cf06-ea91-4b07-b892-ce87f63954de';
@@ -409,25 +422,195 @@ for (const newSession of [true, false]) {
     const text = `Immediate ${newSession ? 'new session' : 'follow-up'} message`;
     await composer.fill(text);
     await expect(page.getByRole('button', { name: newSession ? 'Start session' : 'Send follow-up', exact: true })).toBeEnabled();
+    // Record only placeholders that appear on screen after sending; streamed fallbacks stay hidden in the DOM.
+    // String expressions keep DOM globals out of the platform type check.
+    await page.evaluate(`(() => {
+      const seen = window.agentPlaceholders = new Set();
+      new MutationObserver(records => {
+        for (const node of records.flatMap(record => [...record.addedNodes])) {
+          if (!(node instanceof Element)) continue;
+          for (const element of [node, ...node.querySelectorAll('*')]) {
+            if (element.matches('.agent-session-loading, .source-skeleton[aria-label="Getting started"], .agent-delivery-status') && element.checkVisibility()) seen.add(element.className);
+          }
+        }
+      }).observe(document.body, { subtree: true, childList: true });
+    })()`);
     await composer.press('Enter');
+    const bubble = page.locator('.agent-user-message').filter({ hasText: text });
     try {
-      const bubble = page.locator('.agent-user-message').filter({ hasText: text });
       await expect(bubble).toBeVisible({ timeout: 1500 });
       await expect(bubble).toBeFocused();
       await expect(bubble).toHaveCSS('outline-style', 'none');
-      await expect(bubble.getByRole('status')).toHaveText('Sending…');
+      await expect(bubble.getByRole('status')).toHaveCount(0);
+      await expect(bubble).not.toContainText('Sending');
       await expect(composer).toHaveValue('');
-      await expect(page.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Agent is working…' })).toBeDisabled();
       await composer.press('Enter');
       expect(posts).toBe(1);
+      if (newSession) await expect(page.locator('.agent-welcome')).toHaveCount(0);
+      await bubble.evaluate(element => { element.setAttribute('data-probe', 'optimistic'); });
       await page.screenshot({ path: testInfo.outputPath('optimistic-message.png') });
     } finally { release(); }
+    if (newSession) await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
     await expect(page.locator('.agent-pending-message')).toHaveCount(0);
-    await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+    await expect(bubble).toHaveCount(1);
+    // The admitted message is the same element that appeared optimistically.
+    await expect(bubble).toHaveAttribute('data-probe', 'optimistic');
     await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
     expect(posts).toBe(1);
+    expect(await page.evaluate<string[]>('[...window.agentPlaceholders]')).toEqual([]);
   });
 }
+
+test('admitted runs show live progress instead of a placeholder before the first update', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  await expect(page.getByText(/The speaker prefers Fable/)).toBeVisible();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent/*/runs/*/events', async route => { await held; await route.continue(); });
+  await page.getByRole('textbox', { name: 'Follow-up message' }).fill('Show progress while the first update is delayed.');
+  await page.getByRole('button', { name: 'Send follow-up' }).click();
+  const latest = page.locator('.agent-assistant-message').last();
+  try {
+    await expect(latest.getByRole('status')).toHaveText('Waiting for the run to start.');
+    await expect(latest.locator('.source-skeleton')).toHaveCount(0);
+  } finally { release(); }
+  await expect(latest.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+});
+
+test('a session started in place follows browser history and New session', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const text = 'Start in place, then move through history.';
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill(text);
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard\/sessions\/[a-f0-9-]{36}$/);
+  const threadUrl = page.url();
+  await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page.locator('.agent-user-message')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Start a new session' })).toHaveValue('');
+  await page.goForward();
+  await expect(page).toHaveURL(threadUrl);
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+  await page.getByRole('link', { name: 'New session' }).click();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page.locator('.agent-user-message')).toHaveCount(0);
+  await page.goto(threadUrl);
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+});
+
+test('the Agent home arrives with its recent sessions, and Back shows the remembered list', async ({ page, context }) => {
+  await login(context, 'allowed');
+  const listReads: string[] = [];
+  page.on('request', request => { if (/\/v1\/agent\/sessions\?/.test(request.url())) listReads.push(request.url()); });
+  const scenario = await sessionScenario(page, context, { delays: ['/v1/agent/sessions'] });
+  try {
+    await page.goto('/dashboard/sessions', { waitUntil: 'commit' });
+    await expect(page.getByRole('status', { name: 'Loading sessions' })).toBeVisible();
+  } finally { await scenario.release(); }
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  // The server's read is reused, so the browser does not request the list again.
+  expect(listReads).toHaveLength(0);
+  await scenario.clear();
+  await page.getByRole('link', { name: /Fable and Astra: key takeaways/ }).click();
+  await expect(page.getByRole('link', { name: 'All sessions', exact: true })).toBeVisible();
+  // Back restores the document's original list; the page shows the session cache instead, which
+  // admissions keep current and which refreshes once it is 30 seconds old.
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Fable and Astra: key takeaways' })).toBeVisible();
+  await expect(page.getByRole('status', { name: /Loading sessions/ })).toHaveCount(0);
+});
+
+const unavailableList = { status: 503, body: { error: { code: 'TEMPORARY', message: 'Sessions are temporarily unavailable.' } } };
+
+test('a list restored by Back after leaving Agent is never shown again when the next read fails', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
+  await expect(title).toBeVisible();
+  await waitForHydration(page);
+  // Leaving Agent unmounts its session cache.
+  await page.getByRole('complementary', { name: 'Workspace sidebar' }).getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL('/dashboard/settings');
+  const scenario = await sessionScenario(page, context, { responses: { '/v1/agent/sessions': unavailableList } });
+  await page.goBack();
+  await expect(page).toHaveURL('/dashboard/sessions');
+  await expect(page.getByText('Sessions are temporarily unavailable.').first()).toBeVisible();
+  await expect(title).toHaveCount(0);
+  await scenario.clear();
+});
+
+test('restoring access does not bring back the list shown before it was withdrawn', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  const title = page.getByRole('heading', { name: 'Fable and Astra: key takeaways' });
+  await expect(title).toBeVisible();
+  await waitForHydration(page);
+  await page.route('**/api/platform/v1/agent/access', route => route.fulfill({ status: 403, json: { enabled: false } }));
+  await page.evaluate("window.dispatchEvent(new Event('focus'))");
+  await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toBeVisible();
+  const scenario = await sessionScenario(page, context, { responses: { '/v1/agent/sessions': unavailableList } });
+  await page.unroute('**/api/platform/v1/agent/access');
+  await page.evaluate("window.dispatchEvent(new Event('agent-access-changed'))");
+  await expect(page.getByRole('heading', { name: 'Agent sessions are not available' })).toHaveCount(0);
+  await expect(page.getByText('Sessions are temporarily unavailable.').first()).toBeVisible();
+  await expect(title).toHaveCount(0);
+  await scenario.clear();
+});
+
+test('Back to a server-rendered session revalidates it instead of showing the original page', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto(`/dashboard/sessions/${sessionId}`);
+  const composer = page.getByRole('textbox', { name: 'Follow-up message' });
+  const text = 'Back must keep this completed follow-up.';
+  await composer.fill(text);
+  await composer.press('Enter');
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-status')).toHaveText('completed');
+  await page.getByRole('link', { name: 'All sessions', exact: true }).click();
+  await expect(page).toHaveURL('/dashboard/sessions');
+  const reads: string[] = [];
+  page.on('request', request => { if (request.url().includes(`/v1/agent/sessions/${sessionId}?`)) reads.push(request.url()); });
+  await page.goBack();
+  await expect(page).toHaveURL(`/dashboard/sessions/${sessionId}`);
+  // The restored page may briefly show the server's original read; the browser read brings it current.
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toHaveCount(1);
+  await expect(page.locator('.agent-assistant-message').last().locator('.agent-status')).toHaveText('completed');
+  expect(reads.length).toBeGreaterThan(0);
+});
+
+test('a late admission after leaving Agent keeps the user where they went', async ({ page, context }) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sources');
+  await page.getByRole('link', { name: 'Agent', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'Start a new session' });
+  await expect(composer).toBeVisible();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/platform/v1/agent?*', async route => { await held; await route.continue(); });
+  const text = 'Leave before this session is admitted.';
+  await composer.fill(text);
+  await composer.press('Enter');
+  await expect(page.locator('.agent-user-message').filter({ hasText: text })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+  const sources = page.locator('[data-research-panel="sources"]:visible');
+  await expect(sources).toBeVisible();
+  const admitted = page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/v1/agent?'));
+  release();
+  await admitted;
+  // Give the late admission time to run; it must not rewrite the URL under the Sources view.
+  await page.waitForTimeout(1_000);
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+  await expect(sources).toBeVisible();
+  await page.getByRole('link', { name: 'Agent', exact: true }).click();
+  await expect(page.getByRole('link', { name: new RegExp(text) })).toBeVisible();
+});
 
 test('failed delivery removes the optimistic message, announces the error and restores the exact draft', async ({ page, context }) => {
   await login(context, 'allowed');
@@ -443,6 +626,8 @@ test('failed delivery removes the optimistic message, announces the error and re
   finally { release(); }
   await expect(page.locator('.agent-composer').getByRole('alert')).toContainText('The API rejected this message.');
   await expect(page.locator('.agent-pending-message')).toHaveCount(0);
+  await expect(page.locator('.agent-welcome')).toBeVisible();
+  await expect(page).toHaveURL(/\/dashboard\/sessions$/);
   await expect(composer).toHaveValue(draft);
   await expect(composer).toBeEditable();
   await expect(composer).toBeFocused();
@@ -728,7 +913,7 @@ for (const failure of [
   // so earlier tests that submit follow-ups cannot change the run under test.
   const runId = 'af8c1283-784d-4baf-8632-28173714766d';
   const stamp = 1789111800000;
-  await page.route(`**/api/platform/v1/agent/sessions/${sessionId}?*`, route => route.fulfill({ json: {
+  await sessionScenario(page, context, { responses: { [`/v1/agent/sessions/${sessionId}`]: { body: {
     sessionId, title: 'Finalization failure', latestMessagePreview: 'Compare the videos.',
     lastRunId: runId, runCount: 2, createdAt: stamp, updatedAt: stamp, nextCursor: null,
     messages: ['user', 'assistant'].map((role, index) => ({
@@ -736,7 +921,7 @@ for (const failure of [
       parentMessageId: null, conversationTurn: 2, role, status: 'completed',
       content: index ? 'Saved response' : 'Compare the videos.', createdAt: stamp, updatedAt: stamp,
     })),
-  } }));
+  } } } });
   let partial = false;
   let outcome = 'partial';
   const reason = failure.reason;
