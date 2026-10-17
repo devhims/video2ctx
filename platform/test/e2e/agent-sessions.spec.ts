@@ -409,10 +409,10 @@ for (const newSession of [true, false]) {
     const text = `Immediate ${newSession ? 'new session' : 'follow-up'} message`;
     await composer.fill(text);
     await expect(page.getByRole('button', { name: newSession ? 'Start session' : 'Send follow-up', exact: true })).toBeEnabled();
-    await page.evaluate(() => {
-      const seen = new Set<string>();
-      Object.assign(window, { agentPlaceholders: seen });
-      // Record only placeholders that appear on screen after sending; streamed fallbacks stay hidden in the DOM.
+    // Record only placeholders that appear on screen after sending; streamed fallbacks stay hidden in the DOM.
+    // String expressions keep DOM globals out of the platform type check.
+    await page.evaluate(`(() => {
+      const seen = window.agentPlaceholders = new Set();
       new MutationObserver(records => {
         for (const node of records.flatMap(record => [...record.addedNodes])) {
           if (!(node instanceof Element)) continue;
@@ -421,7 +421,7 @@ for (const newSession of [true, false]) {
           }
         }
       }).observe(document.body, { subtree: true, childList: true });
-    });
+    })()`);
     await composer.press('Enter');
     const bubble = page.locator('.agent-user-message').filter({ hasText: text });
     try {
@@ -445,7 +445,7 @@ for (const newSession of [true, false]) {
     await expect(bubble).toHaveAttribute('data-probe', 'optimistic');
     await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
     expect(posts).toBe(1);
-    expect(await page.evaluate(() => [...(window as unknown as { agentPlaceholders: Set<string> }).agentPlaceholders])).toEqual([]);
+    expect(await page.evaluate<string[]>('[...window.agentPlaceholders]')).toEqual([]);
   });
 }
 
