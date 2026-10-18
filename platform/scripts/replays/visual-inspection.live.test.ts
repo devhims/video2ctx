@@ -225,4 +225,30 @@ describe('local live replay of session 694a77da', () => {
     await expect(gridCheck('Both 3:20 and 3:30 were included in the storyboard sheet supplied to the analyst. A finding at 3:20 does not establish a reason to prefer it over 3:30.')).resolves.toBeUndefined();
     resultRows.push({ phase: 'storyboard-grid-check', inventedExclusionRejected: true, bothInputsAccepted: true }); save();
   });
+  it('checks absent records and retains transcript support and older history with the live model', async () => {
+    const model = createAgentModel(production, `review-gaps:${crypto.randomUUID()}`, 'low', { model_role: 'evidence_reviewer' });
+    const base = { model, question: 'Explain the earlier inspection.', signal: AbortSignal.timeout(120_000), callId: crypto.randomUUID() };
+    const check = (text: string, extra: Partial<Parameters<typeof reviewVisualAnswer>[0]> = {}) => reviewVisualAnswer({
+      ...base, evidence: [], blocks: [{ text, evidenceIds: [] }], deadlineAt: Date.now() + 20_000, ...extra });
+    await expect(check('I inspected frames at 3:20.')).rejects.toThrow(/Inspection evidence check:/);
+    await expect(check('The available records do not establish whether a frame at 3:20 was inspected. We could inspect 3:30 next.')).resolves.toBeUndefined();
+    resultRows.push({ phase: 'absent-record-check', unsupportedClaimRejected: true, uncertaintyAccepted: true }); save();
+    // Synthetic support packets test reviewer visibility, not the video's actual wording.
+    await expect(check('The transcript analysis reports the speaker introduction around 3:20.', {
+      evidence: [{ packetId: 'analyzed-captions', kind: 'youtube_transcript_analysis',
+        sources: [{ id: 'captions', provider: 'youtube', kind: 'transcript', videoId }], warnings: [],
+        transcriptAnalysis: { summary: 'Introduction', findings: [{ claim: 'The speaker introduces herself around 3:20.',
+          excerptIds: ['ref_2'], entities: [{ name: 'Azadeh Moshiri', source: 'transcript', quote: 'I am Azadeh Moshiri.' }], quantities: [], uncertainty: null }],
+          coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 190000, endMs: 200000 }, selectedExcerptCount: 1 } }],
+      blocks: [{ text: 'The transcript analysis reports the speaker introduction around 3:20.', evidenceIds: ['ref_2'] }],
+    })).resolves.toBeUndefined();
+    await expect(check('My older answer cited 3:20. A later answer discussed 3:30 as an alternative.', {
+      answerContext: { historyPage: { messages: [{ id: 'old-answer', role: 'assistant', text: 'The presenter is wearing blue at 3:20.' }], nextOffset: 20 },
+        researchContext: { reads: [{ tool: 'search_context', input: { label: 'history', query: 'alternative' },
+          result: [{ id: 'searched-answer', role: 'assistant', text: '3:30 would be an alternative to inspect.' }] }], truncated: true, budgetTruncated: true },
+        conversationHistory: [], contextIncomplete: true, missingInputs: [{ reason: 'research_context_cut' }] },
+    })).resolves.toBeUndefined();
+    resultRows.push({ phase: 'prepared-support-check', transcriptFindingAccepted: true, olderHistoryAccepted: true }); save();
+  });
+
 });

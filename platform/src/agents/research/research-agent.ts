@@ -3,7 +3,7 @@ import { INSPECTION_RECORD_GUIDANCE, reviewVisualAnswer } from '../runtime/visua
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
-import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
+import { independentModelFailoverState, hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
@@ -231,7 +231,7 @@ export async function executeResearchRun(options: {
     try {
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.signal, (signal, persist) => runUnifiedFinalizer({
         model: runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
-        reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'evidence_reviewer' }),
+        reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'evidence_reviewer' }, independentModelFailoverState(modelFailover)),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, historyPage, sessionBrief,
         context: { traceToolCall: options.traceToolCall, runId: options.runId, currentDate: options.currentDate, signal,
@@ -382,7 +382,7 @@ export async function runResearchAgent(options: {
       model_role: 'agent_core',
       },
     ),
-    reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...metadata, model_role: 'evidence_reviewer' }),
+    reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...metadata, model_role: 'evidence_reviewer' }, independentModelFailoverState(modelFailover)),
     finalizationModel: runModel(options.env, options.sessionAffinity, 'low', {
       ...metadata,
       model_role: 'finalizer',
@@ -927,6 +927,12 @@ async function runUnifiedFinalizer(options: {
   const contextIncomplete = missingInputs.length > 0 || historyPage?.nextOffset !== undefined;
   console.log(JSON.stringify({ event: 'agent_finalizer_context_plan', runId: options.context.runId,
     plan: 'answer_only', missingInputs }));
+  const answerContext = { historyPage, contextIncomplete, missingInputs, session: options.sessionBrief,
+    researchContext: options.researchContext, conversationHistory: conversationHistoryForModel(options.conversationHistory),
+    evidenceOmittedFromContext: prepared.omitted,
+    applicationDurationNotice: currentDurationNotice() || undefined,
+    providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
+      ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure) };
   let inspectionModel: LanguageModel | undefined;
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
   // Recovery can reach an expired main deadline. Use the remaining retry allowance.
@@ -1025,21 +1031,13 @@ async function runUnifiedFinalizer(options: {
           ...(options.context.currentDate ? [options.context.currentDate] : []),
         ].join('\n'),
         messages: [{role:'user',content:JSON.stringify({
-          historyPage, contextIncomplete, missingInputs, comparisonVideoIds,
-          session: options.sessionBrief,
-          researchContext: options.researchContext,
-          conversationHistory: conversationHistoryForModel(options.conversationHistory),
+          ...answerContext, comparisonVideoIds,
           request: options.message,
           responseIntent: intent,
           numberedItemCount,
           route: options.decision,
           evidence: prepared.evidence,
           inspectionRecords,
-          // Saved list packets that could not fit even as counts. Budgeted together with evidence.
-          evidenceOmittedFromContext: prepared.omitted,
-          applicationDurationNotice: currentDurationNotice() || undefined,
-          providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
-            ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure),
           validationFeedback: feedback,
         })}, {role:'user',content:'Return the complete structured answer from the supplied inputs now. Do not promise future work or request another inspection. State any remaining gap.'}],
         temperature: 0,
@@ -1134,11 +1132,11 @@ async function runUnifiedFinalizer(options: {
         setModelDeadline(inspectionModel, reviewDeadlineAt);
         setModelAttemptGuard(inspectionModel, () => assertModelCostAvailable(options.modelBudget));
         return reviewVisualAnswer({ model: inspectionModel, evidence: prepared.evidence, blocks: output.blocks,
-          inspectionRecords, conversationHistory: conversationHistoryForModel(options.conversationHistory),
+          inspectionRecords, answerContext,
           question: options.message, signal: options.context.signal, deadlineAt: reviewDeadlineAt,
           budget: options.modelBudget, callId: `${modelCallId}:inspection-review` });
       };
-      if (prepared.evidence.some(packet => packet.frameCoverage || packet.visualCoverage) || inspectionRecords.items.length) {
+      if (!conversational) {
         if (options.context.traceToolCall) await options.context.traceToolCall({
           toolCallId: `inspection-review:${attemptId}`, name: 'visual_evidence_review', operation: 'finalization_review', source: 'execution',
           input: { attempt: attempt + 1, packetIds: inspectionRecords.items.map(item => item.packetId), blockCount: output.blocks.length },

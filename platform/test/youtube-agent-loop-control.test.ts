@@ -7,7 +7,7 @@ import { ApiError } from '../src/lib/http';
 import { MockLanguageModelV4 } from 'ai/test';
 import { NoSuchToolError } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
-import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
+import { runResearchAgentWithModel as actualRunResearchAgentWithModel } from '../src/agents/research/research-agent';
 import {
   FINALIZE_ANSWER_TOOL_NAME,
   getFinalizationReason,
@@ -20,6 +20,10 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import type { AgentModelCostBudget, AgentModelUsageEntry } from '../src/agents/runtime/model-budget';
 import type { EvidencePacket } from '../src/agents/contracts';
 import { metadataForConversation } from '../src/agents/runtime/conversation-metadata';
+
+import { acceptingInspectionReviewer } from './fixtures/inspection-review';
+const runResearchAgentWithModel = (options: Parameters<typeof actualRunResearchAgentWithModel>[0]) =>
+  actualRunResearchAgentWithModel({ reviewModel: acceptingInspectionReviewer, ...options });
 
 describe('YouTube AgentCore loop control', () => {
   it.each([
@@ -879,6 +883,7 @@ describe('YouTube AgentCore loop control', () => {
       'agent_core',
       'agent_core',
       'timeout_finalizer',
+      'timeout_finalizer', // Independent inspection review.
     ]);
   });
 
@@ -1358,7 +1363,7 @@ describe('YouTube AgentCore loop control', () => {
       context, recoveredEvidence: [packet], modelBudget,
     });
     expect(attempts).toBe(2);
-    expect(modelBudget.entries.filter(e => e.category === 'timeout_finalizer')).toHaveLength(2);
+    expect(modelBudget.entries.filter(e => e.category === 'timeout_finalizer')).toHaveLength(failure === 'exhausted' ? 2 : 3);
     expect(result.finishReason).toBe(failure === 'exhausted' ? 'evidence-fallback' : 'timeout-finalized');
     const lastInput = vi.mocked(context.finalize).mock.calls.at(-1)![1];
     expect(lastInput.answer).toContain(`[cite:${packet.excerpts[0]!.id}]`);

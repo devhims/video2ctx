@@ -112,7 +112,7 @@ export function conversationAssistantMessage(turn: ConversationTurn, metadataByR
 
 /** Prior statements resolve follow-ups; they are not independently verified evidence. */
 export function conversationHistoryForModel(history: readonly ConversationTurn[] = []) {
-  return history.map(({ user, assistant }) => ({ user, assistant }));
+  return history.map(({ userMessageId, agentMessageId, user, assistant }) => ({ userMessageId, agentMessageId, user, assistant }));
 }
 
 /** Reuse only source packets cited along the selected ancestor chain. */

@@ -11,14 +11,22 @@ import type { AgentTurnResult, CapabilityRouteDecision, EvidencePacket } from '.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { streamed } from './fixtures/model-streams';
 
-const models = vi.hoisted(() => ({ select: vi.fn() }));
+const models = vi.hoisted(() => ({ select: vi.fn(), reviewUsesSelector: false }));
 vi.mock('../src/agents/research/finalization-failure', { spy: true });
 vi.mock('../src/agents/model', async importOriginal => ({
-  ...await importOriginal<typeof import('../src/agents/model')>(), createAgentModel: models.select,
+  ...await importOriginal<typeof import('../src/agents/model')>(),
+  createAgentModel: (...args: Parameters<typeof import('../src/agents/model').createAgentModel>) =>
+    args[3]?.model_role === 'evidence_reviewer' && !models.reviewUsesSelector ? acceptingReviewer() : models.select(...args),
 }));
 
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 10, text: 10, reasoning: 0 } };
+function acceptingReviewer() {
+  return new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: '{"issues":[]}' }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+}
+beforeEach(() => { models.reviewUsesSelector = false; });
+
 const evidence: EvidencePacket = {
   packetId: 'prior-frames', kind: 'youtube_frames',
   sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: 'abcdefghijk' }],
@@ -299,8 +307,8 @@ it('keeps partial JSON for repair after the overall deadline and logs only progr
       event: 'agent_finalization_usage_unavailable', attempt: 1,
       reason: 'provider_did_not_report_usage', textCharacters: partial.length,
     }));
-    // Only the completed replacement reports usage. Do not fabricate provider costs.
-    expect(options.modelBudget!.recordUsage).toHaveBeenCalledOnce();
+    // The completed replacement and independent review report usage. Do not fabricate provider costs.
+    expect(options.modelBudget!.recordUsage).toHaveBeenCalledTimes(2);
   } finally { warnings.mockRestore(); vi.useRealTimers(); }
 });
 
@@ -1243,7 +1251,7 @@ it.each([
         expect(drafts.slice(abandoned + 1)).toContainEqual(expect.objectContaining({ answer: '', state: 'streaming' }));
         expect(drafts.at(-1)?.answer).not.toContain('Abandoned');
       }
-      expect(vi.mocked(options.modelBudget!.recordUsage)).toHaveBeenCalledTimes(2); // Classifier and successful answer only.
+      expect(vi.mocked(options.modelBudget!.recordUsage)).toHaveBeenCalledTimes(3); // Classifier, successful answer and independent review.
       expect(vi.getTimerCount()).toBe(0);
     }
   } finally { vi.useRealTimers(); }
@@ -1961,6 +1969,7 @@ it('sends inline prose guidance and supplied-ID constraints to the finalizer', a
 
 
 it('repairs invented inspection history before persistence using the same answer retry allowance', async () => {
+  models.reviewUsesSelector = true;
   const { options, classifier, identity } = setup('context_answer', true);
   const saved = { ...evidence, artifacts: [{ type: 'youtube_frame_analysis', data: {
     requestedTimestampsMs: [55000, 90000, 200000, 400000, 700000, 1000000],
@@ -1984,6 +1993,7 @@ it('repairs invented inspection history before persistence using the same answer
 });
 
 it('never persists an inspection claim rejected by both checks', async () => {
+  models.reviewUsesSelector = true;
   const { options, classifier } = setup('context_answer', true);
   options.conversationHistory![0]!.evidence![0] = { ...evidence, artifacts: [{ type: 'youtube_frame_analysis', data: {
     requestedTimestampsMs: [30000], frames: [{ timestampMs: 30000, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [],
@@ -2000,6 +2010,7 @@ it('never persists an inspection claim rejected by both checks', async () => {
 
 
 it('checks inspection history even when the classifier chooses the history-only route', async () => {
+  models.reviewUsesSelector = true;
   const { options, classifier } = setup('context_answer', true);
   options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'history', reason: 'Discuss earlier selection' };
   options.conversationHistory![0]!.assistant = 'The presenter wears blue at 0:55.';

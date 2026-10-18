@@ -671,6 +671,7 @@ test.each([true, false])(
     within(`model-search-${resume}`, async (store) => {
       const { MockLanguageModelV4 } = await import('ai/test');
       const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+      const { acceptingInspectionReviewer } = await import('./fixtures/inspection-review');
       const p = provider();
       const raw = await sessionProvider(p, store).transcript(id);
       const excerptId = `evidence:${raw.assetVersions![0]}:0`;
@@ -752,6 +753,7 @@ test.each([true, false])(
         model: core,
         recoveredEvidence,
         finalizationModel: finalizer,
+        reviewModel: acceptingInspectionReviewer,
         message: 'What is the opening sentence?',
         decision: { route: 'inspect_video', videoId: id, useStoryboard: false, researchVideoCount: 1 },
         context: ctx,

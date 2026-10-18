@@ -134,10 +134,10 @@ export function validateMemoryDelta(
     if (!seen.has(id) && !unsafe && !unseenExisting) {
       if (change.action === 'remove') {
         if (shown.has(id)) accepted = { action: 'remove', kind: change.kind, topic: change.topic, text: '-', evidenceIds: [] };
-      } else if (change.text) {
+      } else {
         const evidenceIds = [...new Set(change.evidenceIds)];
         if (change.kind === 'finding') {
-          if (evidenceIds.length && evidenceIds.every(evidenceId => citationIds.has(evidenceId)))
+          if (change.text && evidenceIds.length && evidenceIds.every(evidenceId => citationIds.has(evidenceId)))
             accepted = { action: 'upsert', kind: 'finding', topic: change.topic, text: change.text, evidenceIds };
         } else {
           // Store the actual user text, never an assistant-authored sampling history.

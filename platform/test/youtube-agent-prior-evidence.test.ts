@@ -1,3 +1,4 @@
+import { acceptingInspectionReviewer } from './fixtures/inspection-review';
 import { MockLanguageModelV4 } from 'ai/test';
 import { executeResearchRun } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -7,7 +8,7 @@ import type { ConversationTurn } from '../src/agents/runtime/conversation-memory
 
 const models = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('../src/agents/model', async importOriginal => ({
-  ...await importOriginal<typeof import('../src/agents/model')>(), createAgentModel: models.select,
+  ...await importOriginal<typeof import('../src/agents/model')>(), createAgentModel: (...args: unknown[]) => (args[3] as { model_role?: string })?.model_role === 'evidence_reviewer' ? acceptingInspectionReviewer() : models.select(...args),
 }));
 
 const VIDEO = 'abcdefghijk';

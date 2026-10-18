@@ -1,3 +1,4 @@
+import { acceptingInspectionReviewer } from './fixtures/inspection-review';
 import { attachTestAssetStore } from './fixtures/analysis-session';
 import { MockLanguageModelV4 } from 'ai/test';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
@@ -46,7 +47,7 @@ function setup(delayMs: number) {
   const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: JSON.stringify(JSON.stringify(call.prompt).includes('Check an answer against supplied video inspection records') ? { issues: [] } : {
     confidence: 'low', warnings: [], blocks: [{ text: 'The available evidence is limited.', evidenceIds: ['ref_1'] }],
   }) }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
-  const options = { model, finalizationModel: finalizer, context, message: 'Look at frames to confirm player names.',
+  const options = { model, finalizationModel: finalizer, reviewModel: acceptingInspectionReviewer, context, message: 'Look at frames to confirm player names.',
     decision: { route: 'inspect_video' as const, videoId, useStoryboard: true, visualEvidence: 'required' as const, visualRequirements: ['player names on shirts'] },
     toolNames: ['get_video_frames', 'analyze_video_frames', 'finalize_answer'] as const };
   return { options, context, analyzed, finalizer };
