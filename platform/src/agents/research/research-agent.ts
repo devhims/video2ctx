@@ -1,3 +1,6 @@
+import { inspectionRecordsForModel, mergeInspectionRecords } from '../runtime/inspection-records';
+import { INSPECTION_RECORD_GUIDANCE, reviewVisualAnswer } from '../runtime/visual-evidence-review';
+import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
@@ -228,10 +231,11 @@ export async function executeResearchRun(options: {
     try {
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.signal, (signal, persist) => runUnifiedFinalizer({
         model: runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
+        reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'evidence_reviewer' }),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, historyPage, sessionBrief,
         context: { traceToolCall: options.traceToolCall, runId: options.runId, currentDate: options.currentDate, signal,
-          evidenceRunRecords: options.evidenceRunRecords, finalize: (id, input) => persist(() => options.finalize(id, input)) },
+          session: options.session, evidenceRunRecords: options.evidenceRunRecords, finalize: (id, input) => persist(() => options.finalize(id, input)) },
         evidence: handoffEvidence, handoffGaps, researchContext: options.recoveredResearchContext
           ? options.prepareResearchContext?.(options.recoveredResearchContext) ?? options.recoveredResearchContext : undefined, toolFailures: options.recoveredToolFailures,
         modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix, onDraft: options.onDraft,
@@ -378,6 +382,7 @@ export async function runResearchAgent(options: {
       model_role: 'agent_core',
       },
     ),
+    reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...metadata, model_role: 'evidence_reviewer' }),
     finalizationModel: runModel(options.env, options.sessionAffinity, 'low', {
       ...metadata,
       model_role: 'finalizer',
@@ -419,6 +424,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
   finalizationModel?: LanguageModel;
+  reviewModel?: () => LanguageModel;
   message: string;
   decision: ExecutableRoute;
   context: AgentToolContext;
@@ -707,6 +713,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             '',
             `Activated capability: ${capability.id}`,
             capability.instructions(completionTool),
+            ...(visualEvidenceLevel(options.decision) !== 'none' ? [VISUAL_INSPECTION_SKILL] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
@@ -790,7 +797,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const deadlineAt = await startFinalization();
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.context.signal, (signal, persist) => runUnifiedFinalizer({
         onFailure: code => finalizationFailures.push(code),
-        deadlineAt, sessionBrief, model: options.finalizationModel ?? options.model,
+        deadlineAt, sessionBrief, model: options.finalizationModel ?? options.model, reviewModel: options.reviewModel,
         message: options.message,
         conversationHistory: options.conversationHistory,
         decision: options.decision,
@@ -872,9 +879,10 @@ async function runUnifiedFinalizer(options: {
   conversationHistory?: ConversationTurn[];
   onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
+  reviewModel?: () => LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
-  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'traceToolCall' | 'currentDate' | 'evidenceRunRecords'>;
+  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'traceToolCall' | 'currentDate' | 'evidenceRunRecords' | 'session'>;
   sessionBrief?: ReturnType<typeof sessionBriefForModel>;
   historyPage?: ReturnType<NonNullable<NonNullable<AgentToolContext['session']>['readHistory']>>;
   evidence: EvidencePacket[];
@@ -899,6 +907,13 @@ async function runUnifiedFinalizer(options: {
     : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepared = finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds,
     options.context.evidenceRunRecords?.(options.evidence.map(packet => packet.packetId)));
+  const subjects = new Set([...options.evidence.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])),
+    ...(options.conversationHistory?.at(-1)?.resourceIds ?? []), ...extractYouTubeVideoIds(options.message)]);
+  const savedInspection = [...options.evidence].reverse().concat(conversationEvidence([], options.conversationHistory ?? []))
+    .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
+  const structural = options.context.session?.inspectionRecords?.([...subjects]);
+  const inspectionRecords = mergeInspectionRecords([inspectionRecordsForModel(savedInspection), ...(structural ? [structural] : [])],
+    options.context.evidenceRunRecords?.([...savedInspection.map(packet => packet.packetId), ...(structural?.items.map(item => item.packetId) ?? [])]));
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
@@ -912,6 +927,7 @@ async function runUnifiedFinalizer(options: {
   const contextIncomplete = missingInputs.length > 0 || historyPage?.nextOffset !== undefined;
   console.log(JSON.stringify({ event: 'agent_finalizer_context_plan', runId: options.context.runId,
     plan: 'answer_only', missingInputs }));
+  let inspectionModel: LanguageModel | undefined;
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
   // Recovery can reach an expired main deadline. Use the remaining retry allowance.
   const firstAttempt = Date.now() >= options.deadlineAt ? 1 : 0;
@@ -999,6 +1015,7 @@ async function runUnifiedFinalizer(options: {
           `Return blocks containing text and evidenceIds. Use the short ref_N excerpt IDs from supplied evidence, including transcriptAnalysis.findings.excerptIds. ${ANSWER_CITATION_GUIDANCE}`,
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           EVIDENCE_DELIVERY_GUIDANCE,
+          INSPECTION_RECORD_GUIDANCE,
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           'For list evidence such as playlists, take counts from collection: entriesShown are the entries supplied here, and collection.coverage states what was not retained, not shown, or not stated by the provider. Never report fewer available entries than are shown. Describe unshown or unretained entries as a context limit, not as absent from the source. When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note stating the provider total, the 12-video listing limit and which videos had content reviewed; do not contradict it. Otherwise no note is appended, so state any material playlist coverage limit yourself. Never present listing details as reviewed video content. evidenceOmittedFromContext counts saved list packets that did not fit at all; notListed of them are counted but not named.',
@@ -1017,6 +1034,7 @@ async function runUnifiedFinalizer(options: {
           numberedItemCount,
           route: options.decision,
           evidence: prepared.evidence,
+          inspectionRecords,
           // Saved list packets that could not fit even as counts. Budgeted together with evidence.
           evidenceOmittedFromContext: prepared.omitted,
           applicationDurationNotice: currentDurationNotice() || undefined,
@@ -1088,8 +1106,7 @@ async function runUnifiedFinalizer(options: {
       });
       usageRecorded = true;
       validationStage = 'output_schema';
-      // Only an unrenderable answer is retried. Everything below either repairs the
-      // answer deterministically or attaches a note; none of it rejects the answer.
+      // Structure and inspection-evidence failures share the single repair allowance.
       const salvaged = finishReason === 'length' ? await salvageTruncatedAnswer(candidate, outputSchema) : undefined;
       if (finishReason === 'length' && !salvaged) throw new Error('Final answer was truncated by the output token limit.');
       const output = salvaged?.output ?? result.output;
@@ -1109,6 +1126,25 @@ async function runUnifiedFinalizer(options: {
           output.warnings = [];
           replacedFirstMessageAnswer = true;
         }
+      }
+      validationStage = 'inspection_evidence';
+      const review = () => {
+        inspectionModel ??= options.reviewModel?.() ?? options.model;
+        const reviewDeadlineAt = Math.min(attempt === 0 ? options.deadlineAt : finalizationHardDeadline(options.deadlineAt), Date.now() + 20_000);
+        setModelDeadline(inspectionModel, reviewDeadlineAt);
+        setModelAttemptGuard(inspectionModel, () => assertModelCostAvailable(options.modelBudget));
+        return reviewVisualAnswer({ model: inspectionModel, evidence: prepared.evidence, blocks: output.blocks,
+          inspectionRecords, conversationHistory: conversationHistoryForModel(options.conversationHistory),
+          question: options.message, signal: options.context.signal, deadlineAt: reviewDeadlineAt,
+          budget: options.modelBudget, callId: `${modelCallId}:inspection-review` });
+      };
+      if (prepared.evidence.some(packet => packet.frameCoverage || packet.visualCoverage) || inspectionRecords.items.length) {
+        if (options.context.traceToolCall) await options.context.traceToolCall({
+          toolCallId: `inspection-review:${attemptId}`, name: 'visual_evidence_review', operation: 'finalization_review', source: 'execution',
+          input: { attempt: attempt + 1, packetIds: inspectionRecords.items.map(item => item.packetId), blockCount: output.blocks.length },
+          execute: async () => { await review(); return { status: 'passed' }; },
+        });
+        else await review();
       }
       for (const block of output.blocks) {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);

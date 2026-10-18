@@ -281,7 +281,7 @@ test('an older explicit branch accepted after a newer correction cannot overwrit
     expect(jobs(instance).map(job => job.status)).toEqual(['completed', 'completed']);
     // Ordering is per normalized kind/topic: a differently named topic is not treated as a conflict.
     expect(Object.fromEntries(store.brief().memories.map(memory => [memory.topic, memory.text])))
-      .toEqual({ Length: 'Prefers detailed answers', brevity: 'Prefers short answers' });
+      .toEqual({ Length: 'I prefer detailed answers', brevity: 'I prefer short answers' });
   });
 });
 
@@ -374,7 +374,7 @@ test('an older branch finishing later cannot overwrite a newer correction, and a
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(jobs(instance)).toMatchObject([{ status: 'completed', attempts: 2 }]);
     const memories = Object.fromEntries(store.brief().memories.map(memory => [memory.topic, memory.text]));
-    expect(memories).toEqual({ length: 'Prefers detailed answers', open: 'Which speaker?', style: 'Prefers short answers' });
+    expect(memories).toEqual({ length: 'Prefers detailed answers', open: 'Which speaker?', style: 'I prefer short answers' });
   });
 });
 
@@ -481,4 +481,33 @@ test.each(['success', 'retry', 'budget', 'backup_budget'] as const)('accounts fo
   expect(ledger.every(row => row.credits === 0)).toBe(true);
   expect(ledger.reduce((total, row) => total + row.provider_cost_micros, 0)).toBe(providerCost);
   expect(await creditBalance(env, userId)).toBe(creditsAfterAnswer);
+});
+
+
+test('an accepted process answer cannot seed fabricated frame history as question memory', async () => {
+  const { runtime, addRun } = await seed('memory-job-frame-history');
+  await runInDurableObject(runtime, async instance => {
+    const question = 'Why 3:20 instead of 3:30?';
+    const runId = await addRun(instance, 1, question);
+    const asset = await internals(instance).sessionStore.retrieve('frame:abcdefghijk:640:200000', 'frame', 'abcdefghijk', false,
+      async () => ({ value: { videoId: 'abcdefghijk', frames: [{ timestampMs: 200000 }], failures: [], meta: { partial: false, warnings: [] } }, cacheStatus: 'miss' }),
+      () => ({ timestampMs: 200000 }));
+    internals(instance).sessionStore.savePacket({ assetVersions: asset.assetVersions, packetId: 'saved-frame-history', kind: 'youtube_frames',
+      sources: [{ id: 'frames', provider: 'youtube', kind: 'frames', videoId: 'abcdefghijk' }],
+      excerpts: [{ id: 'observation', sourceId: 'frames', text: 'Paid image observation', startMs: 200000 }],
+      artifacts: [{ type: 'youtube_frame_analysis', data: { requestedTimestampsMs: [200000],
+        frames: [{ timestampMs: 200000, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [] } }], warnings: [], usage: [] });
+    const structural = internals(instance).sessionStore.inspectionRecords(['abcdefghijk']);
+    expect(structural.items[0]?.inputTimestampsMs).toEqual([200000]);
+    expect(JSON.stringify(structural)).not.toContain('Paid image observation');
+    expect(internals(instance).sessionStore.inspectionRecords(['xxxxxxxxxxx']).items).toEqual([]);
+    vi.spyOn(internals(instance), 'memoryUpdaterModel').mockReturnValue(deltaModel([
+      upsert('question', 'sampled frames', 'The agent sampled 0:55, 1:10, 1:30 and 3:20.'),
+      upsert('context', 'sampling', 'The transcript guided those selections.', { userQuote: question }),
+    ]));
+    await internals(instance).finalizeRun(runId, 'final', answer('The selection reasons were not recorded.'));
+    await internals(instance).processMemoryJobs();
+    expect(jobs(instance)).toMatchObject([{ status: 'completed' }]);
+    expect(internals(instance).sessionStore.brief().memories.map(memory => memory.text)).toEqual([question]);
+  });
 });

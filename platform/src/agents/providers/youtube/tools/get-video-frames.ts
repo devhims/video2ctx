@@ -1,3 +1,4 @@
+import { frameSelectionsSchema } from '../../../runtime/frame-selection';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, visualSpan, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { tool } from 'ai';
@@ -12,6 +13,7 @@ import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence
 
 export const getVideoFramesInputSchema = frameRequestSchema.extend({
   focus: z.string().trim().min(1).max(1000).optional(),
+  selections: frameSelectionsSchema.optional(),
 });
 
 export function createGetVideoFramesTool(context: AgentToolContext) {
@@ -33,10 +35,19 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   const parsed = getVideoFramesInputSchema.parse(input);
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
+  if (parsed.selections) {
+    const times = parsed.selections.map(selection => selection.timestampMs);
+    if (new Set(times).size !== request.timestampsMs.length || times.length !== request.timestampsMs.length
+      || times.some(time => !request.timestampsMs.includes(time))) throw new Error('Supply one selection reason per requested timestamp.');
+    const ids = new Set(context.getEvidence?.().flatMap(packet => packet.excerpts.filter(excerpt => packet.sources.some(source =>
+      source.id === excerpt.sourceId && source.videoId === parsed.videoId)).map(excerpt => excerpt.id)) ?? []);
+    if (parsed.selections.some(selection => selection.evidenceIds.some(id => !ids.has(id))))
+      throw new Error('Frame selection cites an excerpt not delivered to this run. Use delivered locating evidence or mark the selection exploratory.');
+  }
   return context.executeEvidenceTool({
     input: parsed,
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
-    semanticKey: `frames:${JSON.stringify(request)}`,
+    semanticKey: `frames:${JSON.stringify({ ...request, selections: parsed.selections?.slice().sort((a, b) => a.timestampMs - b.timestampMs) })}`,
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
@@ -62,7 +73,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         sources: [{ id: sourceId, provider: 'youtube', kind: 'frames', videoId: parsed.videoId, url: youtubeVideoUrl(parsed.videoId) }],
         excerpts: [],
         artifacts: [{ type: 'youtube_frame_retrieval', title: `Selected frames for ${parsed.videoId}`,
-          data: { timingsMs: { ...response.frameTimingsMs, provider: providerMs }, extractionDiagnostics, sessionReused: response.sessionReused === true, videoId: parsed.videoId, requestedTimestampsMs: request.timestampsMs,
+          data: { timingsMs: { ...response.frameTimingsMs, provider: providerMs }, extractionDiagnostics, sessionReused: response.sessionReused === true, videoId: parsed.videoId, requestedTimestampsMs: request.timestampsMs, selections: parsed.selections,
             frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping), failures: frames.failures } }],
         warnings: [
           { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only. Timestamps identify requested seek positions.' },

@@ -189,3 +189,39 @@ test('accepts one grounded finding for every image in a six-frame batch', async 
     focus: 'Describe each frame', signal: new AbortController().signal, modelCallId: 'six-frames' });
   expect(result.findings.flatMap(f => f.timestampsMs)).toEqual(timestamps);
 });
+
+
+describe('recorded frame selection', () => {
+  test('rejects unknown or mismatched locating evidence before provider I/O', async () => {
+    const ctx = context();
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, reason: 'Introduction', evidenceIds: ['invented'] }] }, ctx, 'bad-cue')).toThrow('not delivered');
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 70000, reason: 'Introduction', evidenceIds: [] }] }, ctx, 'bad-time')).toThrow('per requested timestamp');
+    ctx.getEvidence = () => [{ packetId: 'other-video', kind: 'youtube_transcript', sources: [{ id: 'other', provider: 'youtube', kind: 'transcript', videoId: 'xxxxxxxxxxx' }],
+      excerpts: [{ id: 'wrong-video-cue', sourceId: 'other', text: 'Introduction' }], artifacts: [], warnings: [], usage: [] }];
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, reason: 'Introduction', evidenceIds: ['wrong-video-cue'] }] }, ctx, 'wrong-video')).toThrow('not delivered');
+    expect(ctx.provider.frames).not.toHaveBeenCalled();
+  });
+
+  test('preserves a recorded exploratory reason through saved analysis and model projection', async () => {
+    const ctx = context();
+    const packets: any[] = [];
+    ctx.getEvidence = () => packets;
+    attachTestAssetStore(ctx);
+    const retrieval = await executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234,
+      reason: 'Exploratory sample to locate the presenter', evidenceIds: [] }] }, ctx, 'selection');
+    // The fixture's asset store pins frames when the wrapped provider is used.
+    packets.push(retrieval);
+    const analysis = await executeAnalyzeVideoFrames({ assetVersions: retrieval.assetVersions!, focus: 'Read the chart' }, ctx, 'selection-analysis');
+    const projected = evidencePacketForModel(analysis);
+    expect(projected.frameCoverage?.selections).toEqual(retrieval.artifacts[0]!.data.selections);
+    expect(projected.frameCoverage?.requestedTimestampsMs).toEqual([1234]);
+  });
+
+  test('a changed reason does not silently reuse the original explanation', async () => {
+    const ctx = context(); const keys: string[] = [];
+    ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
+    for (const reason of ['Exploratory sample', 'User requested this position']) await executeGetVideoFrames({ ...input,
+      selections: [{ timestampMs: 1234, reason, evidenceIds: [] }] }, ctx, reason);
+    expect(new Set(keys).size).toBe(2);
+  });
+});

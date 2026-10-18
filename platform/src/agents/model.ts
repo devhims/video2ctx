@@ -53,7 +53,7 @@ function configuredAgentModel(
   backup = false,
 ): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
-  const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
+  const isTextRole = ['classifier', 'agent_core', 'transcript_analyst', 'evidence_reviewer'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);

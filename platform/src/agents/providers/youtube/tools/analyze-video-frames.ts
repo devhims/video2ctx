@@ -1,3 +1,4 @@
+import { recordedFrameSelections } from '../../../runtime/frame-selection';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { framesSchema } from '../../../../lib/youtube-frames-contract';
@@ -90,6 +91,7 @@ export function executeAnalyzeVideoFrames(
               focus: parsed.focus,
               sessionReused: true,
               requestedTimestampsMs: frames.frames.map((frame) => frame.timestampMs),
+              selections: recordedFrameSelections(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs)),
               frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping),
               failures: [],
               provenanceVersion: VISUAL_PROVENANCE_VERSION,

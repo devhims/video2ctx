@@ -1958,3 +1958,66 @@ it('sends inline prose guidance and supplied-ID constraints to the finalizer', a
     answer: 'The woman holds the microphone [cite:frame-observation].',
   }));
 });
+
+
+it('repairs invented inspection history before persistence using the same answer retry allowance', async () => {
+  const { options, classifier, identity } = setup('context_answer', true);
+  const saved = { ...evidence, artifacts: [{ type: 'youtube_frame_analysis', data: {
+    requestedTimestampsMs: [55000, 90000, 200000, 400000, 700000, 1000000],
+    frames: [55000, 90000, 200000, 400000, 700000, 1000000].map(timestampMs => ({ timestampMs, mimeType: 'image/jpeg', width: 640, height: 360 })), failures: [],
+  } }] };
+  options.conversationHistory![0]!.evidence = [saved];
+  options.message = 'Why 3:20 instead of 3:30?';
+  const bad = { confidence: 'medium', warnings: [], blocks: [{ text: 'I analyzed 1:10 and read the transcript.', evidenceIds: [] }] };
+  const good = { ...bad, blocks: [{ text: 'The recorded positions were 0:55, 1:30, 3:20, 6:40, 11:40 and 16:40. Selection reasons were not recorded. 3:30 is your suggested alternative.', evidenceIds: [] }] };
+  const outputs = [bad, { issues: [{ blockIndex: 0, reason: '1:10 is not a recorded position and no transcript read is established.' }] }, good, { issues: [] }];
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(outputs.shift()) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  options.finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, [saved], 0));
+  await executeResearchRun(options);
+  expect(options.finalize).toHaveBeenCalledOnce();
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: good.blocks[0]!.text }));
+  expect(finalizer.doGenerateCalls).toHaveLength(4);
+  expect(JSON.stringify(finalizer.doGenerateCalls[2]!.prompt)).toContain('Inspection evidence check');
+  expect(options.modelBudget!.recordUsage).toHaveBeenCalledTimes(5); // classifier, two answers, two reviews
+});
+
+it('never persists an inspection claim rejected by both checks', async () => {
+  const { options, classifier } = setup('context_answer', true);
+  options.conversationHistory![0]!.evidence![0] = { ...evidence, artifacts: [{ type: 'youtube_frame_analysis', data: {
+    requestedTimestampsMs: [30000], frames: [{ timestampMs: 30000, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [],
+  } }] };
+  let n = 0;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(++n % 2
+    ? { confidence: 'medium', warnings: [], blocks: [{ text: 'I inspected 1:10.', evidenceIds: [] }] }
+    : { issues: [{ blockIndex: 0, reason: 'Only 0:30 is supported.' }] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await expect(executeResearchRun(options)).rejects.toThrow();
+  expect(options.finalize).not.toHaveBeenCalled();
+  expect(finalizer.doGenerateCalls).toHaveLength(4);
+});
+
+
+it('checks inspection history even when the classifier chooses the history-only route', async () => {
+  const { options, classifier } = setup('context_answer', true);
+  options.persistedRoute = { route: 'finalize', responseIntent: 'context_answer', contextScope: 'history', reason: 'Discuss earlier selection' };
+  options.conversationHistory![0]!.assistant = 'The presenter wears blue at 0:55.';
+  options.conversationHistory![0]!.evidence![0] = { ...evidence, artifacts: [{ type: 'youtube_frame_analysis', data: {
+    requestedTimestampsMs: [55000, 200000], frames: [55000, 200000].map(timestampMs => ({ timestampMs, mimeType: 'image/jpeg', width: 640, height: 360 })), failures: [],
+  } }] };
+  options.message = 'Why 3:20 instead of 3:30?';
+  const bad = { confidence: 'medium', warnings: [], blocks: [{ text: 'I cited 3:20 earlier because the presenter appeared there.', evidenceIds: [] }] };
+  const good = { ...bad, blocks: [{ text: 'The earlier answer cited 0:55. The records do not explain why 3:20 was sampled. 3:30 is your suggested alternative.', evidenceIds: [] }] };
+  const outputs = [bad, { issues: [{ blockIndex: 0, reason: 'The earlier answer cited 0:55, not 3:20.' }] }, good, { issues: [] }];
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify(outputs.shift()) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(options.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ answer: good.blocks[0]!.text }));
+  const reviewPrompt = JSON.stringify(finalizer.doGenerateCalls[1]!.prompt);
+  expect(reviewPrompt).toContain('200000');
+  expect(reviewPrompt).toContain('The presenter wears blue at 0:55');
+  expect(reviewPrompt).not.toContain(evidence.excerpts[0]!.text); // structural records do not deliver paid observations
+  expect(finalizer.doGenerateCalls).toHaveLength(4);
+});
