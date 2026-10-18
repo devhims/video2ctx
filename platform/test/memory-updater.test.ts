@@ -1,6 +1,7 @@
 import { MockLanguageModelV4 } from 'ai/test';
 import {
   generateMemoryDelta,
+  memoryDeltaSchema,
   MEMORY_UPDATE_COST_RESERVE_MICROS,
   MEMORY_UPDATE_TIMEOUT_MESSAGE,
   memoryUpdaterPrompt,
@@ -235,4 +236,12 @@ it('reports accepted backup memory usage and leaves the canceled primary request
     expect(await pending).toBe(accepted);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
+});
+
+it.each(['context', 'question'] as const)('accepts a quote-only %s upsert with omitted or empty text', kind => {
+  for (const supplied of [{}, { text: '' }]) {
+    const delta = memoryDeltaSchema.parse({ changes: [{ action: 'upsert', kind, topic: 'preference', userQuote: 'I prefer detailed answers', ...supplied }] });
+    const projection = projectMemoryUpdaterInput({ question: 'I prefer detailed answers', answer: 'Understood.', citations: [], memories: [] });
+    expect(validateMemoryDelta(delta, projection)).toEqual({ rejected: 0, changes: [{ action: 'upsert', kind, topic: 'preference', text: 'I prefer detailed answers', evidenceIds: [] }] });
+  }
 });

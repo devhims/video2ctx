@@ -1,9 +1,8 @@
-import { inspectionRecordsForModel, mergeInspectionRecords } from '../runtime/inspection-records';
-import { INSPECTION_RECORD_GUIDANCE, reviewVisualAnswer } from '../runtime/visual-evidence-review';
+import { inspectionRecordsForModel, mergeInspectionRecords, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
-import { independentModelFailoverState, hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
+import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
 import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
@@ -231,7 +230,6 @@ export async function executeResearchRun(options: {
     try {
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.signal, (signal, persist) => runUnifiedFinalizer({
         model: runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'finalizer' }),
-        reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'evidence_reviewer' }, independentModelFailoverState(modelFailover)),
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, historyPage, sessionBrief,
         context: { traceToolCall: options.traceToolCall, runId: options.runId, currentDate: options.currentDate, signal,
@@ -382,7 +380,6 @@ export async function runResearchAgent(options: {
       model_role: 'agent_core',
       },
     ),
-    reviewModel: () => createAgentModel(options.env, options.sessionAffinity, 'low', { ...metadata, model_role: 'evidence_reviewer' }, independentModelFailoverState(modelFailover)),
     finalizationModel: runModel(options.env, options.sessionAffinity, 'low', {
       ...metadata,
       model_role: 'finalizer',
@@ -424,7 +421,6 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
   finalizationModel?: LanguageModel;
-  reviewModel?: () => LanguageModel;
   message: string;
   decision: ExecutableRoute;
   context: AgentToolContext;
@@ -797,7 +793,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const deadlineAt = await startFinalization();
       await withRunDeadline(finalizationHardDeadline(deadlineAt), options.context.signal, (signal, persist) => runUnifiedFinalizer({
         onFailure: code => finalizationFailures.push(code),
-        deadlineAt, sessionBrief, model: options.finalizationModel ?? options.model, reviewModel: options.reviewModel,
+        deadlineAt, sessionBrief, model: options.finalizationModel ?? options.model,
         message: options.message,
         conversationHistory: options.conversationHistory,
         decision: options.decision,
@@ -843,7 +839,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
 }
 
 /** Describing what was read must match what this turn's context actually holds. */
-export const EVIDENCE_DELIVERY_GUIDANCE = 'Each evidence packet\'s delivery.operation is recorded by the application for this turn. Say you inspected, looked at or watched images only for image_analysis evidence. transcript_analysis evidence is an analyst\'s findings, not caption text: never claim you read or reread a full transcript. retrieval evidence was fetched or reused by a tool this turn. saved_read evidence is saved text read this turn; for visual packets it is an earlier analysis, so do not describe it as viewing images now. inherited evidence comes from earlier in the conversation; attribute it there and do not claim to have checked it again. Describe only the comments, frames or entries actually supplied, using collection counts, visualDelivery counts and truncation warnings.';
+export const EVIDENCE_DELIVERY_GUIDANCE = 'Evidence delivery labels describe this turn: image_analysis supplies image findings; transcript_analysis supplies analyst findings rather than a full transcript; retrieval supplies fetched or reused content; saved_read and inherited visual evidence contain earlier analysis. Use these distinctions internally. When the user explicitly asks about the workflow, explain only recorded activity and distinguish earlier evidence from current operations. Otherwise answer with findings, citations and material limitations.';
 
 function transcriptAnalysisKeys(recoveredEvidence: readonly EvidencePacket[]): string[] {
   return recoveredEvidence.flatMap((packet) => {
@@ -879,7 +875,6 @@ async function runUnifiedFinalizer(options: {
   conversationHistory?: ConversationTurn[];
   onDraft?: (draft: AgentDraft) => void;
   model: LanguageModel;
-  reviewModel?: () => LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
   context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'traceToolCall' | 'currentDate' | 'evidenceRunRecords' | 'session'>;
@@ -933,7 +928,6 @@ async function runUnifiedFinalizer(options: {
     applicationDurationNotice: currentDurationNotice() || undefined,
     providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
       ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure) };
-  let inspectionModel: LanguageModel | undefined;
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
   // Recovery can reach an expired main deadline. Use the remaining retry allowance.
   const firstAttempt = Date.now() >= options.deadlineAt ? 1 : 0;
@@ -1124,25 +1118,6 @@ async function runUnifiedFinalizer(options: {
           output.warnings = [];
           replacedFirstMessageAnswer = true;
         }
-      }
-      validationStage = 'inspection_evidence';
-      const review = () => {
-        inspectionModel ??= options.reviewModel?.() ?? options.model;
-        const reviewDeadlineAt = Math.min(attempt === 0 ? options.deadlineAt : finalizationHardDeadline(options.deadlineAt), Date.now() + 20_000);
-        setModelDeadline(inspectionModel, reviewDeadlineAt);
-        setModelAttemptGuard(inspectionModel, () => assertModelCostAvailable(options.modelBudget));
-        return reviewVisualAnswer({ model: inspectionModel, evidence: prepared.evidence, blocks: output.blocks,
-          inspectionRecords, answerContext,
-          question: options.message, signal: options.context.signal, deadlineAt: reviewDeadlineAt,
-          budget: options.modelBudget, callId: `${modelCallId}:inspection-review` });
-      };
-      if (!conversational) {
-        if (options.context.traceToolCall) await options.context.traceToolCall({
-          toolCallId: `inspection-review:${attemptId}`, name: 'visual_evidence_review', operation: 'finalization_review', source: 'execution',
-          input: { attempt: attempt + 1, packetIds: inspectionRecords.items.map(item => item.packetId), blockCount: output.blocks.length },
-          execute: async () => { await review(); return { status: 'passed' }; },
-        });
-        else await review();
       }
       for (const block of output.blocks) {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);

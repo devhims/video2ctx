@@ -59,3 +59,6 @@ export function mergeInspectionRecords(views: readonly InspectionRecords[], reco
   }
   return { scope: 'saved_session_inspection_records', items, omittedRecords };
 }
+
+/** Interpret structural records only when explaining recorded inspection activity. */
+export const INSPECTION_RECORD_GUIDANCE = 'For inspection history, frameCoverage lists requested positions and returned frames, and visualCoverage describes storyboard samples. selections are recorded agent explanations, not visual observations. delivery describes this turn only. inputTimestampsMs are image inputs, while observationTimes only index the findings the analyst reported. Both 3:20 and 3:30 can be analyzed even if only 3:20 appears in a finding. Spread mode selects sheets, not individual tiles within those sheets. Use these records over assistant history or memory. Without recorded selection reasons, say the reasons were not recorded. A missing operation record cannot prove an operation never happened. A user-suggested timestamp is not a captured frame.';

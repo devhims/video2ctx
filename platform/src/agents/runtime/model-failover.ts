@@ -63,14 +63,6 @@ export interface ModelFailoverState {
   beforeAttempt?: () => void;
 }
 
-/** Preserve a known route and diagnostics while isolating a review's deadline and
- * later fallback transitions. Only profiles with a fallback act on this selection;
- * models configured without that fallback retain their own primary profile.
- */
-export function independentModelFailoverState(state: ModelFailoverState): ModelFailoverState {
-  return { fallback: state.fallback, onDiagnostic: state.onDiagnostic, beforeAttempt: state.beforeAttempt };
-}
-
 export class ModelRequestExhaustedError extends Error {
   readonly code: string = 'MODEL_REQUEST_EXHAUSTED';
   constructor(readonly failures: readonly unknown[]) {

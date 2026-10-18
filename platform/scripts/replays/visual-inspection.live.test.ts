@@ -7,9 +7,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { executeResearchRun } from '../../src/agents/research/research-agent';
 import { createAgentModel } from '../../src/agents/model';
 import { generateMemoryDelta } from '../../src/agents/runtime/memory-updater';
-import { reviewVisualAnswer } from '../../src/agents/runtime/visual-evidence-review';
-import { inspectionRecordsForModel } from '../../src/agents/runtime/inspection-records';
-import { evidencePacketForModel } from '../../src/agents/runtime/model-evidence';
 import { extractFrames } from '../../../packages/youtube-skills/src/watch/workflow';
 import { SessionEvidenceStore, versionEvidencePacket } from '../../src/agents/runtime/session-evidence';
 import { metadataForConversation } from '../../src/agents/runtime/conversation-metadata';
@@ -117,9 +114,7 @@ async function run(message: string, session: SessionEvidenceStore, history: any[
     conversationHistory: history, recoveredEvidence: [], recoveredToolFailures: [],
     modelBudget: { limitMicros: 1_000_000, currentCostMicros: () => costMicros,
       recordUsage: entry => { if (entry.pricing) costMicros += estimateModelCostMicros(entry.usage, entry.pricing); } },
-    traceToolCall: async call => { try { return await call.execute(); } catch (error: any) {
-      if (call.name === 'visual_evidence_review') { resultRows.push({ phase: 'answer-review-rejected', issues: error.issues }); save(); }
-      throw error; } },
+    traceToolCall: async call => call.execute(),
     modelCallPrefix: identity.runId, persistRoute: decision => { route = decision; },
     onClassifying: () => {}, onCapabilityLoaded: () => {}, onFinalizing: () => {},
     evidenceRunRecords: () => records,
@@ -180,6 +175,10 @@ describe('local live replay of session 694a77da', () => {
     ]) {
       const next = await run(message, session, history); rows.push(next.row); history.push(next.turn);
     }
+    expect(rows.every(row => row.outcome === 'answered')).toBe(true);
+    expect(rows[0].answer).not.toMatch(/\bI\s+(?:checked|read|reread|analy[sz]ed|inspected|retrieved|fetched|verified|looked|watched)\b/i);
+    expect(rows[0].answer).not.toMatch(/\b(?:transcript|storyboard|tool call|assetVersion|finalizer|provider)\b/i);
+    expect(requests.every(request => request.schema !== 'visual_evidence_review' && request.role !== 'evidence_reviewer')).toBe(true);
     expect(rows[0].answer).toMatch(/blue/i);
     expect(rows[0].answer).toMatch(/pegboard|perforated|white wall/i);
     expect(rows[0].answer).not.toMatch(/a?kriti\s+hande/i);
@@ -190,65 +189,6 @@ describe('local live replay of session 694a77da', () => {
       history.some(turn => turn.user.includes(memory.text)))).toBe(true);
     expect(requests.some(request => request.visualSkill)).toBe(true);
     expect(requests.flatMap(request => request.contexts).some(context => context.fullDescription)).toBe(true);
-  });
-
-  it('rejects the original fabricated timestamp, operation and frame attribution with the live checker', async () => {
-    const packet: any = { packetId: 'original-frame-record', kind: 'youtube_frames', sources: [{ id: 'frames', provider: 'youtube', kind: 'frames', videoId }],
-      excerpts: [{ id: 'frame-640', sourceId: 'frames', startMs: 400000, text: 'A red and white transition, partially covering a boy.' },
-        { id: 'frame-1640', sourceId: 'frames', startMs: 1000000, text: 'A motorcade.' }],
-      artifacts: [{ type: 'youtube_frame_analysis', data: { requestedTimestampsMs: originalFrames.frames.map((frame: any) => frame.timestampMs),
-        frames: originalFrames.frames.map(({ imageBase64, ...frame }: any) => frame), failures: [], provenanceVersion: 1 } }], warnings: [], usage: [] };
-    const model = createAgentModel(production, `checker:${crypto.randomUUID()}`, 'low', { model_role: 'evidence_reviewer' });
-    const check = async (text: string) => reviewVisualAnswer({ model, evidence: [evidencePacketForModel(packet)],
-      blocks: [{ text, evidenceIds: ['frame-640', 'frame-1640'] }], question: 'How did you select the frames?',
-      signal: AbortSignal.timeout(30_000), deadlineAt: Date.now() + 30_000, callId: crypto.randomUUID() });
-    for (const text of ['I inspected 0:55, 1:10, 1:30, 3:20, 6:40 and 16:40.',
-      'I had already read the transcript, which is how I identified Azadeh Moshiri.',
-      'The motorcade is visible at 6:40.', 'I chose 3:20 because the transcript introduces the presenter there.']) {
-      await expect(check(text)).rejects.toThrow(/Inspection evidence check:/);
-      resultRows.push({ phase: 'checker-negative', text, rejected: true }); save();
-    }
-    await expect(check('The recorded positions were 0:55, 1:30, 3:20, 6:40, 11:40 and 16:40. The reason for choosing 3:20 was not recorded. 3:30 would be a possible alternative; the supplied records do not establish a transcript read.')).resolves.toBeUndefined();
-    resultRows.push({ phase: 'checker-positive', accepted: true }); save();
-    // History-only routing still checks an invented claim about what the earlier answer cited.
-    await expect(reviewVisualAnswer({ model, evidence: [], inspectionRecords: inspectionRecordsForModel([packet]),
-      conversationHistory: [{ user: 'What is she wearing?', assistant: 'She wears blue at 0:55.' }],
-      blocks: [{ text: '3:20 was cited in my earlier answer because that was where I observed the presenter.', evidenceIds: [] }],
-      question: 'Why 3:20 instead of 3:30?', signal: AbortSignal.timeout(30_000), deadlineAt: Date.now() + 30_000, callId: crypto.randomUUID(),
-    })).rejects.toThrow(/Inspection evidence check:/);
-    resultRows.push({ phase: 'history-route-negative', rejected: true }); save();
-    const storyboardPacket = { ...packet, packetId: 'board-grid', kind: 'youtube_storyboard', excerpts: [],
-      artifacts: [{ type: 'youtube_storyboard_analysis', data: { sampledRanges: [{ startMs: 0, endMs: 240000 }], totalFrames: 161, sampledFrames: 25, intervalMs: 10000 } }] };
-    const gridCheck = (text: string) => reviewVisualAnswer({ model, evidence: [], inspectionRecords: inspectionRecordsForModel([storyboardPacket]),
-      blocks: [{ text, evidenceIds: [] }], question: 'Why 3:20 instead of 3:30?', signal: AbortSignal.timeout(30_000), deadlineAt: Date.now() + 30_000, callId: crypto.randomUUID() });
-    await expect(gridCheck('The spread algorithm chose 3:20 instead of 3:30, so 3:30 was not analyzed.')).rejects.toThrow(/Inspection evidence check:/);
-    await expect(gridCheck('Both 3:20 and 3:30 were included in the storyboard sheet supplied to the analyst. A finding at 3:20 does not establish a reason to prefer it over 3:30.')).resolves.toBeUndefined();
-    resultRows.push({ phase: 'storyboard-grid-check', inventedExclusionRejected: true, bothInputsAccepted: true }); save();
-  });
-  it('checks absent records and retains transcript support and older history with the live model', async () => {
-    const model = createAgentModel(production, `review-gaps:${crypto.randomUUID()}`, 'low', { model_role: 'evidence_reviewer' });
-    const base = { model, question: 'Explain the earlier inspection.', signal: AbortSignal.timeout(120_000), callId: crypto.randomUUID() };
-    const check = (text: string, extra: Partial<Parameters<typeof reviewVisualAnswer>[0]> = {}) => reviewVisualAnswer({
-      ...base, evidence: [], blocks: [{ text, evidenceIds: [] }], deadlineAt: Date.now() + 20_000, ...extra });
-    await expect(check('I inspected frames at 3:20.')).rejects.toThrow(/Inspection evidence check:/);
-    await expect(check('The available records do not establish whether a frame at 3:20 was inspected. We could inspect 3:30 next.')).resolves.toBeUndefined();
-    resultRows.push({ phase: 'absent-record-check', unsupportedClaimRejected: true, uncertaintyAccepted: true }); save();
-    // Synthetic support packets test reviewer visibility, not the video's actual wording.
-    await expect(check('The transcript analysis reports the speaker introduction around 3:20.', {
-      evidence: [{ packetId: 'analyzed-captions', kind: 'youtube_transcript_analysis',
-        sources: [{ id: 'captions', provider: 'youtube', kind: 'transcript', videoId }], warnings: [],
-        transcriptAnalysis: { summary: 'Introduction', findings: [{ claim: 'The speaker introduces herself around 3:20.',
-          excerptIds: ['ref_2'], entities: [{ name: 'Azadeh Moshiri', source: 'transcript', quote: 'I am Azadeh Moshiri.' }], quantities: [], uncertainty: null }],
-          coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 190000, endMs: 200000 }, selectedExcerptCount: 1 } }],
-      blocks: [{ text: 'The transcript analysis reports the speaker introduction around 3:20.', evidenceIds: ['ref_2'] }],
-    })).resolves.toBeUndefined();
-    await expect(check('My older answer cited 3:20. A later answer discussed 3:30 as an alternative.', {
-      answerContext: { historyPage: { messages: [{ id: 'old-answer', role: 'assistant', text: 'The presenter is wearing blue at 3:20.' }], nextOffset: 20 },
-        researchContext: { reads: [{ tool: 'search_context', input: { label: 'history', query: 'alternative' },
-          result: [{ id: 'searched-answer', role: 'assistant', text: '3:30 would be an alternative to inspect.' }] }], truncated: true, budgetTruncated: true },
-        conversationHistory: [], contextIncomplete: true, missingInputs: [{ reason: 'research_context_cut' }] },
-    })).resolves.toBeUndefined();
-    resultRows.push({ phase: 'prepared-support-check', transcriptFindingAccepted: true, olderHistoryAccepted: true }); save();
   });
 
 });

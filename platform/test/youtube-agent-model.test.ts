@@ -47,25 +47,6 @@ describe('YouTube agent model', () => {
     } finally { fetchMock.mockRestore(); }
   });
 
-  test.each(['glm-5p3-flash', 'deepseek-v4p1-flash', 'gpt-oss-120b'])('preserves reviewer profile %s when the run has selected fallback', async textModel => {
-    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
-      AGENT_TEXT_MODEL: textModel, FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
-    const diagnostics = vi.fn();
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body.model).toBe(`accounts/fireworks/models/${textModel === 'glm-5p3-flash' ? 'deepseek-v4p1-flash' : textModel}`);
-      return chatCompletion(body, { id: 'review', created: 1, model: body.model,
-        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"issues":[]}' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
-    });
-    try {
-      await generateText({ model: createAgentModel(env, 'review-session', 'low', { model_role: 'evidence_reviewer' },
-        { fallback: true, onDiagnostic: diagnostics }), prompt: 'Check the answer.' });
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({ role: 'evidence_reviewer', outcome: 'succeeded' }));
-    } finally { fetchMock.mockRestore(); }
-  });
-
   test('defaults GLM to Fireworks and requires its secret without silently falling back', () => {
     const env = { AI_GATEWAY_ID: '', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     expect(createAgentModel(env, 'session', 'low', { model_role: 'classifier' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
@@ -73,7 +54,7 @@ describe('YouTube agent model', () => {
     expect(() => createAgentModel({ ...env, FIREWORKS_API_KEY: undefined } as unknown as Env, 'session')).toThrow(/secret/);
   });
 
-  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'evidence_reviewer'])('routes %s to Fireworks GLM with native low reasoning and the unchanged research ceiling', async role => {
+  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes %s to Fireworks GLM with native low reasoning and the unchanged research ceiling', async role => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_FINALIZER_PROVIDER: 'fireworks',
       AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
@@ -102,7 +83,7 @@ describe('YouTube agent model', () => {
     } finally { fetchMock.mockRestore(); }
   });
 
-  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst', 'evidence_reviewer'])('routes production %s to its text or visual model', async role => {
+  test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes production %s to its text or visual model', async role => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
       AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     const visual = role === 'visual_analyst';
