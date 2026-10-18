@@ -2,10 +2,9 @@ import { z } from 'zod';
 import type { TranscriptValidationIssue } from './transcript-diagnostics';
 import type { EvidencePacket } from '../contracts';
 import { sourceNumbers } from './source-numbers';
+import { videoSourceContextSchema, videoSourceContext } from './video-source-context';
 
-export const transcriptSourceContextSchema = z.object({
-  title: z.string().max(500).optional(),
-  channel: z.string().max(300).optional(),
+export const transcriptSourceContextSchema = videoSourceContextSchema.extend({
   language: z.string().max(100).optional(),
   provenance: z.string().max(100).optional(),
   translatedTo: z.string().max(100).optional(),
@@ -15,7 +14,7 @@ export const transcriptFactsSchema = z.object({
   entities: z.array(z.object({
     name: z.string().min(1).max(120).describe('Optional name useful for disambiguating the finding. Use a supported spelling and state uncertainty when needed.'),
     quote: z.string().min(1).max(500).describe('Source wording or context that helps identify the name.'),
-    source: z.enum(['transcript', 'title', 'channel']),
+    source: z.enum(['transcript', 'title', 'description', 'channel']),
   })).max(3).default([]),
   quantities: z.array(z.object({
     metric: z.string().min(1).max(80),
@@ -35,7 +34,7 @@ export class TranscriptGroundingError extends Error {
 
 export const TRANSCRIPT_GROUNDING_GUIDANCE = [
   'Captions can contain grammatical errors, misspelled names, and incorrect or fragmented numbers and units, even when manually supplied. Translation can add errors.',
-  'Use sourceContext.title and channel to disambiguate names for THIS video only. Normalize a name only when supported by that metadata or an unambiguous transcript spelling; otherwise preserve the original spelling and state uncertainty. Never borrow a product identity from another video.',
+  'Use sourceContext.title, description and channel to disambiguate names for THIS video only. Normalize a name only when supported by that metadata or an unambiguous transcript spelling; otherwise preserve the original spelling and state uncertainty. Never borrow a product identity from another video.',
   'Entities are optional advisory context. Include names only when useful for disambiguation. Findings and final answers may paraphrase or translate the source; do not force literal name matching. Keep uncertain identities explicit. Numerical support quotes must still be copied from selected transcript windows.',
   'For numerical findings return quantities: metric, value, unit, basis, kind (claimed, measured or reported), and an exact transcript quote containing the value and unit. Use % for percentages and g for grams. Basis is an exact source phrase, not a translation or inference; use null if absent. Use null for an unclear unit and explain uncertainty. Do not reconstruct fragmented decimals or infer omitted units.',
   'For explicit counts use the counted object as the unit, such as microphones or voice samples. Spelled-out counts and explicit scales are supported: two microphones means value=2, and 500 million voice samples means value=500000000. Keep the original quote. Time-unit aliases such as h/hours and min/minutes are equivalent notation; never convert hours into minutes or infer Fahrenheit from degrees alone.',
@@ -117,15 +116,7 @@ export function assertTranscriptFacts(finding: TranscriptFacts & { claim: string
 
 /** Reads only metadata already obtained for this particular video. */
 export function transcriptSourceContext(videoId: string, packets: readonly EvidencePacket[]): TranscriptSourceContext {
-  let title: string | undefined;
-  let channel: string | undefined;
-  for (const packet of packets) {
-    const source = packet.sources.find(item => item.videoId === videoId && item.title);
-    if (!source) continue;
-    title ??= source.title?.slice(0, 500);
-    channel ??= packet.excerpts.find(item => item.sourceId === source.id)?.text.match(/(?:^|\n)Channel: ([^\n]+)/u)?.[1]?.slice(0, 300);
-  }
-  return { ...(title ? { title } : {}), ...(channel ? { channel } : {}) };
+  return videoSourceContext(videoId, packets);
 }
 
 export interface UnverifiedFigure {

@@ -484,6 +484,24 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
     return finalizationDeadlineAt;
   };
+  const metadataLoads = new Map<string, Promise<ReturnType<typeof transcriptSourceContext>>>();
+  const analysisSourceContext = (videoId: string, signal: AbortSignal) => {
+    const existing = transcriptSourceContext(videoId, [...evidence.values()]);
+    if (existing.description !== undefined) return Promise.resolve(existing);
+    let pending = metadataLoads.get(videoId);
+    if (!pending) {
+      pending = (async () => {
+        // Use the normal evidence path so metadata is captured, metered and citable.
+        // Concurrent analysts for one video share this lookup. A metadata failure
+        // remains in toolFailures but must not discard usable images or captions.
+        try { await executeGetVideo({ videoId }, { ...trackedContext, signal }, `analysis-metadata:${videoId}`); }
+        catch { signal.throwIfAborted(); }
+        return transcriptSourceContext(videoId, [...evidence.values()]);
+      })();
+      metadataLoads.set(videoId, pending);
+    }
+    return pending;
+  };
   const trackedContext: AgentToolContext = {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
@@ -539,24 +557,26 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       ? { ...options.context.transcriptPolicy, budget: transcriptBudget,
         analyze: (input) => {
           const queuedAt = Date.now();
-          return analystLimiter.run(() => {
+          return analystLimiter.run(async () => {
             console.log(JSON.stringify({ event: 'agent_analyst_admitted', runId: options.context.runId,
               videoId: input.videoId, modelCallId: input.modelCallId, queueMs: Date.now() - queuedAt,
               remainingResearchMs: Math.max(0, options.researchDeadlineAt - Date.now()) }));
             input.signal.throwIfAborted();
             if (options.context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Transcript analyst unavailable');
-            return options.context.transcriptPolicy.analyze({ ...input, conversationHistory: options.conversationHistory, sourceContext: { ...input.sourceContext, ...transcriptSourceContext(input.videoId, [...evidence.values()]) } });
+            return options.context.transcriptPolicy.analyze({ ...input, conversationHistory: options.conversationHistory, sourceContext: { ...input.sourceContext, ...await analysisSourceContext(input.videoId, input.signal) } });
           });
         },
       }
       : options.context.transcriptPolicy,
-    analyzeFrames: options.context.analyzeFrames ? (input) => analystLimiter.run(() => {
+    analyzeFrames: options.context.analyzeFrames ? (input) => analystLimiter.run(async () => {
       input.signal.throwIfAborted();
-      return options.context.analyzeFrames!({ ...input, conversationHistory: options.conversationHistory });
+      return options.context.analyzeFrames!({ ...input, conversationHistory: options.conversationHistory,
+        researchQuestion: options.message, sourceContext: await analysisSourceContext(input.frames.videoId, input.signal) });
     }) : undefined,
-    analyzeStoryboard: options.context.analyzeStoryboard ? (input) => analystLimiter.run(() => {
+    analyzeStoryboard: options.context.analyzeStoryboard ? (input) => analystLimiter.run(async () => {
       input.signal.throwIfAborted();
-      return options.context.analyzeStoryboard!({ ...input, conversationHistory: options.conversationHistory });
+      return options.context.analyzeStoryboard!({ ...input, conversationHistory: options.conversationHistory,
+        researchQuestion: options.message, sourceContext: await analysisSourceContext(input.storyboard.videoId, input.signal) });
     }) : undefined,
     executeEvidenceTool: async (execution) => {
       if (['get_video_transcript', 'analyze_video_transcript'].includes(execution.toolName)) transcriptRequested = true;

@@ -1,6 +1,7 @@
 import type { AgentVideo } from '../provider';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { descriptionExcerpts } from '../../../runtime/video-source-context';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
 import {
@@ -101,15 +102,15 @@ function singleVideoPacket(video: AgentVideo, toolCallId: string): Omit<Evidence
         video.durationText ? `Duration: ${video.durationText}` : undefined,
         `Availability: ${video.availability.status}`,
         `Caption availability: ${captionAvailability.status}. Languages: ${captionAvailability.languages.join(', ') || 'none observed'}. Checked at: ${captionAvailability.checkedAt ?? 'not checked'}.`,
-        video.description,
         video.keywords.length ? `Keywords: ${video.keywords.slice(0, 20).join(', ')}` : undefined,
       ].filter(Boolean).join('\n')),
-    }],
+    }, ...descriptionExcerpts(video.description ?? '', sourceId, `video:${safeIdPart(video.id)}:${safeIdPart(toolCallId)}`)],
     artifacts: [{
       type: 'youtube_video_metadata',
       title: video.title,
       data: {
         id: video.id,
+        description: video.description,
         channel: video.channel,
         durationSeconds: video.durationSeconds,
         viewCount: video.signals?.viewCount ?? video.viewCount,

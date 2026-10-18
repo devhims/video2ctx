@@ -26,7 +26,7 @@ export const analyzeVideoTranscriptsInputSchema = z.object({
 export function createAnalyzeVideoTranscriptsTool(context: AgentToolContext) {
   return tool({
     description:
-      'Analyze complete transcripts already saved in this session. Submit selected transcript assetVersions in one batch and a focused evidence question. Never retrieves transcripts or calls YouTube. Retrieve missing transcripts first using get_video_transcript. Independent analyses are bounded by the research target; failures do not discard successful evidence.',
+      'Analyze complete transcripts already saved in this session. Submit selected transcript assetVersions in one batch and a focused evidence question. Never retrieves transcripts. The runtime may load missing video metadata through get_video. Retrieve missing transcripts first using get_video_transcript. Independent analyses are bounded by the research target; failures do not discard successful evidence.',
     inputSchema: analyzeVideoTranscriptsInputSchema,
     execute: async ({ assetVersions, focus }, { toolCallId }) => {
       const outcomes = await Promise.allSettled(

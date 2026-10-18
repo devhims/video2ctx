@@ -12,7 +12,7 @@ export const analyzeVideoFramesInputSchema = storedVisualInputSchema.extend({
 export function createAnalyzeVideoFramesTool(context: AgentToolContext) {
   return tool({
     description:
-      'Analyze saved frame assetVersions with a focused visual question. Reads the original images from this session only; never extracts frames or calls YouTube. Reuse these versions for follow-up questions. Returns timestamped observations with evidence IDs. Missing or deleted assets require explicit retrieval.',
+      'Analyze saved frame assetVersions with a focused visual question. Reads the original images from this session only; never extracts frames again. The runtime may load missing video metadata through get_video. Reuse these versions for follow-up questions. Returns timestamped observations with evidence IDs. Missing or deleted assets require explicit retrieval.',
     inputSchema: analyzeVideoFramesInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeAnalyzeVideoFrames(input, context, toolCallId),

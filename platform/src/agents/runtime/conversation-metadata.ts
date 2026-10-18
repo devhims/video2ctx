@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import { isVideoMetadataBotChallenge } from '../../lib/youtube-metadata';
 import { evidencePacketSchema, type EvidencePacket } from '../contracts';
+import { descriptionExcerpts } from './video-source-context';
 
-export const MAX_MEMORY_METADATA_CHARACTERS = 8_000;
+// Retain full publisher descriptions, while bounding the combined historical snapshots.
+export const MAX_MEMORY_METADATA_CHARACTERS = 48_000;
 const MAX_MEMORY_VIDEOS = 8;
 const text = (maximum: number) => z.string().transform(value => value.slice(0, maximum));
 const metadataSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  description: z.string().max(20_000).optional(),
   channel: z.object({ id: text(200), name: text(200) }).optional(),
   viewCount: z.number().int().nonnegative().optional(),
   durationSeconds: z.number().nonnegative().optional(),
@@ -53,7 +56,7 @@ export function metadataForConversation(records: readonly { packet: EvidencePack
         data.captionAvailability ? `Historical caption availability: ${data.captionAvailability.status}; checked at ${data.captionAvailability.checkedAt ?? 'unknown'}. Refresh before treating absence as current.` : undefined,
         data.hasCaptions !== undefined ? `Captions available: ${data.hasCaptions}` : undefined,
         data.keywords?.length ? `Keywords: ${data.keywords.join(', ')}` : undefined,
-      ].filter(Boolean).join('\n').slice(0, 2_000) }],
+      ].filter(Boolean).join('\n').slice(0, 2_000) }, ...descriptionExcerpts(data.description ?? '', source.id, memoryId)],
       artifacts: [{ type: 'youtube_video_metadata', title, data: {
         ...data, ...(data.freshness ? { freshness: { state: 'stale', fetchedAt: data.freshness.fetchedAt } } : {}),
         recordedAt, historical: true,

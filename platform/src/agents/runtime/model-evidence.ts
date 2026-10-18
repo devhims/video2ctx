@@ -161,9 +161,11 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
   const frameCoverage = packet.kind === 'youtube_frames'
     ? frameCoverageSchema.safeParse(packet.artifacts.find(artifact => ['youtube_frame_analysis','youtube_frame_retrieval'].includes(artifact.type))?.data)
     : undefined;
-  const excerpts = ordered.slice(0, MODEL_EXCERPTS_PER_PACKET).map((excerpt) => ({
+  const fullMetadata = packet.kind === 'youtube_video' && packet.artifacts.some(artifact =>
+    artifact.type === 'youtube_video_metadata' && typeof artifact.data.description === 'string');
+  const excerpts = (fullMetadata ? ordered : ordered.slice(0, MODEL_EXCERPTS_PER_PACKET)).map((excerpt) => ({
     ...excerpt,
-    text: boundedText(excerpt.text, packet.kind === 'youtube_transcript' ? MODEL_TRANSCRIPT_EXCERPT_CHARACTERS : MODEL_EXCERPT_CHARACTERS),
+    text: fullMetadata ? excerpt.text : boundedText(excerpt.text, packet.kind === 'youtube_transcript' ? MODEL_TRANSCRIPT_EXCERPT_CHARACTERS : MODEL_EXCERPT_CHARACTERS),
   }));
   const sourceIds = new Set(excerpts.map((excerpt) => excerpt.sourceId));
   const sources = packet.sources.filter((source) => sourceIds.has(source.id));

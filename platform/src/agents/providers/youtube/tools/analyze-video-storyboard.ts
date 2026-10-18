@@ -11,7 +11,7 @@ import { safeIdPart, youtubeVideoUrl } from './provider-evidence';
 export function createAnalyzeVideoStoryboardTool(context: AgentToolContext) {
   return tool({
     description:
-      'Analyze saved storyboard_sheet assetVersions for a visual question. Use analysisAssetVersions from retrieval or sheet versions from session inventory, not the manifest version. Reads saved images only, with no YouTube call. Observations cover sampled previews, not the complete video.',
+      'Analyze saved storyboard_sheet assetVersions for a visual question. Use analysisAssetVersions from retrieval or sheet versions from session inventory, not the manifest version. Reuses saved images; the runtime may load missing video metadata through get_video. Observations cover sampled previews, not the complete video.',
     inputSchema: storedVisualInputSchema,
     outputSchema: evidencePacketSchema,
     execute: (input, { toolCallId }) => executeAnalyzeVideoStoryboard(input, context, toolCallId),
