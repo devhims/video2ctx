@@ -1911,3 +1911,52 @@ test('account deletion initializes a never-started registered conversation', asy
   const runtime = env.AGENT_RUNTIME.getByName('agent-delete-never-started-runtime');
   await expect(runtime.deleteAccountData()).resolves.toBeUndefined();
 });
+
+
+test.each([false, true])('automatic metadata leaves four provider slots for later transcripts when metadata fails=%s', async metadataFails => {
+  const { runtime, runId } = await seed(`metadata-reservation-${metadataFails}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+    };
+    const retrieve = (index: number) => writer.executeEvidenceTool(runId, {
+      toolCallId: `transcript-${index}`, toolName: 'get_video_transcript', operation: 'transcript',
+      semanticKey: `transcript:${index}`, input: {}, execute: async () => ({
+        packetId: `transcript:${runId}:${index}`, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [],
+        usage: [{ operation: 'transcript', cacheStatus: 'hit', credits: 1 }],
+      }),
+    });
+    // The seed's provider row stands for the preceding search. Four captions are ready.
+    for (let index = 0; index < 4; index++) await retrieve(index);
+    const load = vi.fn(async () => {
+      if (metadataFails) throw new Error('Metadata unavailable');
+    });
+    const metadata = (index: number) => writer.executeEvidenceTool(runId, {
+      toolCallId: `metadata-${index}`, toolName: 'get_video', operation: 'video',
+      semanticKey: `metadata:${index}`, input: {}, reserveProviderCalls: 4, execute: async () => {
+        await load();
+        return { packetId: `metadata:${runId}:${index}`, kind: 'youtube_video', sources: [], excerpts: [], artifacts: [], warnings: [],
+          usage: [{ operation: 'video', cacheStatus: 'hit', credits: 1 }] };
+      },
+    });
+    // Concurrent admission must preserve the reservation before provider work yields.
+    const results = await Promise.allSettled([metadata(0), metadata(1), metadata(2)]);
+    expect(results[2]).toMatchObject({ status: 'rejected', reason: { code: 'AGENT_TOOL_BUDGET_EXCEEDED' } });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(instance.sql`SELECT status FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='get_video' AND tool_call_id LIKE 'metadata-%'`)
+      .toEqual([{ status: metadataFails ? 'failed' : 'completed' }, { status: metadataFails ? 'failed' : 'completed' }]);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId}`).toHaveLength(7);
+    // Mandatory retrieval uses the reserved capacity, including after metadata failures.
+    for (let index = 4; index < 8; index++) await retrieve(index);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='get_video_transcript' AND status='completed'`).toHaveLength(8);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId}`).toHaveLength(11);
+    await expect(retrieve(8)).rejects.toMatchObject({ code: 'AGENT_TOOL_BUDGET_EXCEEDED' });
+    expect(instance.sql<{ credits: number }>`SELECT SUM(credits) AS credits FROM agent_tool_calls WHERE run_id=${runId}`[0]!.credits)
+      .toBe(metadataFails ? 9 : 11);
+    if (!metadataFails) {
+      // Reusing already completed metadata needs no new provider slot or charge.
+      await expect(metadata(0)).resolves.toMatchObject({ kind: 'youtube_video' });
+      expect(load).toHaveBeenCalledTimes(2);
+    }
+  });
+});

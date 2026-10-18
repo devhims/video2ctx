@@ -20,6 +20,9 @@ export interface EvidenceToolExecution {
   semanticKey: string;
   operation: EvidenceOperation;
   input: unknown;
+  /** Supplemental lookups leave this many provider slots for required retrieval.
+   * Trusted runtime policy only, never a model-supplied tool argument. */
+  reserveProviderCalls?: number;
   execute: () => Promise<EvidencePacket>;
 }
 

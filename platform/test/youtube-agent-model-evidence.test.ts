@@ -64,6 +64,35 @@ describe('agent model evidence', () => {
     expect(JSON.stringify(packet)).toBe(before);
   });
 
+  it.each([5_000, 20_000])('keeps all eight analyses and their citations when descriptions have %s characters', descriptionLength => {
+    const packets = Array.from({ length: 8 }, (_, index) => {
+      const packet = transcriptPacket();
+      packet.packetId = `analysis:${index}`;
+      packet.sources[0]!.videoId = `video00000${index}`;
+      packet.excerpts[0]!.id = `excerpt:${index}`;
+      packet.artifacts[0]!.data.sourceContext = { title: `Video ${index}`, channel: 'BBC News',
+        language: 'en', provenance: 'asr', description: 'x'.repeat(descriptionLength) };
+      packet.artifacts[0]!.data.findings = [{ claim: 'Azadeh Moshiri is the correspondent.',
+        excerptIds: [`excerpt:${index}`], entities: [{ name: 'Azadeh Moshiri',
+          source: 'description', quote: 'The BBC correspondent, Azadeh Moshiri.' }], quantities: [], uncertainty: null }];
+      return packet;
+    });
+    const before = JSON.stringify(packets);
+    const result = finalizationEvidenceForModel(packets, 40_000);
+    expect(result.evidence).toHaveLength(8);
+    expect(result.complete).toBe(true);
+    expect(result.missingInputs).toEqual([]);
+    expect(JSON.stringify(result.evidence).length).toBeLessThanOrEqual(40_000);
+    for (const [index, packet] of result.evidence.entries()) {
+      expect(packet.transcriptAnalysis!.sourceContext).toEqual({ title: `Video ${index}`, channel: 'BBC News', language: 'en', provenance: 'asr' });
+      expect(packet.transcriptAnalysis!.findings[0]!.entities[0]!.name).toBe('Azadeh Moshiri');
+      const citation = packet.transcriptAnalysis!.findings[0]!.excerptIds[0]!;
+      expect(result.fullIds.get(citation)).toBe(`excerpt:${index}`);
+    }
+    // Full publisher context stays in saved evidence for future analyst calls.
+    expect(JSON.stringify(packets)).toBe(before);
+  });
+
   it('bounds the combined finalizer payload instead of forwarding every packet in full', () => {
     const packets = Array.from({ length: 20 }, (_, index) => ({
       ...transcriptPacket(),

@@ -494,7 +494,16 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         // Use the normal evidence path so metadata is captured, metered and citable.
         // Concurrent analysts for one video share this lookup. A metadata failure
         // remains in toolFailures but must not discard usable images or captions.
-        try { await executeGetVideo({ videoId }, { ...trackedContext, signal }, `analysis-metadata:${videoId}`); }
+        const transcriptVideos = new Set([...evidence.values()].filter(packet =>
+          packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
+          && packet.artifacts.some(artifact => ['youtube_complete_transcript', 'youtube_transcript_analysis'].includes(artifact.type)),
+        ).flatMap(packet => packet.sources.flatMap(source => source.videoId
+          && (!options.decision.comparisonVideoIds?.length || options.decision.comparisonVideoIds.includes(source.videoId)) ? [source.videoId] : [])));
+        const reserveProviderCalls = options.decision.route === 'topic_research'
+          ? Math.max(0, researchVideoTarget(options.decision) - transcriptVideos.size) : 0;
+        try { await executeGetVideo({ videoId }, { ...trackedContext, signal,
+          executeEvidenceTool: execution => trackedContext.executeEvidenceTool({ ...execution, reserveProviderCalls }),
+        }, `analysis-metadata:${videoId}`); }
         catch { signal.throwIfAborted(); }
         return transcriptSourceContext(videoId, [...evidence.values()]);
       })();

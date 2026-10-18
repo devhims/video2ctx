@@ -54,6 +54,11 @@ const transcriptAnalysisDataSchema = z.object({
   selectedExcerptCount: z.number().int().nonnegative(),
 });
 
+// Analysts receive the full description. Their supported entities and quotes
+// carry its relevant facts forward; the citable metadata packet retains the text.
+// Repeating it in every analysis can displace completed findings under a budget.
+const modelTranscriptSourceContextSchema = transcriptSourceContextSchema.omit({ description: true });
+
 export const modelEvidencePacketSchema = z.object({
   packetId: z.string().min(1).max(300),
   kind: z.string().min(1).max(100),
@@ -61,7 +66,7 @@ export const modelEvidencePacketSchema = z.object({
   sources: z.array(evidenceSourceSchema).max(24),
   transcriptAnalysis: z.object({
     groundingVersion: z.literal(1).optional(),
-    sourceContext: transcriptSourceContextSchema.optional(),
+    sourceContext: modelTranscriptSourceContextSchema.optional(),
     summary: z.string().trim().min(1).max(MODEL_ANALYSIS_SUMMARY_CHARACTERS),
     findings: z.array(transcriptFactsSchema.extend({
       claim: z.string().trim().min(1).max(MODEL_ANALYSIS_FINDING_CHARACTERS),
@@ -137,7 +142,8 @@ export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePac
       assetVersions: packet.assetVersions,
       transcriptAnalysis: {
         groundingVersion: transcriptAnalysis.groundingVersion,
-        sourceContext: transcriptAnalysis.sourceContext,
+        sourceContext: transcriptAnalysis.sourceContext
+          ? modelTranscriptSourceContextSchema.parse(transcriptAnalysis.sourceContext) : undefined,
         summary: boundedText(transcriptAnalysis.summary, MODEL_ANALYSIS_SUMMARY_CHARACTERS),
         findings: transcriptAnalysis.findings.slice(0, MODEL_ANALYSIS_FINDINGS).map((finding) => ({
           ...finding,
