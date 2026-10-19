@@ -6,6 +6,8 @@ import { isVideoMetadataBotChallenge } from './youtube-metadata';
 import { storyboardMetadata, storyboardSchema } from '../agents/providers/youtube/storyboard';
 import { videoCatalog, VideoCatalogWriteError, type VideoAssetReference } from './video-catalog';
 import { saveSourceResponse } from './source-response-storage';
+import { startTranscriptIndexBuild } from './video-index/build';
+import { transcriptVersionFromReference } from './video-index/storage';
 import { isVisualSelection, readFrameSelection, readStoryboardSelection, type VisualLookup, loadVideoResource, readVideoResource, reusableVideoResource, saveVideoResource, resourceComplete, videoResourceKey, type VideoResourceOperation } from './video-resources';
 
 export type CacheStatus = 'hit' | 'miss' | 'coalesced' | 'stale';
@@ -211,6 +213,11 @@ export class YouTubeCacheCoordinatorCore {
         // The visual loader saves just the fresh misses, preserving hit timestamps.
         if (request.operation.kind !== 'frames' && (request.operation.kind !== 'storyboard' || request.operation.metadataOnly))
           entry.catalogVersions = await saveVideoResource(this.env,request.operation,value,timestamp,request.maxAgeMs);
+        // A newly published transcript version gets its shared retrieval index in the background.
+        // Only the agent reads indexes, and it always requests word-level transcripts.
+        const transcript = request.operation.kind === 'transcript' && request.operation.granularity === 'word' && complete
+          ? transcriptVersionFromReference(entry.catalogVersions?.find(reference => reference.kind === 'transcript')) : undefined;
+        if (transcript) await startTranscriptIndexBuild(this.env, transcript, 'publish');
         return withDiagnostics(successFromEntry(entry,'miss'));
       }
       // Await the best-effort copy so history can read it before KV catches up.

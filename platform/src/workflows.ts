@@ -4,6 +4,9 @@ import { indexPrivateDocument, indexPublicDocument } from './lib/search';
 import { now } from './lib/http';
 import { getProvider } from './providers';
 import { checkMonitor, type MonitorRow } from './lib/monitor-check';
+import { buildChapterIndex, buildPassageIndex, type TranscriptIndexBuildParams } from './lib/video-index/build';
+import { createAgentModel } from './agents/model';
+import { agentMaxVideoSeconds } from './agents/runtime/video-duration-limit';
 
 export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportPayload> {
   async run(event: WorkflowEvent<ImportPayload>, step: WorkflowStep): Promise<void> {
@@ -167,6 +170,31 @@ export class MonitorWorkflow extends WorkflowEntrypoint<Env, MonitorPayload> {
       await step.do(`check-${String(monitor.id)}`, async () => {
         await checkMonitor(this.env, monitor.id, monitor.user_id);
       });
+    }
+  }
+}
+
+/**
+ * Builds the shared retrieval index for one transcript version, outside any agent run. Step 1
+ * is saved before step 2 starts, so passage search is available even if chapters fail. Each
+ * step retries on its own; both skip work already saved.
+ */
+export class TranscriptIndexWorkflow extends WorkflowEntrypoint<Env, TranscriptIndexBuildParams> {
+  async run(event: WorkflowEvent<TranscriptIndexBuildParams>, step: WorkflowStep): Promise<void> {
+    const input = { ...event.payload, maxVideoSeconds: agentMaxVideoSeconds(this.env) };
+    try {
+      const passages = await step.do('passages-and-embeddings',
+        { retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '2 minutes' },
+        () => buildPassageIndex(this.env, input));
+      if (passages.status === 'skipped') return;
+      await step.do('chapters',
+        { retries: { limit: 3, delay: '10 seconds', backoff: 'exponential' }, timeout: '3 minutes' },
+        () => buildChapterIndex(this.env, { ...input,
+          model: createAgentModel(this.env, `transcript-index:${input.videoId}`, 'low', { model_role: 'chapter_builder' }) }));
+    } catch (error) {
+      console.warn(JSON.stringify({ event: 'transcript_index_failed', videoId: input.videoId, transcriptHash: input.contentHash,
+        source: input.source, errorName: error instanceof Error ? error.name : 'UnknownError' }));
+      throw error;
     }
   }
 }

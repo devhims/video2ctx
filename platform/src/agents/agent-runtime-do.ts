@@ -689,6 +689,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         },
         onExtractionDiagnostic: event => this.recordExtractionDiagnostic(runId, event),
         onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
+        // Selection metadata only: modes, indexes, counts and timings, never transcript text.
+        onTranscriptRetrievalEvent: (type, payload) => this.recordEvent(runId, type, payload),
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
           this.persistRoute(runId, selected);

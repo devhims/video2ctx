@@ -45,6 +45,8 @@ const ROLE_LIMITS: Record<string, ModelRoleLimits> = {
   classifier: { firstContentMs: 5_000, totalMs: 5_000 },
   // Memory has an outer 20-second deadline for all attempts.
   memory_updater: { firstContentMs: 8_000, totalMs: 8_000 },
+  // Index-time chapter list: about 760 output tokens, normally about 10 seconds.
+  chapter_builder: { firstContentMs: 10_000, totalMs: 25_000 },
 };
 
 /**

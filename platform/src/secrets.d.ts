@@ -15,5 +15,7 @@ interface Env {
   OUTBOUND_PROXY_URL?: string;
   OUTBOUND_PROXY_URLS?: string;
   FIREWORKS_API_KEY?: string;
+  /** Only for AGENT_TRANSCRIPT_ROUTER=jev. */
+  JEV_API_KEY?: string;
   OAUTH_PROXY_SECRET: string;
 }

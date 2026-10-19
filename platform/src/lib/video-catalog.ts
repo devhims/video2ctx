@@ -101,6 +101,16 @@ export class VideoCatalog {
     return this.readRow<T>(row, verifyImages);
   }
 
+  /** The current version's identity from D1 alone, without reading its payload. */
+  async currentReference(key: VideoAssetKey): Promise<VideoAssetReference | null> {
+    countVisualWork('catalogD1Statements');
+    const row = await visualSpan('catalog_d1', () => this.db
+      .prepare('SELECT content_hash FROM video_assets WHERE video_id=? AND kind=? AND variant=? AND complete=1')
+      .bind(key.videoId, key.kind, key.variant)
+      .first<{ content_hash: string }>());
+    return row ? { ...key, contentHash: row.content_hash } : null;
+  }
+
   async readVersion<T>(reference: VideoAssetReference, verifyImages = false): Promise<StoredVideoAsset<T> | null> {
     countVisualWork('catalogD1Statements');
     const row = await visualSpan('catalog_d1', () => this.db

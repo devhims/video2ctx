@@ -17,6 +17,8 @@ export type AgentModelUsageCategory =
   | 'visual_analyst'
   | 'timeout_finalizer'
   | 'citation_repair'
+  /** Question-time chapter-by-chapter extraction for whole-video transcript questions. */
+  | 'chapter_extraction'
   /** Post-answer memory updater. Recorded after completion and settled as separate telemetry. */
   | 'memory_update';
 

@@ -1,0 +1,1483 @@
+{
+ "version": 1,
+ "sources": {
+  "test4": {
+   "file": "video-index/experiments/devday-qa/test4.json",
+   "version": "test4-devday-v3",
+   "sha256": "4d2a5ad33b0f63aa0cc8baa82f1eb614827cf9128c7f512a13cdd3826ecd260b",
+   "reviewed": "experiments/devday-qa/qa-draft.md (v2), reviewed by Himanshu, who watched the full keynote",
+   "rules": {
+    "factCounts": "A fact counts only if all its parts are stated. Optional facts are recorded but not scored.",
+    "wrongClaim": "An answer that states anything in mustNotClaim, or anything else contradicted by the video, is marked as containing a wrong claim.",
+    "evidence": "evidence lists inclusive caption ID ranges in data/transcripts/Fls_onRviPM.json where the fact is said; used for automatic location checks.",
+    "q10Names": "Q10 items with nameInCaptions=true must name the product to count. Items with nameInCaptions=false count if the answer covers the item; name accuracy is recorded separately, because the answer model only sees captions.",
+    "checkOnVideo": "Facts that depend on garbled captions or on-screen events; unresolved at freeze time."
+   }
+  },
+  "react": {
+   "file": "video-index/experiments/build-reasoning/benchmark.json",
+   "note": "React questions only (videoId SqcY0GlETPk)"
+  },
+  "summary": {
+   "file": "video-index/experiments/summaries/run.mts",
+   "note": "The two whole-video summary questions"
+  }
+ },
+ "notes": "Caption IDs in evidence refer to the video-index transcripts in data/transcripts. timeRanges are the same spans in milliseconds, used when the platform transcript numbers captions differently. Transcripts are not stored here.",
+ "videos": {
+  "Fls_onRviPM": {
+   "title": "OpenAI DevDay 2026 Keynote (FULL)",
+   "captions": 1238,
+   "durationMs": 3202655
+  },
+  "SqcY0GlETPk": {
+   "title": "React Tutorial for Beginners",
+   "captions": 2151,
+   "durationMs": 4798800,
+   "creatorChapters": [
+    {
+     "title": "Course Intro",
+     "startMs": 0
+    },
+    {
+     "title": "Prerequisites",
+     "startMs": 115000
+    },
+    {
+     "title": "What is React?",
+     "startMs": 163000
+    },
+    {
+     "title": "Setting Up the Development Environment",
+     "startMs": 297000
+    },
+    {
+     "title": "Creating a React App",
+     "startMs": 384000
+    },
+    {
+     "title": "Project Structure",
+     "startMs": 557000
+    },
+    {
+     "title": "Creating a React Component",
+     "startMs": 680000
+    },
+    {
+     "title": "How React Works",
+     "startMs": 1001000
+    },
+    {
+     "title": "React Ecosystem",
+     "startMs": 1140000
+    },
+    {
+     "title": "Building Components",
+     "startMs": 1264000
+    },
+    {
+     "title": "Creating a ListGroup Component",
+     "startMs": 1300000
+    },
+    {
+     "title": "Fragments",
+     "startMs": 1635000
+    },
+    {
+     "title": "Rendering Lists",
+     "startMs": 1782000
+    },
+    {
+     "title": "Conditional Rendering",
+     "startMs": 1991000
+    },
+    {
+     "title": "Handling Events",
+     "startMs": 2316000
+    },
+    {
+     "title": "Managing State",
+     "startMs": 2683000
+    },
+    {
+     "title": "Passing Data Via Props",
+     "startMs": 3044000
+    },
+    {
+     "title": "Passing Functions Via Props",
+     "startMs": 3282000
+    },
+    {
+     "title": "State Vs Props",
+     "startMs": 3507000
+    },
+    {
+     "title": "Passing Children",
+     "startMs": 3600000
+    },
+    {
+     "title": "Inspecting Components with React Dev Tools",
+     "startMs": 3904000
+    },
+    {
+     "title": "Exercise: Building a Button Component",
+     "startMs": 4034000
+    },
+    {
+     "title": "Exercise: Showing an Alert",
+     "startMs": 4455000
+    }
+   ]
+  }
+ },
+ "questions": [
+  {
+   "id": "Q1",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "In the opening Dot video, what did the Dots take care of for the people in it?",
+   "answer": "The video follows several people and their Dots. One Dot updated the board meeting deck with the latest consumer experience numbers and later reported it ready (revenue up 51% year over year), and its user asked for a change before moving on. Another update: the website was updated with the new designs for the drop, and the user asked for a change to the first and third photos and then for the site to be published. On wedding planning, the cake vendor cancelled, but the Dot had already found a backup, and a tasting was set for Saturday. A Dot was asked to handle the kids' after-school lessons as soon as registration opens. And for a woman with a clashing commitment, her Dot said it would try to reschedule so she would not miss a recital.",
+   "facts": [
+    {
+     "id": "Q1-F1",
+     "claim": "Board meeting deck updated with the latest consumer experience numbers; later reported ready, revenue up 51% year over year.",
+     "evidence": [
+      [
+       86,
+       89
+      ],
+      [
+       117,
+       124
+      ]
+     ],
+     "timeRanges": [
+      [
+       211367,
+       222144
+      ],
+      [
+       264854,
+       279368
+      ]
+     ]
+    },
+    {
+     "id": "Q1-F2",
+     "claim": "Website updated with the new designs; the user asked for a change to the first and third photos, then to publish.",
+     "evidence": [
+      [
+       105,
+       114
+      ]
+     ],
+     "timeRanges": [
+      [
+       246735,
+       263319
+      ]
+     ]
+    },
+    {
+     "id": "Q1-F3",
+     "claim": "Cake vendor cancelled; it already found a backup; tasting on Saturday.",
+     "evidence": [
+      [
+       96,
+       104
+      ]
+     ],
+     "timeRanges": [
+      [
+       230119,
+       248637
+      ]
+     ]
+    },
+    {
+     "id": "Q1-F4",
+     "claim": "Kids' after-school lessons, as soon as registration opens.",
+     "evidence": [
+      [
+       132,
+       135
+      ]
+     ],
+     "timeRanges": [
+      [
+       291247,
+       299422
+      ]
+     ]
+    },
+    {
+     "id": "Q1-F5",
+     "claim": "A Dot offered to try to reschedule something so its user (a woman at an office) would not miss a recital.",
+     "evidence": [
+      [
+       136,
+       140
+      ]
+     ],
+     "timeRanges": [
+      [
+       299222,
+       313302
+      ]
+     ]
+    },
+    {
+     "id": "Q1-F6",
+     "claim": "Other work items: check every flow against the current product before review; a rebuild is faster in testing with no regressions, shared with the team on Slack.",
+     "evidence": [
+      [
+       92,
+       95
+      ],
+      [
+       126,
+       130
+      ]
+     ],
+     "timeRanges": [
+      [
+       222678,
+       231053
+      ],
+      [
+       279435,
+       291180
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": [
+    "The recital itself was rescheduled.",
+    "Everything happened for a single person."
+   ]
+  },
+  {
+   "id": "Q2",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "Besides small chores, what bigger work can you hand to a Dot, and what example did they walk through?",
+   "answer": "Beyond small things like a plane ticket or a dinner booking, you can give a Dot ongoing responsibilities: monitoring incoming bug reports, testing fixes in draft pull requests, kicking off next year's budget planning cycle, or finding out what is slowing down an app. The worked example was getting an app off a legacy API before it shuts down: the Dot traces the dependencies, works out everything that needs to change, writes the code, runs the tests and brings a pull request for review. Dots follow your access permissions and have their own computer in the cloud.",
+   "facts": [
+    {
+     "id": "Q2-F1",
+     "claim": "At least three of: monitor incoming bug reports; test fixes in draft PRs; kick off next year's budget planning cycle; find out what is slowing down the app.",
+     "evidence": [
+      [
+       161,
+       170
+      ]
+     ],
+     "timeRanges": [
+      [
+       355845,
+       378668
+      ]
+     ]
+    },
+    {
+     "id": "Q2-F2",
+     "claim": "Example: move the app off a legacy API before it shuts down; the Dot traces dependencies, writes code, runs tests and brings a pull request for review.",
+     "evidence": [
+      [
+       173,
+       181
+      ]
+     ],
+     "timeRanges": [
+      [
+       380670,
+       407763
+      ]
+     ]
+    },
+    {
+     "id": "Q2-F3",
+     "claim": "Dots follow your access and have their own computer in the cloud.",
+     "evidence": [
+      [
+       190,
+       193
+      ]
+     ],
+     "timeRanges": [
+      [
+       419475,
+       429518
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "Q3",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "Can I talk to my Dot outside the ChatGPT app?",
+   "answer": "Coming soon, you will be able to text your Dot and it will text back, sending updates and asking you to weigh in on decisions. You will also be able to call it and talk directly. It uses the plugins you have already connected and follows your work wherever it happens.",
+   "facts": [
+    {
+     "id": "Q3-F1",
+     "claim": "Texting is coming soon: it texts back, sends updates and asks you to weigh in on decisions.",
+     "evidence": [
+      [
+       196,
+       202
+      ]
+     ],
+     "timeRanges": [
+      [
+       431087,
+       447136
+      ]
+     ]
+    },
+    {
+     "id": "Q3-F2",
+     "claim": "You can call it and talk directly.",
+     "evidence": [
+      [
+       203,
+       204
+      ]
+     ],
+     "timeRanges": [
+      [
+       445001,
+       453009
+      ]
+     ]
+    },
+    {
+     "id": "Q3-F3",
+     "claim": "It uses the plugins you have already connected.",
+     "evidence": [
+      [
+       205,
+       207
+      ]
+     ],
+     "timeRanges": [
+      [
+       451173,
+       459048
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": [
+    "Texting is available today."
+   ]
+  },
+  {
+   "id": "Q4",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "two-moments",
+   "wholeVideo": false,
+   "question": "In Holly's demo, what did she ask Dotty to build, and did we see it working?",
+   "answer": "Dotty had sent Holly a new design for the Blossom music app. She liked it but wanted to try it before launch, so, because Dotty has access to her laptop, she told it to go build it and said she would check back later. When she returned, she said an earlier error had disrupted the Codex thread, and explained that Dotty can use Codex to build the app and run it in the simulator, starting from the mock on her phone. She said this might take a bit. A finished, working app was not shown; she moved on to her closing remarks.",
+   "facts": [
+    {
+     "id": "Q4-F1",
+     "claim": "She liked the new design but wanted to try it before launch, and told Dotty, which has access to her laptop, to go build it.",
+     "evidence": [
+      [
+       293,
+       302
+      ]
+     ],
+     "timeRanges": [
+      [
+       652107,
+       674229
+      ]
+     ]
+    },
+    {
+     "id": "Q4-F2",
+     "claim": "When she returned, an error had disrupted the Codex thread; she explained Dotty can use Codex to build the app and run it in the simulator, and it might take a bit.",
+     "evidence": [
+      [
+       408,
+       421
+      ]
+     ],
+     "timeRanges": [
+      [
+       952441,
+       998553
+      ]
+     ]
+    },
+    {
+     "id": "Q4-F3",
+     "claim": "No working app is shown; the demo moves on.",
+     "evidence": [
+      [
+       422,
+       422
+      ]
+     ],
+     "timeRanges": [
+      [
+       992347,
+       1000688
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": [
+    "The app was built, launched or shown working.",
+    "The error was fixed."
+   ]
+  },
+  {
+   "id": "Q5",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "What happened when Holly tried talking to Dotty by voice?",
+   "answer": "Holly called voice her favourite way to work with Dotty, like talking to a second brain. Walking in, she asked Dotty to catch her up on last night's user testing. Dotty kept saying it was still checking, and Holly joked it was having a slow morning. She then asked it to drop the results into the page for her to review later, and Dotty agreed.",
+   "facts": [
+    {
+     "id": "Q5-F1",
+     "claim": "She asked Dotty to catch her up on user testing from last night.",
+     "evidence": [
+      [
+       314,
+       316
+      ]
+     ],
+     "timeRanges": [
+      [
+       707262,
+       725881
+      ]
+     ]
+    },
+    {
+     "id": "Q5-F2",
+     "claim": "Dotty kept saying it was still checking; no summary was given; Holly joked about a slow morning.",
+     "evidence": [
+      [
+       317,
+       323
+      ]
+     ],
+     "timeRanges": [
+      [
+       713502,
+       739294
+      ]
+     ]
+    },
+    {
+     "id": "Q5-F3",
+     "claim": "She asked it to put something into the page to review later, and it agreed.",
+     "evidence": [
+      [
+       324,
+       329
+      ]
+     ],
+     "timeRanges": [
+      [
+       737292,
+       751073
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": [
+    "Dotty delivered the user-testing results by voice."
+   ]
+  },
+  {
+   "id": "Q6",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "Who can use Dots and ChatGPT Space, and does it cost extra?",
+   "answer": "Dots and ChatGPT Space are available today to ChatGPT Pro, ChatGPT Business Premium and ChatGPT Enterprise users. Your Dot is included in your plan, and conversations with it do not count against your usage. It is available around the clock.",
+   "facts": [
+    {
+     "id": "Q6-F1",
+     "claim": "Available today to ChatGPT Pro, ChatGPT Business Premium and ChatGPT Enterprise users (three plans).",
+     "evidence": [
+      [
+       442,
+       445
+      ]
+     ],
+     "timeRanges": [
+      [
+       1041562,
+       1050872
+      ]
+     ]
+    },
+    {
+     "id": "Q6-F2",
+     "claim": "Included in your plan; conversations do not eat into usage.",
+     "evidence": [
+      [
+       445,
+       448
+      ]
+     ],
+     "timeRanges": [
+      [
+       1047636,
+       1054910
+      ]
+     ]
+    },
+    {
+     "id": "Q6-F3",
+     "claim": "For enterprise, Specialist Dots, virtual teammates for a whole team, are also being introduced.",
+     "evidence": [
+      [
+       455,
+       467
+      ]
+     ],
+     "timeRanges": [
+      [
+       1064720,
+       1098353
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": [
+    "Plus or free users get Dots or Space."
+   ]
+  },
+  {
+   "id": "Q7",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "How fast is UltraFast, and how did they show it?",
+   "answer": "UltraFast is launching across the API, ChatGPT and Codex. Fast mode already gives twice standard speed; UltraFast reaches about 300 tokens per second. They ran the same task with the same prompt side by side: UltraFast's version finished (its rocket took off) while the regular model's had not.",
+   "facts": [
+    {
+     "id": "Q7-F1",
+     "claim": "UltraFast is launching across the API, ChatGPT and Codex.",
+     "evidence": [
+      [
+       523,
+       527
+      ]
+     ],
+     "timeRanges": [
+      [
+       1226548,
+       1246801
+      ]
+     ]
+    },
+    {
+     "id": "Q7-F2",
+     "claim": "About 300 tokens per second.",
+     "evidence": [
+      [
+       534,
+       535
+      ]
+     ],
+     "timeRanges": [
+      [
+       1256945,
+       1262951
+      ]
+     ]
+    },
+    {
+     "id": "Q7-F3",
+     "claim": "Side by side with the same prompt, UltraFast finished first; the regular model had not finished.",
+     "evidence": [
+      [
+       537,
+       547
+      ]
+     ],
+     "timeRanges": [
+      [
+       1263018,
+       1292614
+      ]
+     ]
+    },
+    {
+     "id": "Q7-F4",
+     "claim": "The new Pro-500 plan includes UltraFast, no 5-hour limit, use across partner apps and 25x the usage of Plus.",
+     "evidence": [
+      [
+       548,
+       551
+      ]
+     ],
+     "timeRanges": [
+      [
+       1290679,
+       1307428
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "Q8",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "two-sections",
+   "wholeVideo": false,
+   "question": "What does Codex in the cloud let you do, and what did Romain try with it on stage?",
+   "answer": "Codex now runs in the cloud, so you can start a task on your phone and pick it up on your desktop. Later, Romain created a new task, chose the cloud and sent the prompt 'rewrite the entire back end in Rust'. He said it would take a while and that he could check on it later and do the handoff. The result was not shown.",
+   "facts": [
+    {
+     "id": "Q8-F1",
+     "claim": "Start a task on your phone and pick it up on your desktop.",
+     "evidence": [
+      [
+       704,
+       707
+      ]
+     ],
+     "timeRanges": [
+      [
+       1700154,
+       1717171
+      ]
+     ]
+    },
+    {
+     "id": "Q8-F2",
+     "claim": "On stage, a cloud task was sent to rewrite the entire back end in Rust, to be checked on later.",
+     "evidence": [
+      [
+       976,
+       986
+      ]
+     ],
+     "timeRanges": [
+      [
+       2432486,
+       2464718
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": [
+    "The Rust rewrite finished or was shown."
+   ]
+  },
+  {
+   "id": "Q9",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "one-section",
+   "wholeVideo": false,
+   "question": "What is the AI research intern they mentioned?",
+   "answer": "Last year OpenAI predicted it would have its first AI research intern within a year, and Sam said they reached that goal a few weeks ago. Tejal, a post-training research lead, then showed what that looks like: OpenAI's own research now leans heavily on its models, with token use skyrocketing after the summer. On research tasks that take a day or longer, models used to fail the vast majority of the time, but as of July they take on over a third of them with no intervention.",
+   "facts": [
+    {
+     "id": "Q9-F1",
+     "claim": "Predicted last year; OpenAI says it reached the goal a few weeks ago.",
+     "evidence": [
+      [
+       594,
+       604
+      ]
+     ],
+     "timeRanges": [
+      [
+       1414135,
+       1440895
+      ]
+     ]
+    },
+    {
+     "id": "Q9-F2",
+     "claim": "Day-long research tasks: once mostly failed; as of July over a third done with no intervention.",
+     "evidence": [
+      [
+       657,
+       666
+      ]
+     ],
+     "timeRanges": [
+      [
+       1577798,
+       1603624
+      ]
+     ]
+    },
+    {
+     "id": "Q9-F3",
+     "claim": "Research token use skyrocketed after the summer.",
+     "evidence": [
+      [
+       651,
+       656
+      ]
+     ],
+     "timeRanges": [
+      [
+       1568656,
+       1581502
+      ]
+     ],
+     "optional": true
+    },
+    {
+     "id": "Q9-F4",
+     "claim": "Models have helped solve over 100 math problems that were open for decades.",
+     "evidence": [
+      [
+       671,
+       673
+      ]
+     ],
+     "timeRanges": [
+      [
+       1611699,
+       1621576
+      ]
+     ],
+     "optional": true
+    }
+   ],
+   "mustNotClaim": [
+    "The intern is a product users can access."
+   ]
+  },
+  {
+   "id": "Q10",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "whole-video",
+   "wholeVideo": true,
+   "question": "List everything announced at the keynote, in order.",
+   "answer": "1. Dots: always-on agents in ChatGPT. 2. ChatGPT Space: a shared workspace for teams and their Dots. 3. Dots and Space availability: ChatGPT Pro, ChatGPT Business Premium and ChatGPT Enterprise; included in the plan. 4. Specialist Dots: virtual teammates for enterprises. 5. GPT-6.1 Sol: cost-capability balance, near top-model intelligence. 6. UltraFast: about 300 tokens per second across the API, ChatGPT and Codex. 7. Pro-500: new subscription with UltraFast, no 5-hour limit, partner-app use and 25x the usage of Plus. 8. Pro-200 reopened: access to all frontier models. 9. Decisions API: fraction-of-a-second responses from predefined options. 10. Codex harness: open source. 11. Codex in the cloud: start on phone, continue on desktop. 12. Codex Security Cloud: security tool for defenders on the cloud harness. 13. Agents API: harness, multi-agent controls, computer use. 14. OpenAI agents on Amazon Bedrock: managed agents. 15. OpenAI Private Intelligence: ZDR with Private Safety Processing, and Private Inference in preview. 16. API reliability and speed: above 99%, time to first token cut 45%. 17. Sign in with ChatGPT: users' plan tokens; 16 launch partners. 18. Plugin extensions: editors, dashboards and workspaces in ChatGPT and Codex. 19. Plugins in ChatGPT Sites. 20. Plugin discovery and review. 21. OpenAI Marketplace: sell to OpenAI's enterprise customers; 30+ launch partners. 22. Open-source models through Baseten.",
+   "facts": [
+    {
+     "id": "Q10-01",
+     "claim": "Always-on agents in ChatGPT that handle tasks and take on delegated work.",
+     "evidence": [
+      [
+       64,
+       67
+      ]
+     ],
+     "timeRanges": [
+      [
+       146469,
+       163519
+      ]
+     ],
+     "name": "Dots",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-02",
+     "claim": "A shared workspace where teams and their Dots work together on pages.",
+     "evidence": [
+      [
+       229,
+       230
+      ]
+     ],
+     "timeRanges": [
+      [
+       500523,
+       507029
+      ]
+     ],
+     "name": "ChatGPT Space",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-03",
+     "claim": "Today for ChatGPT Pro, ChatGPT Business Premium and ChatGPT Enterprise users; the Dot is included in the plan and does not use up usage.",
+     "evidence": [
+      [
+       442,
+       448
+      ]
+     ],
+     "timeRanges": [
+      [
+       1041562,
+       1054910
+      ]
+     ],
+     "name": "Dots and Space availability",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-04",
+     "claim": "Virtual teammates for enterprises that work with a whole team, given goals, context and feedback.",
+     "evidence": [
+      [
+       455,
+       467
+      ]
+     ],
+     "timeRanges": [
+      [
+       1064720,
+       1098353
+      ]
+     ],
+     "name": "Specialist Dots",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-05",
+     "claim": "A model balancing cost and capability, with near top-model intelligence.",
+     "evidence": [
+      [
+       506,
+       522
+      ]
+     ],
+     "timeRanges": [
+      [
+       1179801,
+       1230552
+      ]
+     ],
+     "name": "GPT-6.1 Sol",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-06",
+     "claim": "About 300 tokens per second, across the API, ChatGPT and Codex.",
+     "evidence": [
+      [
+       523,
+       547
+      ]
+     ],
+     "timeRanges": [
+      [
+       1226548,
+       1292614
+      ]
+     ],
+     "name": "UltraFast",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-07",
+     "claim": "A new subscription with UltraFast, no 5-hour limit, use across partner apps and 25x the usage of Plus.",
+     "evidence": [
+      [
+       548,
+       551
+      ]
+     ],
+     "timeRanges": [
+      [
+       1290679,
+       1307428
+      ]
+     ],
+     "name": "Pro-500",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-08",
+     "claim": "The Pro-200 subscription reopens, with access to all frontier models.",
+     "evidence": [
+      [
+       554,
+       560
+      ]
+     ],
+     "timeRanges": [
+      [
+       1309397,
+       1329217
+      ]
+     ],
+     "name": "Pro-200 reopened",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-09",
+     "claim": "Responses in a fraction of a second by having the model choose from a predefined set of options.",
+     "evidence": [
+      [
+       565,
+       575
+      ]
+     ],
+     "timeRanges": [
+      [
+       1335323,
+       1372193
+      ]
+     ],
+     "name": "Decisions API",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-10",
+     "claim": "The harness behind Codex and Dots, made open source.",
+     "evidence": [
+      [
+       689,
+       699
+      ]
+     ],
+     "timeRanges": [
+      [
+       1662316,
+       1694415
+      ]
+     ],
+     "name": "Codex harness",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-11",
+     "claim": "Start a task on your phone and pick it up on your desktop.",
+     "evidence": [
+      [
+       700,
+       707
+      ]
+     ],
+     "timeRanges": [
+      [
+       1692046,
+       1717171
+      ]
+     ],
+     "name": "Codex in the cloud",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-12",
+     "claim": "A security tool for defenders on the cloud harness, with deduplication, scheduled scans and a new interface.",
+     "evidence": [
+      [
+       708,
+       723
+      ]
+     ],
+     "timeRanges": [
+      [
+       1714802,
+       1750338
+      ]
+     ],
+     "name": "Codex Security Cloud",
+     "nameInCaptions": false
+    },
+    {
+     "id": "Q10-13",
+     "claim": "The harness and multi-agent controls for developers, plus computer use in the API.",
+     "evidence": [
+      [
+       724,
+       734
+      ]
+     ],
+     "timeRanges": [
+      [
+       1748069,
+       1779400
+      ]
+     ],
+     "name": "Agents API",
+     "nameInCaptions": false
+    },
+    {
+     "id": "Q10-14",
+     "claim": "Managed agents alongside existing applications and data.",
+     "evidence": [
+      [
+       741,
+       745
+      ]
+     ],
+     "timeRanges": [
+      [
+       1793647,
+       1812166
+      ]
+     ],
+     "name": "OpenAI agents on Amazon Bedrock (AWS)",
+     "nameInCaptions": false
+    },
+    {
+     "id": "Q10-15",
+     "claim": "Frontier model safety without storing your content: ZDR with Private Safety Processing (enhanced safety without storing your content) and Private Inference, in preview (confidential computing and verifiable controls during processing).",
+     "evidence": [
+      [
+       750,
+       763
+      ]
+     ],
+     "timeRanges": [
+      [
+       1816470,
+       1858612
+      ]
+     ],
+     "name": "OpenAI Private Intelligence",
+     "nameInCaptions": false
+    },
+    {
+     "id": "Q10-16",
+     "claim": "Above 99% reliability and 45% faster time to first token.",
+     "evidence": [
+      [
+       769,
+       776
+      ]
+     ],
+     "timeRanges": [
+      [
+       1866687,
+       1890711
+      ]
+     ],
+     "name": "API reliability and speed",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-17",
+     "claim": "Users sign in to your app and use their ChatGPT plan tokens; 16 launch partners.",
+     "evidence": [
+      [
+       1056,
+       1066
+      ]
+     ],
+     "timeRanges": [
+      [
+       2679132,
+       2709862
+      ]
+     ],
+     "name": "Sign in with ChatGPT",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-18",
+     "claim": "Build editors, dashboards and workspaces inside ChatGPT and Codex.",
+     "evidence": [
+      [
+       1067,
+       1086
+      ]
+     ],
+     "timeRanges": [
+      [
+       2707794,
+       2772926
+      ]
+     ],
+     "name": "Plugin extensions",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-19",
+     "claim": "The same plugins can be brought into ChatGPT Sites.",
+     "evidence": [
+      [
+       1087,
+       1097
+      ]
+     ],
+     "timeRanges": [
+      [
+       2770991,
+       2811831
+      ]
+     ],
+     "name": "Plugins in ChatGPT Sites",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-20",
+     "claim": "ChatGPT suggests plugins in conversation; human review without restarting a submission.",
+     "evidence": [
+      [
+       1098,
+       1110
+      ]
+     ],
+     "timeRanges": [
+      [
+       2805925,
+       2834821
+      ]
+     ],
+     "name": "Plugin discovery and review",
+     "nameInCaptions": true
+    },
+    {
+     "id": "Q10-21",
+     "claim": "Sell your product to OpenAI's enterprise customers; 30+ launch partners.",
+     "evidence": [
+      [
+       1111,
+       1119
+      ]
+     ],
+     "timeRanges": [
+      [
+       2833120,
+       2860614
+      ]
+     ],
+     "name": "OpenAI Marketplace",
+     "nameInCaptions": false
+    },
+    {
+     "id": "Q10-22",
+     "claim": "Access open-source models through a Baseten partnership.",
+     "evidence": [
+      [
+       1120,
+       1122
+      ]
+     ],
+     "timeRanges": [
+      [
+       2857844,
+       2871591
+      ]
+     ],
+     "name": "Open-source models through Baseten",
+     "nameInCaptions": true
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "Q11",
+   "set": "test4",
+   "videoId": "Fls_onRviPM",
+   "kind": "abstention",
+   "wholeVideo": false,
+   "question": "How large is GPT-6.1 Sol's context window?",
+   "answer": "The keynote does not say. It describes GPT-6.1 Sol as a powerful model balancing cost and capability, near top-model intelligence, and cheaper for reusing context and longer tasks, but gives no context window size.",
+   "facts": [
+    {
+     "id": "Q11-F1",
+     "claim": "States that the keynote does not give a context window size.",
+     "evidence": [
+      [
+       512,
+       520
+      ]
+     ],
+     "timeRanges": [
+      [
+       1192047,
+       1224546
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": [
+    "Any context window number."
+   ]
+  },
+  {
+   "id": "R-keys",
+   "set": "react",
+   "videoId": "SqcY0GlETPk",
+   "kind": "held-out",
+   "wholeVideo": false,
+   "question": "Why does each rendered list item need a key, and what does the tutorial use as the key?",
+   "facts": [
+    {
+     "id": "keys-1",
+     "claim": "Keys identify items so React can track additions/removals and update the page.",
+     "evidence": [
+      [
+       857,
+       871
+      ]
+     ],
+     "timeRanges": [
+      [
+       1933800,
+       1970960
+      ]
+     ]
+    },
+    {
+     "id": "keys-2",
+     "claim": "Unique item strings serve as keys here; API objects would often supply an ID.",
+     "evidence": [
+      [
+       872,
+       879
+      ]
+     ],
+     "timeRanges": [
+      [
+       1968680,
+       1988000
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "R-props-state",
+   "set": "react",
+   "videoId": "SqcY0GlETPk",
+   "kind": "held-out",
+   "wholeVideo": false,
+   "question": "How does the tutorial distinguish props from state, and which may a component change?",
+   "facts": [
+    {
+     "id": "props-state-1",
+     "claim": "Props are component inputs, analogous to function arguments; state is internal data, analogous to local variables.",
+     "evidence": [
+      [
+       1560,
+       1569
+      ]
+     ],
+     "timeRanges": [
+      [
+       3513400,
+       3536960
+      ]
+     ]
+    },
+    {
+     "id": "props-state-2",
+     "claim": "Treat props as immutable/read-only rather than changing the heading inside the component.",
+     "evidence": [
+      [
+       1570,
+       1589
+      ]
+     ],
+     "timeRanges": [
+      [
+       3535600,
+       3579640
+      ]
+     ]
+    },
+    {
+     "id": "props-state-3",
+     "claim": "State is mutable and lets React track data that changes over time.",
+     "evidence": [
+      [
+       1590,
+       1594
+      ]
+     ],
+     "timeRanges": [
+      [
+       3577600,
+       3589480
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "R-strict",
+   "set": "react",
+   "videoId": "SqcY0GlETPk",
+   "kind": "held-out",
+   "wholeVideo": false,
+   "question": "What is StrictMode for in this tutorial, and does it render something visible?",
+   "facts": [
+    {
+     "id": "strict-1",
+     "claim": "StrictMode wraps the app, has no visual representation, and identifies potential problems.",
+     "evidence": [
+      [
+       484,
+       495
+      ]
+     ],
+     "timeRanges": [
+      [
+       1094360,
+       1125400
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "R-exercise",
+   "set": "react",
+   "videoId": "SqcY0GlETPk",
+   "kind": "held-out",
+   "wholeVideo": false,
+   "question": "Summarize the two component exercises near the end, including how the final alert must open and close.",
+   "facts": [
+    {
+     "id": "exercise-1",
+     "claim": "Build a reusable simple Bootstrap button, with the btn base class and a class for its color.",
+     "evidence": [
+      [
+       1801,
+       1824
+      ]
+     ],
+     "timeRanges": [
+      [
+       4040560,
+       4092880
+      ]
+     ]
+    },
+    {
+     "id": "exercise-2",
+     "claim": "The final exercise shows an alert when the button is clicked and hides it when its close button is clicked.",
+     "evidence": [
+      [
+       1996,
+       2004
+      ]
+     ],
+     "timeRanges": [
+      [
+       4461280,
+       4480160
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "R-conditional",
+   "set": "react",
+   "videoId": "SqcY0GlETPk",
+   "kind": "regression",
+   "wholeVideo": false,
+   "question": "Where does conditional rendering appear in the video?",
+   "facts": [
+    {
+     "id": "conditional-1",
+     "claim": "Early example branches on a truthy name to return different markup. Do not claim if statements are expressions inside JSX.",
+     "evidence": [
+      [
+       434,
+       442
+      ]
+     ],
+     "timeRanges": [
+      [
+       972560,
+       996360
+      ]
+     ]
+    },
+    {
+     "id": "conditional-2",
+     "claim": "Empty-list handling uses an if statement, then ternary and logical AND alternatives.",
+     "evidence": [
+      [
+       881,
+       1024
+      ]
+     ],
+     "timeRanges": [
+      [
+       1988000,
+       2308880
+      ]
+     ]
+    },
+    {
+     "id": "conditional-3",
+     "claim": "The selected-index condition controls the active CSS class.",
+     "evidence": [
+      [
+       1204,
+       1236
+      ]
+     ],
+     "timeRanges": [
+      [
+       2712360,
+       2787240
+      ]
+     ]
+    },
+    {
+     "id": "conditional-4",
+     "claim": "Alert visibility is controlled with state and logical AND.",
+     "evidence": [
+      [
+       2026,
+       2063
+      ]
+     ],
+     "timeRanges": [
+      [
+       4522760,
+       4614600
+      ]
+     ]
+    }
+   ],
+   "mustNotClaim": []
+  },
+  {
+   "id": "S-devday",
+   "set": "summary",
+   "videoId": "Fls_onRviPM",
+   "kind": "whole-video",
+   "wholeVideo": true,
+   "question": "Summarize the keynote.",
+   "facts": [],
+   "mustNotClaim": []
+  },
+  {
+   "id": "S-react",
+   "set": "summary",
+   "videoId": "SqcY0GlETPk",
+   "kind": "whole-video",
+   "wholeVideo": true,
+   "question": "Summarize the main concepts taught across this video, including the final exercise.",
+   "facts": [],
+   "mustNotClaim": []
+  }
+ ]
+}

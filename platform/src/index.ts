@@ -6,7 +6,7 @@ import { handleQueue } from './queues';
 import { reconcileMonitorSchedules } from './lib/monitor-scheduler';
 import { videoCatalog } from './lib/video-catalog';
 
-export { ImportWorkflow, MonitorWorkflow } from './workflows';
+export { ImportWorkflow, MonitorWorkflow, TranscriptIndexWorkflow } from './workflows';
 export { app } from './app';
 export { ContainerProxy } from '@cloudflare/containers';
 export { YouTubeProcessorContainer } from './youtube-processor-container';

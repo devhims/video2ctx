@@ -72,7 +72,15 @@ export interface AgentToolContext {
       analyze: TranscriptAnalyst;
       budget?: TranscriptAnalysisBudget;
     }
-    | { mode: 'complete_transcript' };
+    | {
+      mode: 'complete_transcript';
+      /**
+       * Shared-index retrieval, when enabled. Once the index for the transcript version is ready,
+       * get_video_transcript returns passage_retrieval or chapter_extraction evidence instead of
+       * the full page. Until then the complete transcript is returned, unchanged.
+       */
+      retrieval?: import('../../runtime/transcript-retrieval').TranscriptRetrieval;
+    };
   signal: AbortSignal;
   executeEvidenceTool(execution: EvidenceToolExecution): Promise<EvidencePacket>;
   finalize(toolCallId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;

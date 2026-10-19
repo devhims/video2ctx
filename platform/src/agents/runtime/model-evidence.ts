@@ -21,6 +21,22 @@ const MODEL_WARNINGS = 50;
 const MODEL_ANALYSIS_SUMMARY_CHARACTERS = 2_000;
 const MODEL_ANALYSIS_FINDINGS = 20;
 const MODEL_ANALYSIS_FINDING_CHARACTERS = 600;
+/** Bounded transcript evidence selected from the shared index: passages or chapter points. */
+export const INDEXED_TRANSCRIPT_ARTIFACT = 'youtube_transcript_retrieval';
+const indexedTranscriptDataSchema = z.object({
+  mode: z.enum(['passage_retrieval', 'chapter_extraction']),
+  scope: z.enum(['one_part', 'topic', 'whole_video']),
+  note: z.string().min(1).max(1_000),
+  chapter: z.object({ index: z.number().int().nonnegative(), title: z.string().min(1).max(300) }).optional(),
+  chapters: z.array(z.object({
+    index: z.number().int().nonnegative(),
+    title: z.string().min(1).max(300),
+    startMs: z.number().nonnegative(),
+    endMs: z.number().nonnegative(),
+    failed: z.literal(true).optional(),
+    points: z.array(z.object({ point: z.string().min(1).max(600), excerptIds: z.array(z.string().min(1).max(300)).max(3) })).max(6),
+  })).max(300).optional(),
+});
 const frameCoverageSchema = z.object({
   requestedTimestampsMs: z.array(z.number().int().nonnegative()).max(6),
   frames: z.array(framesSchema.shape.frames.element.omit({ imageBase64: true })).max(6),
@@ -83,6 +99,8 @@ export const modelEvidencePacketSchema = z.object({
     title: z.string().min(1).max(500).optional(),
   })).max(10).optional(),
   continuation: z.string().max(4_000).optional(),
+  /** How indexed transcript evidence was selected, with chapter points for whole-video questions. */
+  transcriptRetrieval: indexedTranscriptDataSchema.optional(),
   /** Entry-list coverage. Counts describe this projection, not the saved packet alone. */
   collection: modelCollectionSchema.optional(),
   warnings: z.array(agentWarningSchema).max(MODEL_WARNINGS),
@@ -124,6 +142,15 @@ export function transcriptAwaitsAnalysis(packet: Pick<EvidencePacket, 'artifacts
  * remains the source of truth for billing, recovery, and citation validation.
  */
 export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePacket {
+  // Indexed evidence is already bounded, so every selected caption is shown.
+  const indexed = readIndexedTranscript(packet);
+  if (indexed) {
+    return modelEvidencePacketSchema.parse({
+      packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
+      excerpts: packet.excerpts, transcriptRetrieval: indexed,
+      artifacts: packet.artifacts.map(({ type, title }) => ({ type, title })), warnings: packet.warnings,
+    });
+  }
   // Single-video inspection is read directly by the main model, including on recovery/finalization.
   if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
     return modelEvidencePacketSchema.parse({
@@ -383,6 +410,31 @@ export function omittedNotice(packets: readonly OmittedModelEvidence[], availabl
   return notice(listed);
 }
 
+function readIndexedTranscript(packet: Pick<EvidencePacket, 'kind' | 'artifacts'>) {
+  if (packet.kind !== 'youtube_transcript') return undefined;
+  const artifact = packet.artifacts.find(({ type }) => type === INDEXED_TRANSCRIPT_ARTIFACT);
+  const parsed = artifact ? indexedTranscriptDataSchema.safeParse(artifact.data) : undefined;
+  return parsed?.success ? parsed.data : undefined;
+}
+
+/** Whether a packet holds bounded evidence from the shared transcript index. */
+export function isIndexedTranscriptPacket(packet: Pick<EvidencePacket, 'kind' | 'artifacts'>): boolean {
+  return !!readIndexedTranscript(packet);
+}
+
+/** Chapters with extracted points, for the code-enforced coverage check. */
+export function chapterPointCoverage(packets: readonly EvidencePacket[]) {
+  return packets.flatMap(packet => {
+    const indexed = readIndexedTranscript(packet);
+    if (indexed?.mode !== 'chapter_extraction') return [];
+    return (indexed.chapters ?? []).filter(chapter => chapter.points.length).map(chapter => ({
+      index: chapter.index, title: chapter.title,
+      excerptIds: chapter.points.flatMap(point => point.excerptIds),
+      startMs: chapter.startMs, endMs: chapter.endMs,
+    }));
+  });
+}
+
 function readTranscriptAnalysis(packet: EvidencePacket) {
   if (packet.kind !== 'youtube_transcript') return undefined;
   const artifact = packet.artifacts.find(({ type }) => type === 'youtube_transcript_analysis');
@@ -461,12 +513,17 @@ export function finalizationEvidenceForModel(
   // Shorten IDs before measuring the input budget, not only after truncation.
   const compact = handoff.map(packet => {
     const analysis = readTranscriptAnalysis(packet);
+    const indexed = readIndexedTranscript(packet);
     return { ...packet,
       excerpts: packet.excerpts.map(excerpt => ({ ...excerpt, id: alias(excerpt.id) })),
       artifacts: packet.artifacts.map(artifact => artifact.type === 'youtube_transcript_analysis' && analysis
         ? { ...artifact, data: { ...artifact.data, findings: analysis.findings.map(finding => ({
           ...finding, excerptIds: finding.excerptIds.map(alias),
-        })) } } : artifact),
+        })) } }
+        : artifact.type === INDEXED_TRANSCRIPT_ARTIFACT && indexed?.chapters
+          ? { ...artifact, data: { ...artifact.data, chapters: indexed.chapters.map(chapter => ({ ...chapter,
+            points: chapter.points.map(point => ({ ...point, excerptIds: point.excerptIds.map(alias) })) })) } }
+          : artifact),
     };
   });
   const projections = comparisonVideoIds.length
@@ -487,6 +544,13 @@ export function finalizationEvidenceForModel(
     ...(packet.excerpts?.map(excerpt => excerpt.id) ?? []),
     ...(packet.transcriptAnalysis?.findings.flatMap(finding => finding.excerptIds) ?? []),
   ]));
+  // A chapter point may cite only an excerpt the finalizer can see.
+  for (const packet of evidence) {
+    if (!packet.transcriptRetrieval?.chapters) continue;
+    const shown = new Set(packet.excerpts?.map(excerpt => excerpt.id) ?? []);
+    packet.transcriptRetrieval.chapters = packet.transcriptRetrieval.chapters.map(chapter => ({ ...chapter,
+      points: chapter.points.map(point => ({ ...point, excerptIds: point.excerptIds.filter(id => shown.has(id)) })) }));
+  }
   for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);
   // Identify actual handoff inputs lost to the prompt budget or subject filter.
   // Normal model projection is intentional; additional reduction is a gap.

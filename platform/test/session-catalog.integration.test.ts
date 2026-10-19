@@ -9,6 +9,8 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import { VideoCatalog } from '../src/lib/video-catalog';
 import { saveVideoResource, videoResourceKey } from '../src/lib/video-resources';
 import { withYouTubeMetadata, type CachedResult } from '../src/lib/youtube';
+import { saveTranscriptChapters, saveTranscriptIndex, transcriptVersionFromReference } from '../src/lib/video-index/storage';
+import { encodeVector, normalize } from '../src/lib/video-index/vectors';
 
 const env = workerEnv as Env;
 const videoId = () => crypto.randomUUID().replaceAll('-', '').slice(0, 11);
@@ -43,6 +45,19 @@ async function source(id: string, text?: string, at = Date.now()) {
     catalogVersions,
     cacheStatus: 'hit' as const,
   };
+}
+/** The shared retrieval index the background build would save for this transcript version. */
+async function indexed(reference: import('../src/lib/video-catalog').VideoAssetReference) {
+  const version = transcriptVersionFromReference(reference)!;
+  const vector = encodeVector(normalize([1, 2, 3, 4]));
+  return [
+    await saveTranscriptIndex(catalog(), version, { captionCount: 1, dims: 4, passages: [{ index: 0, first: 0, last: 0 }], vectors: [vector] }),
+    await saveTranscriptChapters(catalog(), version, 3.5, { captionCount: 1, dims: 4, vectors: [vector],
+      chapters: [{ index: 0, first: 0, last: 0, title: 'Opening', summary: 'The whole video.' }] }),
+  ];
+}
+async function expectIndexIntact(references: import('../src/lib/video-catalog').VideoAssetReference[]) {
+  for (const reference of references) expect(await catalog().readVersion(reference)).toMatchObject({ complete: true });
 }
 function provider(result: CachedResult<Transcript>) {
   return { transcript: vi.fn(async () => result) } as unknown as YouTubeAgentProvider;
@@ -90,6 +105,7 @@ function reference(sql: SqlStorage, version: string): SessionCatalogReference {
 test('two sessions reuse one source object while deletion removes only the first session evidence', async () => {
   const id = videoId(),
     data = await source(id);
+  const index = await indexed(data.catalogVersions[0]!);
   await within('owner-a', async ({ store, sql, prefix }) => {
     const result = await sessionProvider(provider(data), store).transcript(id);
     const version = result.assetVersions![0]!;
@@ -109,6 +125,9 @@ test('two sessions reuse one source object while deletion removes only the first
     );
     expect(store.brief().memories).toHaveLength(1);
     expect(reference(sql, version).asset).toEqual(data.catalogVersions[0]);
+    expect(store.transcriptCatalogReference(version)).toEqual(data.catalogVersions[0]);
+    // Index versions are read by transcript hash and never recorded in session tables.
+    expect(JSON.stringify(sql.exec('SELECT * FROM session_asset_catalog_refs').toArray())).not.toContain('transcript_index');
     expect(JSON.stringify(reference(sql, version))).not.toContain('Original public transcript');
     expect((await env.RESEARCH.list({ prefix })).objects).toEqual([]);
   });
@@ -131,9 +150,11 @@ test('two sessions reuse one source object while deletion removes only the first
   await within('owner-b', async ({ store }) => {
     expect(await store.read(secondVersion)).toEqual(data.value);
   });
-  expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(1);
+  // The transcript and its unowned retrieval index survive session deletion.
+  expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(3);
   expect(await catalog().readVersion(data.catalogVersions[0]!)).toMatchObject({ value: transcript(id) });
-  expect((await catalog().inventory(id)).results).toHaveLength(1);
+  expect((await catalog().inventory(id)).results).toHaveLength(3);
+  await expectIndexIntact(index);
 });
 
 test('sessions pin old content across refresh and never substitute current content for a missing version', async () => {
@@ -1360,8 +1381,9 @@ test.each(['cancel', 'delete'] as const)('a verified text save cannot restore ev
 });
 
 
-test('account deletion removes session references while retaining the shared transcript', async () => {
+test('account deletion removes session references while retaining the shared transcript and its index', async () => {
   const id = videoId(), data = await source(id);
+  const index = await indexed(data.catalogVersions[0]!);
   await runInDurableObject(env.AGENT_RUNTIME.getByName('catalog-account-deletion'), async (instance, state) => {
     instance.getRun('missing');
     const store = new SessionEvidenceStore(
@@ -1374,6 +1396,7 @@ test('account deletion removes session references while retaining the shared tra
     expect(state.storage.sql.exec('SELECT * FROM session_asset_catalog_refs').toArray()).toEqual([]);
     expect(state.storage.sql.exec('SELECT * FROM session_assets').toArray()).toEqual([]);
   });
-  expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(1);
+  expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(3);
   expect(await catalog().readVersion(data.catalogVersions[0]!)).toMatchObject({ value: transcript(id) });
+  await expectIndexIntact(index);
 });
