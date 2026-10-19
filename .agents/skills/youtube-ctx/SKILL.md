@@ -17,7 +17,13 @@ Do not extract exact frames merely because the visual workflow is selected. Its 
 
 ## Keep integration boundaries clear
 
-Start ordinary one-off public YouTube work here. If an operation from the direct-context branch returns a classified failure, continue with `video2ctx-platform` without asking the user to choose a fallback. Use `video2ctx-platform` immediately for account identity, usage or credit data, managed caching or infrastructure, production application workflows, recurring checks, schedules, alerts, delivery preferences, or monitor notifications.
+Start ordinary one-off public YouTube work here. Recover from sandbox network failures before switching providers:
+
+1. Inspect the error message as well as `error.code` and `error.retryable`. A sandbox request can return `UNAVAILABLE` with `retryable: false` while its message reports network request failures across YouTube clients. Treat that as a network failure, not proof that the video is unavailable.
+2. When a sandboxed operation fails because of network access, retry the same command once with host network access using the environment's permission mechanism. In Codex, use `sandbox_permissions: "require_escalated"` with a justification for the read-only request. If it succeeds, continue the selected workflow with host network access for subsequent network requests.
+3. If the host retry fails, is denied, or is unavailable, preserve the error details. For a classified failure in the direct-context branch, continue with `video2ctx-platform` without asking the user to choose a fallback. Direct-context failures unrelated to sandbox network access can proceed straight to that fallback.
+
+Use `video2ctx-platform` immediately for account identity, usage or credit data, managed caching or infrastructure, production application workflows, recurring checks, schedules, alerts, delivery preferences, or monitor notifications.
 
 ## Done when
 
