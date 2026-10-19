@@ -256,6 +256,40 @@ describe('youtube-ctx visual workflow', () => {
     expect(mocks.getStoryboard).not.toHaveBeenCalled();
   });
 
+  test.each([[], ['Caption response was incomplete.']])(
+    'retains an empty partial transcript and propagates its metadata: %j', async (...warnings) => {
+      const empty = { ...transcript, text: '', segments: [], meta: { ...transcript.meta, partial: true, warnings } };
+      mocks.getTranscript.mockResolvedValue(empty);
+
+      const result = await getWatchIndex({ videoId: video.id, outputDir: '/tmp/watch-test' });
+
+      expect(result.transcript).toBe(empty);
+      expect(result.strategy).toBe('transcript-only');
+      expect(result.meta).toMatchObject({ partial: true, warnings });
+      expect(mocks.getStoryboard).not.toHaveBeenCalled();
+    },
+  );
+
+  test('propagates caption warnings even when the source partial flag is false', async () => {
+    const warnings = ['Caption timing may be approximate.'];
+    mocks.getTranscript.mockResolvedValue({ ...transcript, meta: { ...transcript.meta, warnings } });
+
+    const result = await getWatchIndex({ videoId: video.id, outputDir: '/tmp/watch-test' });
+
+    expect(result.meta).toMatchObject({ partial: true, warnings });
+  });
+
+  test.each(['video', 'storyboard'])('propagates %s partial status without requiring warnings', async (source) => {
+    if (source === 'video') mocks.getDetails.mockResolvedValue({ ...video, meta: { ...video.meta, partial: true } });
+    else mocks.getStoryboard.mockResolvedValue({ ...storyboard, meta: { ...storyboard.meta, partial: true } });
+
+    const result = await getWatchIndex({
+      videoId: video.id, outputDir: '/tmp/watch-test', withStoryboards: source === 'storyboard',
+    });
+
+    expect(result.meta).toMatchObject({ partial: true, warnings: [] });
+  });
+
   test('rejects only when neither transcript nor storyboard is usable', async () => {
     mocks.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
     mocks.getStoryboard.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No storyboard.'));

@@ -52,7 +52,7 @@ If validation identifies an out-of-range timestamp, check the selected flag and 
 
 Explicitly open every returned `frames[].path` with the image-viewing tool. Keep each image associated with `timestampMs`; a file path alone is not visual context. Reflect `failures` and `meta.warnings` when the answer depends on missing or low-resolution evidence.
 
-If exact frames fail with `DEPENDENCY_MISSING`, continue with a qualified index-only answer when the available evidence supports one. Report that FFmpeg must be installed or supplied with `--ffmpeg-path` when the unresolved question requires exact frames. Do not install system software without user authorization.
+If exact frames fail with `DEPENDENCY_MISSING` and coarse imagery could answer the remaining question, try `index --with-storyboards` as described above and inspect the returned sheets. Continue with a qualified index-only answer only when that evidence supports it. Storyboards cannot fulfill an explicit exact-frame request or verify details that require exact frames. For those requests, report that FFmpeg must be installed or supplied with `--ffmpeg-path` and that exact-frame extraction remains incomplete. Do not install system software without user authorization.
 
 ## Clean up
 

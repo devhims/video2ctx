@@ -22237,14 +22237,14 @@ async function getWatchIndex(options) {
       ...clientOptions
     }).then((value) => ({ value })).catch((error) => ({ error })) : Promise.resolve({ value: void 0 })
   ]);
-  const warnings = [];
+  const warnings = [...video.meta.warnings];
   const transcript = "value" in transcriptResult ? transcriptResult.value : void 0;
   if ("error" in transcriptResult) {
     warnings.push(safeWarning("Transcript", transcriptResult.error));
-  }
+  } else if (transcript) warnings.push(...transcript.meta.warnings);
   const storyboard = "value" in storyboardResult ? storyboardResult.value : void 0;
   if ("error" in storyboardResult) warnings.push(safeWarning("Storyboard", storyboardResult.error));
-  else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
+  else if (storyboard) warnings.push(...storyboard.meta.warnings);
   if (!transcript && !storyboard?.sheets.length) {
     if (!options.withStoryboards && "error" in transcriptResult) throw transcriptResult.error;
     throw new YouTubeClientError("UNAVAILABLE", "No transcript or storyboard index is available.");
@@ -22256,7 +22256,7 @@ async function getWatchIndex(options) {
     strategy,
     transcript,
     storyboard,
-    meta: metadata2(warnings, warnings.length > 0)
+    meta: metadata2([...new Set(warnings)], warnings.length > 0 || video.meta.partial || transcript?.meta.partial === true || storyboard?.meta.partial === true)
   };
 }
 function validateFrameRequest(options) {

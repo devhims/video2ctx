@@ -119,6 +119,25 @@ describe('youtube-ctx visual CLI', () => {
     await expect(access(workspace)).rejects.toBeDefined();
   });
 
+  test('preserves the workspace and partial metadata when captions are empty', async () => {
+    const io = capture();
+    const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
+    directories.push(workspace);
+    const getWatchIndex = vi.fn(async () => ({
+      videoId: 'abcdefghijk', strategy: 'transcript-only',
+      transcript: { segments: [], meta: { partial: true, warnings: [] } },
+      meta: { partial: true, warnings: [] },
+    }));
+
+    expect(await runWatchCli([
+      'index', '--video-id', 'abcdefghijk',
+    ], io, {}, { ...fetchDependency(), getWatchIndex, createWorkspace: async () => workspace })).toBe(0);
+    expect(JSON.parse(io.output[0]!)).toMatchObject({ workspace, meta: { partial: true } });
+    const persisted = JSON.parse(await readFile(join(workspace, 'index.json'), 'utf8'));
+    expect(persisted).toMatchObject({ transcript: { segments: [] }, meta: { partial: true } });
+    await expect(access(join(workspace, '.youtube-ctx-workspace.json'))).resolves.toBeUndefined();
+  });
+
   test.each([
     ['--with-storyboards', '--transcript-only'],
     ['--transcript-only', '--with-storyboards'],

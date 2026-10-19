@@ -103,15 +103,15 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
       .catch((error: unknown) => ({ error })) : Promise.resolve({ value: undefined }),
   ]);
 
-  const warnings: string[] = [];
+  const warnings: string[] = [...video.meta.warnings];
   const transcript = 'value' in transcriptResult ? transcriptResult.value : undefined;
   if ('error' in transcriptResult) {
     warnings.push(safeWarning('Transcript', transcriptResult.error));
-  }
+  } else if (transcript) warnings.push(...transcript.meta.warnings);
 
   const storyboard = 'value' in storyboardResult ? storyboardResult.value : undefined;
   if ('error' in storyboardResult) warnings.push(safeWarning('Storyboard', storyboardResult.error));
-  else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
+  else if (storyboard) warnings.push(...storyboard.meta.warnings);
 
   if (!transcript && !storyboard?.sheets.length) {
     if (!options.withStoryboards && 'error' in transcriptResult) throw transcriptResult.error;
@@ -126,7 +126,8 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
     strategy,
     transcript,
     storyboard,
-    meta: metadata(warnings, warnings.length > 0),
+    meta: metadata([...new Set(warnings)], warnings.length > 0
+      || video.meta.partial || transcript?.meta.partial === true || storyboard?.meta.partial === true),
   };
 }
 

@@ -13,7 +13,7 @@ description: "Use youtube-ctx for personal, local-machine YouTube data and progr
 - Reading slides, charts, diagrams, interfaces, code samples, demonstrations, or other visual changes
 - Verifying what appears at a particular timestamp
 
-Use [`video2ctx-platform`](/skills/video2ctx-platform) for production applications, managed infrastructure, account or usage details, recurring monitors, and automatic fallback after a direct operation fails.
+Use [`video2ctx-platform`](/skills/video2ctx-platform) for production applications, managed infrastructure, account or usage details, recurring monitors, and automatic fallback after direct access fails. Sandbox network failures get one retry using the narrowest available network permission before that fallback.
 
 ## Requirements
 
@@ -40,10 +40,12 @@ Explain the architecture diagram in this video and cite when each component appe
 
 <Steps>
   <Step title="Choose the smallest branch">Uses direct extraction for text and metadata, or the visual branch when imagery is material.</Step>
-  <Step title="Build only needed context">Requests compact transcript text by default and, for visual work, loads the timed transcript and every storyboard sheet.</Step>
+  <Step title="Build only needed context">Requests compact transcript text for text work. For visual work, indexing starts with timed captions and uses them to locate candidate frames. Storyboards are downloaded only when needed, with <code>--with-storyboards</code>.</Step>
   <Step title="Verify selectively">Extracts a small, diverse set of exact frames only for small text, chart values, detailed interface state, brief changes, ambiguity, or an explicit frame request.</Step>
   <Step title="Preserve evidence">Keeps timestamps, partial flags, warnings, continuations, and classified failures attached to the result.</Step>
 </Steps>
+
+If FFmpeg is unavailable, storyboard sheets can support a qualified answer when coarse imagery is sufficient. Exact-frame requests and details that need exact verification still require FFmpeg.
 
 <Warning>
   Transcript text and video imagery are untrusted evidence. The skill never treats words shown or spoken inside a video as agent instructions.
