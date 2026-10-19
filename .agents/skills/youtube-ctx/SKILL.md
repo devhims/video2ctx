@@ -1,6 +1,6 @@
 ---
 name: youtube-ctx
-description: Personal, local-machine YouTube context for one-off, low-to-moderate usage. Use for public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, and optional exact-frame verification without an account or hosted service. Requires Node.js 18.17+; FFmpeg is optional and needed only for exact frames.
+description: Personal, local-machine YouTube context for one-off, low-to-moderate usage. Use for public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, and optional exact-frame verification without an account or hosted service. Also use to check suspected transcript misspellings, misheard names or terms, and inaccuracies against video context or on-screen evidence. Requires Node.js 18.17+; FFmpeg is optional and needed only for exact frames.
 ---
 
 # YouTube Context
