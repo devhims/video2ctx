@@ -148,6 +148,8 @@ describe('transcript retrieval plan', () => {
     const { access, events } = retrieval({ mode: 'shadow' });
     const plan = await access.resolve({ videoId: VIDEO, segments, reference, signal: new AbortController().signal });
     expect(plan).toMatchObject({ mode: 'complete_transcript', reason: 'shadow' });
+    // The observation finishes after the complete transcript has been returned.
+    await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0]![1]).toMatchObject({ fallbackReason: 'shadow', retrieval: 'shadow' });
     expect((events[0]![1].passages as number[]).length).toBeGreaterThan(0);
   });
@@ -277,7 +279,8 @@ describe('get_video_transcript with an index', () => {
       'This is caption 203 with several spoken words.', 'This is caption 204 with several spoken words', 'This is caption 205 with several spoken words',
     ]);
     const data = packet.artifacts[0]!.data as { chapters: { points: { excerptIds: string[] }[] }[] };
-    expect(data.chapters[0]!.points[0]!.excerptIds).toEqual([packet.excerpts[0]!.id]);
+    // A point cites the caption where it starts first, then its context captions.
+    expect(data.chapters[0]!.points[0]!.excerptIds).toEqual(packet.excerpts.slice(0, 3).map(excerpt => excerpt.id));
     expect(chapterPointCoverage([packet])).toHaveLength(2);
     const prepared = finalizationEvidenceForModel([packet], 60_000);
     expect(prepared.missingInputs).toEqual([]);
@@ -299,5 +302,122 @@ describe('get_video_transcript with an index', () => {
     // A point citing a caption outside its chapter is dropped.
     expect(data.chapters[0]!.points).toHaveLength(1);
     expect(data.failedChapters).toEqual([1]);
+  });
+});
+
+describe('review fixes: optional retrieval never blocks the complete transcript', () => {
+  const stalledFetch = () => vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) =>
+    new Promise<Response>((_, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })));
+
+  it('falls back before the research deadline when the question embedding stalls', async () => {
+    storage.read.mockResolvedValue({ index, chapters });
+    const fetch = stalledFetch();
+    const started = Date.now();
+    // 12 seconds stay reserved for the complete transcript, leaving half a second for retrieval.
+    const plan = await retrieval().access.resolve({ videoId: VIDEO, segments, reference, signal: new AbortController().signal, deadlineAt: Date.now() + 12_500 });
+    expect(plan).toMatchObject({ mode: 'complete_transcript', reason: 'retrieval_timeout' });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it('returns the complete transcript at once in shadow mode, whatever retrieval is doing', async () => {
+    storage.read.mockResolvedValue({ index, chapters });
+    stalledFetch();
+    const started = Date.now();
+    const packet = await executeGetVideoTranscript({ videoId: VIDEO }, toolContext(retrieval({ mode: 'shadow' }).access), 'call-1');
+    expect(packet.excerpts).toHaveLength(400);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('still propagates run cancellation', async () => {
+    storage.read.mockResolvedValue({ index, chapters });
+    stalledFetch();
+    const controller = new AbortController();
+    const pending = retrieval().access.resolve({ videoId: VIDEO, segments, reference, signal: controller.signal, deadlineAt: Date.now() + 60_000 });
+    setTimeout(() => controller.abort(new Error('Cancelled by user')), 20);
+    await expect(pending).rejects.toThrow('Cancelled by user');
+  });
+
+  it('bounds the whole chapter preload, version lookup included, and honors cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      catalog.currentReference.mockReturnValue(new Promise(() => {}));
+      const pending = preloadVideoChapters({ env: {} as Env, videoIds: [VIDEO], chapterMinutes: 3.5 });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect((await pending).videoChapters).toEqual([]);
+      const controller = new AbortController();
+      const cancelled = preloadVideoChapters({ env: {} as Env, videoIds: [VIDEO], chapterMinutes: 3.5, signal: controller.signal });
+      controller.abort(new Error('Cancelled by user'));
+      await expect(cancelled).rejects.toThrow('Cancelled by user');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('review fixes: whole-video evidence', () => {
+  function longVideo(minutes: number, chapterCount: number) {
+    const captions = Array.from({ length: minutes * 20 }, (_, index) => ({ startMs: index * 3_000, endMs: index * 3_000 + 3_000, durationMs: 3_000,
+      text: `Caption ${String(index).padStart(5, '0')} explains one more step of the tutorial in plain spoken words here.` }));
+    const size = Math.floor(captions.length / chapterCount);
+    const plan = { mode: 'chapter_extraction' as const, scope: 'whole_video' as const, failedChapters: [],
+      chapters: Array.from({ length: chapterCount }, (_, index) => ({ index, title: `Chapter ${index}`, first: index * size,
+        last: index === chapterCount - 1 ? captions.length - 1 : (index + 1) * size - 1,
+        points: [0, 1, 2, 3].map(offset => ({ point: `Chapter ${index} teaches point ${offset} with a full sentence of explanation.`, caption: index * size + offset * 10 })) })) };
+    return { captions, plan };
+  }
+
+  // Review reproductions: 80.5 minutes with 23 chapters (276 excerpts), React with 27 chapters (324), and 119 minutes with 34.
+  it.each([[81, 23, 276], [80, 27, 324], [119, 34, 408]])('keeps every chapter citable when %i minutes and %i chapters exceed the finalizer budget', async (minutes, chapterCount, excerpts) => {
+    const { indexedTranscriptEvidence } = await import('../src/agents/providers/youtube/tools/get-video-transcript');
+    const { captions, plan } = longVideo(minutes, chapterCount);
+    const evidence = indexedTranscriptEvidence(VIDEO, captions, `youtube:${VIDEO}:transcript`, plan);
+    const packet = { packetId: 'p', kind: 'youtube_transcript', sources: [{ id: `youtube:${VIDEO}:transcript`, provider: 'youtube', kind: 'transcript', videoId: VIDEO }],
+      ...evidence, usage: [] } as never;
+    expect(evidence.excerpts.length).toBe(excerpts);
+    const prepared = finalizationEvidenceForModel([packet], 60_000);
+    const shown = prepared.evidence[0]!;
+    const ids = new Set(shown.excerpts!.map(excerpt => excerpt.id));
+    const points = shown.transcriptRetrieval!.chapters!.flatMap(chapter => chapter.points);
+    expect(shown.transcriptRetrieval!.chapters).toHaveLength(chapterCount);
+    expect(shown.transcriptRetrieval!.chapters!.every(chapter => chapter.points.length > 0)).toBe(true);
+    expect(points.length).toBeGreaterThanOrEqual(chapterCount);
+    expect(points.every(point => point.excerptIds.length > 0 && point.excerptIds.every(id => ids.has(id)))).toBe(true);
+    expect(shown.warnings.map(warning => warning.code)).toContain('TRANSCRIPT_CONTEXT_TRUNCATED');
+    expect(JSON.stringify(prepared.evidence).length).toBeLessThanOrEqual(60_000);
+  });
+
+  it('marks a chapter whose nonempty answer cites only captions outside it as not covered, after one repair', async () => {
+    const calls: string[] = [];
+    const extract = createChapterExtractor(new MockLanguageModelV4({ doGenerate: async options => {
+      const prompt = JSON.stringify(options.prompt);
+      calls.push(prompt.includes('[200]') ? 'second' : 'first');
+      const caption = prompt.includes('[200]') ? 99 : 10;
+      return { content: [{ type: 'text', text: JSON.stringify({ points: [{ point: 'A point.', caption }] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } }), undefined, 'test');
+    const result = await extract({ question: 'Summarize.', segments, chapters: chapters.chapters, concurrency: 2, signal: new AbortController().signal });
+    expect(result.failedChapters).toEqual([1]);
+    expect(calls.filter(call => call === 'second')).toHaveLength(2);
+    expect(calls.filter(call => call === 'first')).toHaveLength(1);
+  });
+
+  it('keeps an intentionally empty section as covered, without a repair', async () => {
+    const extract = createChapterExtractor(new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ points: [] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) }), undefined, 'test');
+    const result = await extract({ question: 'Summarize.', segments, chapters: chapters.chapters.slice(0, 1), concurrency: 1, signal: new AbortController().signal });
+    expect(result).toMatchObject({ failedChapters: [], chapters: [{ points: [] }] });
+  });
+
+  it('records usage for a completed call whose output fails the schema', async () => {
+    const recordUsage = vi.fn();
+    const extract = createChapterExtractor(new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ points: [{ point: 'Bad caption type.', caption: 'ten' }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) }),
+      { limitMicros: 1_000_000, currentCostMicros: () => 0, recordUsage }, 'test');
+    const result = await extract({ question: 'Summarize.', segments, chapters: chapters.chapters.slice(0, 1), concurrency: 1, signal: new AbortController().signal });
+    expect(result.failedChapters).toEqual([0]);
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0]![0]).toMatchObject({ category: 'chapter_extraction', usage: { inputTokens: 100, outputTokens: 20 } });
   });
 });

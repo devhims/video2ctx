@@ -14,7 +14,7 @@ import type { SessionAccess } from './session-evidence';
 
 export type TranscriptRetrievalFallback =
   | 'no_catalog_version' | 'index_read_failed' | 'index_not_ready' | 'caption_count_mismatch' | 'chapters_not_ready'
-  | 'embedding_failed' | 'no_evidence_fit' | 'extraction_failed' | 'shadow';
+  | 'embedding_failed' | 'no_evidence_fit' | 'extraction_failed' | 'retrieval_timeout' | 'shadow';
 
 export type TranscriptRetrievalPlan =
   | { mode: 'complete_transcript'; reason: TranscriptRetrievalFallback; scope?: TranscriptScope }
@@ -32,11 +32,46 @@ export type TranscriptRetrievalEvent = (type: 'transcript.retrieval' | 'transcri
 
 interface LoadedIndexes { index?: LoadedTranscriptIndex; chapters?: LoadedTranscriptChapters }
 const PRELOAD_WAIT_MS = 1_500;
+/** Index reads, the question embedding and Jev routing share this budget. Retrieval is optional. */
+const QUERY_BUDGET_MS = 8_000;
+/** Whole-video extraction stops here; chapters still running are reported as not covered. */
+const EXTRACTION_BUDGET_MS = 25_000;
+/** Research time kept for using the complete transcript when retrieval falls back. */
+const FALLBACK_RESERVE_MS = 12_000;
+const MIN_EXTRACTION_MS = 5_000;
+
+class RetrievalTimeout extends Error {}
+
+/** A signal for optional work: aborted by the run or at the deadline, whichever is first. */
+function deadlineSignal(signal: AbortSignal, deadlineAt: number) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.aborted ? signal.reason : new RetrievalTimeout('Retrieval deadline elapsed.'));
+  const timer = setTimeout(abort, Math.max(0, deadlineAt - Date.now()));
+  if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+  return { signal: controller.signal, dispose: () => { clearTimeout(timer); signal.removeEventListener('abort', abort); } };
+}
+
+/** Rejects with RetrievalTimeout when work outlives its signal; work without a signal of its own keeps running unobserved. */
+function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
 
 /** Per-run access to the shared transcript index. Decided once per transcript version per run. */
 export interface TranscriptRetrieval {
   readonly mode: Exclude<TranscriptRetrievalMode, 'full'>;
-  resolve(input: { videoId: string; segments: readonly IndexedCaption[]; reference?: VideoAssetReference; signal: AbortSignal }): Promise<TranscriptRetrievalPlan>;
+  resolve(input: {
+    videoId: string;
+    segments: readonly IndexedCaption[];
+    reference?: VideoAssetReference;
+    signal: AbortSignal;
+    /** The research deadline. Retrieval leaves time before it to use the complete transcript. */
+    deadlineAt?: number;
+  }): Promise<TranscriptRetrievalPlan>;
 }
 
 export interface TranscriptRetrievalOptions {
@@ -76,34 +111,35 @@ export async function preloadVideoChapters(input: {
   session?: Pick<SessionAccess, 'brief' | 'transcriptCatalogReference'>;
   videoIds: readonly string[];
   chapterMinutes: number;
+  signal?: AbortSignal;
 }): Promise<{ videoChapters: { videoId: string; titles: string[] }[]; preloaded: Map<string, Promise<LoadedIndexes>> }> {
   const preloaded = new Map<string, Promise<LoadedIndexes>>();
-  const session = input.session;
   if (input.videoIds.length !== 1) return { videoChapters: [], preloaded };
   const videoId = input.videoIds[0]!;
-  const saved = session?.brief().assets.filter(asset => asset.kind === 'transcript' && asset.videoId === videoId && asset.current).at(-1);
-  let version = saved && session?.transcriptCatalogReference ? transcriptVersionFromReference(session.transcriptCatalogReference(saved.version)) : undefined;
-  // A first question uses the catalog's current version of the transcript the agent reads. The titles
-  // are only a routing hint; retrieval still checks the version the session actually pins.
-  if (!version) {
-    const key = videoResourceKey({ kind: 'transcript', id: videoId, granularity: 'word' });
-    try { version = transcriptVersionFromReference((key && await videoCatalog(input.env)?.currentReference(key)) || undefined); }
-    catch { version = undefined; }
-  }
-  if (!version) return { videoChapters: [], preloaded };
-  // Classification does not wait long for this hint; a slower read still serves research.
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const lookup = async () => {
+    const session = input.session;
+    const saved = session?.brief().assets.filter(asset => asset.kind === 'transcript' && asset.videoId === videoId && asset.current).at(-1);
+    let version = saved && session?.transcriptCatalogReference ? transcriptVersionFromReference(session.transcriptCatalogReference(saved.version)) : undefined;
+    // A first question uses the catalog's current version of the transcript the agent reads. The titles
+    // are only a routing hint; retrieval still checks the version the session actually pins.
+    if (!version) {
+      const key = videoResourceKey({ kind: 'transcript', id: videoId, granularity: 'word' });
+      version = transcriptVersionFromReference((key && await videoCatalog(input.env)?.currentReference(key)) || undefined);
+    }
+    if (!version) return undefined;
+    const loaded = await loadIndexes(input.env, version, input.chapterMinutes, preloaded);
+    return loaded.chapters ? [{ videoId, titles: loaded.chapters.chapters.map(chapter => chapter.title) }] : undefined;
+  };
+  // The whole optional hint, version lookup included, is bounded and honors cancellation, so it
+  // never consumes the classification budget. A slower read can still serve research.
+  const bound = deadlineSignal(input.signal ?? new AbortController().signal, Date.now() + PRELOAD_WAIT_MS);
   try {
-    const loaded = await Promise.race([
-      loadIndexes(input.env, version, input.chapterMinutes, preloaded),
-      new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), PRELOAD_WAIT_MS); }),
-    ]);
-    return { videoChapters: loaded?.chapters ? [{ videoId, titles: loaded.chapters.chapters.map(chapter => chapter.title) }] : [], preloaded };
+    return { videoChapters: await bounded(lookup(), bound.signal) ?? [], preloaded };
   } catch {
-    preloaded.clear();
+    input.signal?.throwIfAborted();
     return { videoChapters: [], preloaded };
   } finally {
-    clearTimeout(timer);
+    bound.dispose();
   }
 }
 
@@ -116,20 +152,29 @@ export function createTranscriptRetrieval(options: TranscriptRetrievalOptions): 
     options.onEvent?.(type, event);
   };
 
-  const plan = async (videoId: string, segments: readonly IndexedCaption[], version: TranscriptVersion, signal: AbortSignal): Promise<TranscriptRetrievalPlan> => {
+  const plan = async (videoId: string, segments: readonly IndexedCaption[], version: TranscriptVersion, signal: AbortSignal,
+    deadlineAt: number): Promise<TranscriptRetrievalPlan> => {
     const fallback = (reason: TranscriptRetrievalFallback, details: Record<string, unknown> = {}): TranscriptRetrievalPlan => {
       emit('transcript.retrieval', { videoId, mode: 'complete_transcript', fallbackReason: reason, ...details });
       return { mode: 'complete_transcript', reason, ...(typeof details.scope === 'string' ? { scope: details.scope as TranscriptScope } : {}) };
     };
-    let loaded: LoadedIndexes;
-    try { loaded = await loadIndexes(options.env, version, options.chapterMinutes, cache); }
-    catch {
+    // Only run cancellation propagates. A missed retrieval deadline means the complete transcript.
+    const optional = <T>(work: (bound: AbortSignal) => Promise<T>, until: number) => {
+      const bound = deadlineSignal(signal, until);
+      return bounded(work(bound.signal), bound.signal).finally(bound.dispose);
+    };
+    const failed = (error: unknown, reason: TranscriptRetrievalFallback, details?: Record<string, unknown>) => {
       signal.throwIfAborted();
-      return fallback('index_read_failed');
-    }
-    signal.throwIfAborted();
+      return fallback(error instanceof RetrievalTimeout ? 'retrieval_timeout' : reason, details);
+    };
+    const queryDeadline = Math.min(Date.now() + QUERY_BUDGET_MS, deadlineAt - FALLBACK_RESERVE_MS);
+
+    let loaded: LoadedIndexes;
+    try { loaded = await optional(() => loadIndexes(options.env, version, options.chapterMinutes, cache), queryDeadline); }
+    catch (error) { return failed(error, 'index_read_failed'); }
     // A missing kind may never have been built, for example for transcripts saved before this feature.
-    if (!loaded.index || !loaded.chapters) await startTranscriptIndexBuild(options.env, version, 'question');
+    // Starting the build never throws, and answering does not wait for it.
+    if (!loaded.index || !loaded.chapters) void startTranscriptIndexBuild(options.env, version, 'question');
     if (!loaded.index) return fallback('index_not_ready');
     if (loaded.index.captionCount !== segments.length) return fallback('caption_count_mismatch');
     const chapters = loaded.chapters?.captionCount === segments.length ? loaded.chapters : undefined;
@@ -137,16 +182,30 @@ export function createTranscriptRetrieval(options: TranscriptRetrievalOptions): 
     let scope: TranscriptScope = options.scope ?? 'topic';
     let scopeSource = options.scope ? 'classifier' : 'default';
     if (options.router === 'jev' && chapters) {
-      const routed = await routeTranscriptScopeWithJev({ apiKey: options.env.JEV_API_KEY, question: options.question,
-        chapterTitles: chapters.chapters.map(chapter => chapter.title), signal });
+      const routed = await optional(bound => routeTranscriptScopeWithJev({ apiKey: options.env.JEV_API_KEY, question: options.question,
+        chapterTitles: chapters.chapters.map(chapter => chapter.title), signal: bound }), queryDeadline).catch(() => {
+        signal.throwIfAborted();
+        return undefined;
+      });
       if (routed) { scope = routed.scope; scopeSource = 'jev'; }
     }
 
     if (scope === 'whole_video') {
       if (!chapters) return fallback('chapters_not_ready', { scope, scopeSource });
       if (options.mode === 'shadow') return fallback('shadow', { scope, scopeSource, chapters: chapters.chapters.length });
-      const extraction = await options.extractChapters({ question: options.question, segments, chapters: chapters.chapters,
-        concurrency: options.extractionConcurrency, signal });
+      const extractionDeadline = Math.min(Date.now() + EXTRACTION_BUDGET_MS, deadlineAt - FALLBACK_RESERVE_MS);
+      if (extractionDeadline - Date.now() < MIN_EXTRACTION_MS) return fallback('retrieval_timeout', { scope, scopeSource });
+      // Chapters unfinished at the deadline fail on their own; finished chapters are kept.
+      const bound = deadlineSignal(signal, extractionDeadline);
+      let extraction: Awaited<ReturnType<ChapterExtractor>>;
+      try {
+        extraction = await options.extractChapters({ question: options.question, segments, chapters: chapters.chapters,
+          concurrency: options.extractionConcurrency, signal: bound.signal });
+      } catch (error) {
+        signal.throwIfAborted();
+        throw error;
+      } finally { bound.dispose(); }
+      signal.throwIfAborted();
       const points = extraction.chapters.reduce((sum, chapter) => sum + chapter.points.length, 0);
       emit('transcript.extraction', { videoId, chapters: extraction.chapters.length, points,
         failedChapters: extraction.failedChapters, wallMs: extraction.wallMs });
@@ -158,12 +217,12 @@ export function createTranscriptRetrieval(options: TranscriptRetrievalOptions): 
     let query: Float32Array;
     let embedMs: number;
     try {
-      const embedded = await embedTexts(options.env.FIREWORKS_API_KEY, [embeddingQuery(options.question)], signal);
+      const embedded = await optional(bound => embedTexts(options.env.FIREWORKS_API_KEY, [embeddingQuery(options.question)], bound,
+        { totalMs: Math.max(1, queryDeadline - Date.now()), attempts: 2 }), queryDeadline);
       query = embedded.vectors[0]!;
       embedMs = embedded.ms;
-    } catch {
-      signal.throwIfAborted();
-      return fallback('embedding_failed', { scope, scopeSource });
+    } catch (error) {
+      return failed(error, 'embedding_failed', { scope, scopeSource });
     }
     if (query.length !== loaded.index.dims) return fallback('embedding_failed', { scope, scopeSource });
     const ranked = rankPassages(loaded.index.passages, loaded.index.vectors, query);
@@ -182,7 +241,7 @@ export function createTranscriptRetrieval(options: TranscriptRetrievalOptions): 
 
   return {
     mode: options.mode,
-    resolve: ({ videoId, segments, reference, signal }) => {
+    resolve: ({ videoId, segments, reference, signal, deadlineAt = Infinity }) => {
       const version = transcriptVersionFromReference(reference);
       if (!version || version.videoId !== videoId) {
         emit('transcript.retrieval', { videoId, mode: 'complete_transcript', fallbackReason: 'no_catalog_version' });
@@ -191,9 +250,14 @@ export function createTranscriptRetrieval(options: TranscriptRetrievalOptions): 
       // The first decision for a version holds for the rest of the run.
       let pending = plans.get(version.contentHash);
       if (!pending) {
-        pending = plan(videoId, segments, version, signal);
+        pending = plan(videoId, segments, version, signal, deadlineAt);
         plans.set(version.contentHash, pending);
         pending.catch(() => plans.delete(version.contentHash));
+      }
+      // Shadow mode only observes: the complete transcript is returned at once, never after retrieval.
+      if (options.mode === 'shadow') {
+        pending.catch(() => undefined);
+        return Promise.resolve({ mode: 'complete_transcript', reason: 'shadow' });
       }
       return pending;
     },

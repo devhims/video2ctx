@@ -27,12 +27,14 @@ export class EmbeddingError extends Error {
  * Embeds inputs with Qwen3 Embedding 8B on Fireworks, at most 64 per request, requests sent
  * concurrently. Every vector is L2-normalized, so similarity is a dot product.
  */
-export async function embedTexts(apiKey: string | undefined, inputs: readonly string[], signal?: AbortSignal): Promise<EmbeddingResult> {
+export async function embedTexts(apiKey: string | undefined, inputs: readonly string[], signal?: AbortSignal,
+  options: { totalMs?: number; attempts?: number } = {}): Promise<EmbeddingResult> {
   if (!apiKey?.trim()) throw new EmbeddingError('Fireworks secret is not configured.');
   const started = Date.now();
   const batches = Array.from({ length: Math.ceil(inputs.length / MAX_INPUTS_PER_REQUEST) },
     (_, index) => inputs.slice(index * MAX_INPUTS_PER_REQUEST, (index + 1) * MAX_INPUTS_PER_REQUEST));
-  const results = await Promise.all(batches.map(batch => embedBatch(apiKey, batch, signal)));
+  const results = await Promise.all(batches.map(batch => embedBatch(apiKey, batch, signal,
+    Date.now() + (options.totalMs ?? REQUEST_TIMEOUT_MS * MAX_ATTEMPTS), options.attempts ?? MAX_ATTEMPTS)));
   return {
     vectors: results.flatMap(result => result.vectors),
     tokens: results.reduce((sum, result) => sum + result.tokens, 0),
@@ -40,7 +42,8 @@ export async function embedTexts(apiKey: string | undefined, inputs: readonly st
   };
 }
 
-async function embedBatch(apiKey: string, inputs: readonly string[], signal?: AbortSignal) {
+/** Index builds allow three 30-second attempts; question time passes a short total budget. */
+async function embedBatch(apiKey: string, inputs: readonly string[], signal: AbortSignal | undefined, deadlineAt: number, attempts: number) {
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted();
     let response: Response;
@@ -49,14 +52,14 @@ async function embedBatch(apiKey: string, inputs: readonly string[], signal?: Ab
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: EMBEDDING_MODEL, input: inputs }),
-        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: requestSignal(signal, Math.min(REQUEST_TIMEOUT_MS, deadlineAt - Date.now())),
       });
     } catch (error) {
       signal?.throwIfAborted();
-      if (attempt < MAX_ATTEMPTS) continue;
+      if (attempt < attempts && deadlineAt > Date.now()) continue;
       throw new EmbeddingError(`Embedding request failed: ${error instanceof Error ? error.name : 'unknown error'}.`);
     }
-    if ((response.status === 429 || response.status >= 500) && attempt < MAX_ATTEMPTS) {
+    if ((response.status === 429 || response.status >= 500) && attempt < attempts && deadlineAt - Date.now() > 400 * attempt) {
       await new Promise(resolve => setTimeout(resolve, 400 * attempt));
       continue;
     }
@@ -72,4 +75,9 @@ async function embedBatch(apiKey: string, inputs: readonly string[], signal?: Ab
       tokens: body.usage?.total_tokens ?? body.usage?.prompt_tokens ?? 0,
     };
   }
+}
+
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number) {
+  const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }

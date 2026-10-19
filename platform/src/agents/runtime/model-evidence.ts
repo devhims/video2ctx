@@ -336,6 +336,10 @@ function packEvidence(
       });
       continue;
     }
+    if (packet.transcriptRetrieval?.chapters?.length && packet.excerpts?.length) {
+      const fitted = fitChapterPoints(packet, fits);
+      if (fitted) { add(fitted); continue; }
+    }
     if (packet.artifacts?.some(artifact => artifact.type === 'youtube_complete_transcript') && packet.excerpts?.length) {
       // Keep as much of a long transcript as fits, spread across its timeline.
       // Dropping straight to the opening sentence loses almost all comparison context.
@@ -361,6 +365,30 @@ function packEvidence(
   }
 
   return { evidence: selected, omitted };
+}
+
+/**
+ * Whole-video points that do not fit keep their alignment with the captions they cite. Context
+ * captions go first, then later points of each chapter; every chapter keeps its first point.
+ */
+function fitChapterPoints(packet: ModelEvidencePacket, fits: (candidate: ModelEvidencePacket) => boolean): ModelEvidencePacket | undefined {
+  const chapters = packet.transcriptRetrieval!.chapters!;
+  const total = chapters.reduce((sum, chapter) => sum + chapter.points.length, 0);
+  for (const [context, perChapter] of [[1, 6], [1, 3], [1, 2], [1, 1]] as const) {
+    const kept = chapters.map(chapter => ({ ...chapter,
+      points: chapter.points.slice(0, perChapter).map(point => ({ ...point, excerptIds: point.excerptIds.slice(0, context) })) }));
+    const ids = new Set(kept.flatMap(chapter => chapter.points.flatMap(point => point.excerptIds)));
+    const shown = kept.reduce((sum, chapter) => sum + chapter.points.length, 0);
+    const candidate: ModelEvidencePacket = { ...packet,
+      excerpts: packet.excerpts!.filter(excerpt => ids.has(excerpt.id)),
+      transcriptRetrieval: { ...packet.transcriptRetrieval!, chapters: kept },
+      warnings: [...packet.warnings, { code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message: shown === total
+        ? 'Chapter points fit the finalization context only with the caption where each point starts, without the captions after it.'
+        : `Only ${shown} of ${total} chapter points fit the finalization context, at most ${perChapter} per chapter with the caption where each starts. Later points of longer chapters were omitted; do not claim exhaustive coverage.` }],
+    };
+    if (fits(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 /**

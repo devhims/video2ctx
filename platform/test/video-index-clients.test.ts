@@ -98,11 +98,20 @@ describe('build trigger', () => {
   it('starts one deterministic instance per transcript version', async () => {
     const create = vi.fn(async () => ({}));
     expect(await startTranscriptIndexBuild(env({ create }), version, 'publish')).toBe('started');
-    const id = await transcriptIndexInstanceId(version);
+    const id = await transcriptIndexInstanceId(version, 3.5);
     expect(id).toMatch(/^transcript-index-[a-f0-9]{64}$/);
-    expect(id).toBe(await transcriptIndexInstanceId({ videoId: version.videoId, contentHash: version.contentHash }));
-    expect(id).not.toBe(await transcriptIndexInstanceId({ videoId: version.videoId, contentHash: 'c'.repeat(64) }));
+    expect(id).toBe(await transcriptIndexInstanceId({ ...version }, 3.5));
+    expect(id).not.toBe(await transcriptIndexInstanceId({ ...version, contentHash: 'c'.repeat(64) }, 3.5));
     expect(create).toHaveBeenCalledWith({ id, params: { ...version, source: 'publish', chapterMinutes: 3.5 } });
+  });
+
+  it('starts a new instance when the chapter density changes, instead of reusing the completed one', async () => {
+    const create = vi.fn(async () => ({}));
+    await startTranscriptIndexBuild(env({ create }), version, 'question');
+    await startTranscriptIndexBuild({ ...env({ create }), AGENT_CHAPTER_MINUTES: '2' } as unknown as Env, version, 'question');
+    const [first, second] = create.mock.calls.map(call => (call as unknown as [{ id: string; params: { chapterMinutes: number } }])[0]);
+    expect(first!.id).not.toBe(second!.id);
+    expect(second!.params.chapterMinutes).toBe(2);
   });
 
   it('treats a duplicate start as a no-op and restarts a failed instance', async () => {
@@ -116,6 +125,14 @@ describe('build trigger', () => {
     expect(await startTranscriptIndexBuild(env(workflow), version, 'question')).toBe('complete');
     expect(await startTranscriptIndexBuild(env(workflow), version, 'question')).toBe('restarted');
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up on a stalled workflow service instead of holding the caller', { timeout: 10_000 }, async () => {
+    // Real timers: the instance ID is hashed natively, outside fake timers. Create and lookup get 2 seconds each.
+    const stalled = { create: vi.fn(() => new Promise(() => {})), get: vi.fn(() => new Promise(() => {})) };
+    const started = Date.now();
+    expect(await startTranscriptIndexBuild(env(stalled), version, 'publish')).toBe('failed');
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it('does nothing when retrieval is off, and never throws', async () => {

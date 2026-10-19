@@ -118,7 +118,8 @@ export function executeGetVideoTranscript(
       if (retrieval) {
         const reference = (response.assetVersions?.[0] ? context.session?.transcriptCatalogReference?.(response.assetVersions[0]) : undefined)
           ?? response.catalogVersions?.find(version => version.kind === 'transcript');
-        const plan = await retrieval.resolve({ videoId: parsed.videoId, segments: response.value.segments, reference, signal: context.signal });
+        const plan = await retrieval.resolve({ videoId: parsed.videoId, segments: response.value.segments, reference,
+          signal: context.signal, deadlineAt: context.researchDeadlineAt });
         context.signal.throwIfAborted();
         if (plan.mode !== 'complete_transcript') {
           const indexed = indexedTranscriptEvidence(parsed.videoId, response.value.segments, sourceId, plan);
@@ -271,7 +272,8 @@ export function indexedTranscriptEvidence(
         excerpts.set(excerpt.id, excerpt);
         ids.push(excerpt.id);
       }
-      return { point: point.point, excerptIds: ids.slice(0, 1) };
+      // The first ID is the caption where the point starts; the rest are its context.
+      return { point: point.point, excerptIds: ids.slice(0, POINT_CONTEXT_CAPTIONS + 1) };
     }),
   }));
   const failed = plan.chapters.filter(chapter => chapter.failed);

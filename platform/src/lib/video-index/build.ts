@@ -20,9 +20,14 @@ export type BuildStepResult =
   | { status: 'exists' }
   | { status: 'skipped'; reason: 'VIDEO_TOO_LONG' | 'NO_USABLE_CAPTIONS' };
 
-/** Deterministic, so duplicate starts for one transcript version address the same instance. */
-export async function transcriptIndexInstanceId(version: Pick<TranscriptVersion, 'videoId' | 'contentHash'>): Promise<string> {
-  return `transcript-index-${await sha256(`${version.videoId}${version.contentHash}${PASSAGE_VERSION}${CHAPTER_VERSION}`)}`;
+/**
+ * Deterministic, so duplicate starts for one transcript version address the same instance. Every
+ * input that changes an artifact key is part of the identity: a new chapter density or builder
+ * version starts a new instance instead of reusing a completed one with the old payload.
+ */
+export async function transcriptIndexInstanceId(version: TranscriptVersion, chapterMinutes: number): Promise<string> {
+  return `transcript-index-${await sha256(JSON.stringify([version.videoId, version.variant, version.contentHash,
+    PASSAGE_VERSION, CHAPTER_VERSION, chapterMinutes]))}`;
 }
 
 /**
@@ -35,20 +40,20 @@ export async function startTranscriptIndexBuild(env: Env, version: TranscriptVer
   if (transcriptRetrievalMode(env) === 'full') return 'disabled';
   const workflow = env.TRANSCRIPT_INDEX_WORKFLOW;
   if (!workflow || !/^[a-f0-9]{64}$/.test(version.contentHash)) return 'unavailable';
-  const id = await transcriptIndexInstanceId(version);
   const params: TranscriptIndexBuildParams = { videoId: version.videoId, variant: version.variant, contentHash: version.contentHash,
     source, chapterMinutes: chapterMinutes(env) };
+  const id = await transcriptIndexInstanceId(version, params.chapterMinutes);
   try {
-    await workflow.create({ id, params });
+    await withinEnqueueBudget(workflow.create({ id, params }));
     console.log(JSON.stringify({ event: 'transcript_index_enqueued', videoId: version.videoId, transcriptHash: version.contentHash, source }));
     return 'started';
   } catch (createError) {
     try {
       // A duplicate ID rejects create. Read the existing instance instead.
-      const instance = await workflow.get(id);
-      const { status } = await instance.status();
+      const instance = await withinEnqueueBudget(workflow.get(id));
+      const { status } = await withinEnqueueBudget(instance.status());
       if (status === 'errored' || status === 'terminated') {
-        await instance.restart();
+        await withinEnqueueBudget(instance.restart());
         console.log(JSON.stringify({ event: 'transcript_index_enqueued', videoId: version.videoId, transcriptHash: version.contentHash, source, restarted: true }));
         return 'restarted';
       }
@@ -59,6 +64,15 @@ export async function startTranscriptIndexBuild(env: Env, version: TranscriptVer
       return 'failed';
     }
   }
+}
+
+/** Enqueueing is optional work on the transcript publication and answering paths. */
+const ENQUEUE_TIMEOUT_MS = 2_000;
+function withinEnqueueBudget<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([work, new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Transcript index enqueue timed out.')), ENQUEUE_TIMEOUT_MS);
+  })]).finally(() => clearTimeout(timer));
 }
 
 interface StoredTranscript { segments: IndexedCaption[] }

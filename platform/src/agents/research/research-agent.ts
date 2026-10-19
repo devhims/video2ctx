@@ -177,7 +177,7 @@ export async function executeResearchRun(options: {
   const sessionVideoIds = [...new Set(options.session?.brief().assets.filter(asset => asset.kind === 'transcript').map(asset => asset.videoId) ?? [])];
   const chapterPreload = retrievalMode !== 'full' && !options.persistedRoute
     ? await preloadVideoChapters({ env: options.env, session: options.session, chapterMinutes: chapterMinutes(options.env),
-      videoIds: messageVideoIds.length ? messageVideoIds : sessionVideoIds })
+      videoIds: messageVideoIds.length ? messageVideoIds : sessionVideoIds, signal: options.signal })
     : undefined;
   const decision = await resolveCapabilityRoute({
     persisted: options.persistedRoute,
