@@ -7,10 +7,10 @@ Use the bundled executable for a progressive visual read. For requested frames, 
 Resolve `scripts/watch.mjs` relative to the parent skill directory containing `SKILL.md`, then extract the 11-character video ID from the supplied YouTube URL.
 
 ```bash
-node <skill-directory>/scripts/watch.mjs index --video-id 4vItmdk8F_M --transcript-only
+node <skill-directory>/scripts/watch.mjs index --video-id 4vItmdk8F_M
 ```
 
-Parse the JSON response and read `transcript.segments`. Use the requested topic, announcement, or spoken cue to find the relevant interval and choose candidate timestamps within it. This mode creates the workspace needed for frame extraction without fetching storyboards. Use `--granularity word` only when word-level timing materially changes the task.
+Parse the JSON response and read `transcript.segments`. Use the requested topic, announcement, or spoken cue to find the relevant interval and choose candidate timestamps within it. Indexing creates the workspace needed for frame extraction without fetching storyboards by default. Use `--granularity word` only when word-level timing materially changes the task. `--transcript-only` remains a compatibility alias for the default.
 
 For example, if a model announcement starts at 19:40 and its capability and cost discussion follows over the next 40 seconds, extract candidate frames in that interval. Inspect the frames to confirm the requested subject is visible; spoken cues do not establish which slide or camera view is on screen. Adjust nearby timestamps if needed. When the transcript locates the subject and the extracted frames satisfy the request, finish without storyboards.
 
@@ -18,10 +18,10 @@ If captions are unavailable or do not locate the requested visual, continue with
 
 ## Use storyboards when the transcript is insufficient
 
-Run the index without `--transcript-only` to fetch the transcript and storyboard contact sheets:
+Add `--with-storyboards` to fetch the transcript and storyboard contact sheets:
 
 ```bash
-node <skill-directory>/scripts/watch.mjs index --video-id 4vItmdk8F_M
+node <skill-directory>/scripts/watch.mjs index --video-id 4vItmdk8F_M --with-storyboards
 ```
 
 This creates a new workspace. Keep track of both workspaces if the transcript-only index succeeded, and clean each one after use. Parse the response and explicitly open every path in `storyboard.sheets` with the available image-viewing tool. Each sheet is a contact sheet. Calculate a tile timestamp with:

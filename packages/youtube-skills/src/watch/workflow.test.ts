@@ -211,28 +211,29 @@ describe('youtube-ctx visual workflow', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  test('uses segment timing by default and returns contact-sheet evidence', async () => {
-    const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test' });
+  test('includes contact-sheet evidence when storyboards are explicitly requested', async () => {
+    const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', withStoryboards: true });
 
     expect(mocks.getTranscript).toHaveBeenCalledWith({
       videoId: 'abcdefghijk', lang: undefined, granularity: 'segment',
     });
     expect(result).toMatchObject({ strategy: 'storyboard-transcript', transcript, storyboard });
+    expect(mocks.getStoryboard).toHaveBeenCalledOnce();
   });
 
   test('keeps a storyboard-only index usable when captions fail', async () => {
     mocks.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
 
-    const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test' });
+    const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', withStoryboards: true });
 
     expect(result.strategy).toBe('storyboard-only');
     expect(result.transcript).toBeUndefined();
     expect(result.meta).toMatchObject({ partial: true, warnings: ['Transcript: NOT_FOUND'] });
   });
 
-  test('locates frames from timed captions without fetching storyboards', async () => {
+  test('defaults to timed captions without fetching storyboards', async () => {
     const result = await getWatchIndex({
-      videoId: video.id, outputDir: '/tmp/watch-test', transcriptOnly: true,
+      videoId: video.id, outputDir: '/tmp/watch-test',
     });
 
     expect(result).toMatchObject({
@@ -240,6 +241,9 @@ describe('youtube-ctx visual workflow', () => {
     });
     expect(result.storyboard).toBeUndefined();
     expect(mocks.getStoryboard).not.toHaveBeenCalled();
+    expect(mocks.getTranscript).toHaveBeenCalledWith({
+      videoId: video.id, lang: undefined, granularity: 'segment',
+    });
   });
 
   test('preserves caption errors in transcript-only mode so callers can choose the fallback', async () => {
@@ -247,7 +251,7 @@ describe('youtube-ctx visual workflow', () => {
     mocks.getTranscript.mockRejectedValue(error);
 
     await expect(getWatchIndex({
-      videoId: video.id, outputDir: '/tmp/watch-test', transcriptOnly: true,
+      videoId: video.id, outputDir: '/tmp/watch-test',
     })).rejects.toBe(error);
     expect(mocks.getStoryboard).not.toHaveBeenCalled();
   });
@@ -257,7 +261,7 @@ describe('youtube-ctx visual workflow', () => {
     mocks.getStoryboard.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No storyboard.'));
 
     await expect(getWatchIndex({
-      videoId: 'abcdefghijk', outputDir: '/tmp/watch-test',
+      videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', withStoryboards: true,
     })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
 

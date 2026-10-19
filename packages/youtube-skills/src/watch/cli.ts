@@ -16,6 +16,7 @@ import { createRequestFetch, type FetchResource } from '../direct/cli';
 const HELP = `youtube-ctx visual
 
 Locate frames from a timed transcript, with optional storyboard inspection and exact-frame extraction.
+Indexing is transcript-only by default; add --with-storyboards when captions are insufficient.
 
 Usage:
   watch.mjs index --video-id <id> [options]
@@ -30,7 +31,8 @@ Index options:
   --video-id <id>                Required 11-character YouTube video ID
   --lang <code>                  Desired transcript language
   --granularity segment|word     Transcript timing detail; default segment
-  --transcript-only             Skip storyboard downloads; locate frames from captions first
+  --with-storyboards            Include storyboard contact sheets
+  --transcript-only             Compatibility alias for the default; conflicts with --with-storyboards
 
 Frame options:
   --workspace <path>             Workspace returned by index
@@ -90,7 +92,10 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
     const equals = argument.indexOf('=');
     const name = argument.slice(2, equals === -1 ? undefined : equals);
     if (!name || Object.hasOwn(flags, name)) throw new WatchCliInputError(`Invalid repeated option: --${name}.`);
-    if (name === 'pretty' || name === 'transcript-only') {
+    if (name === 'pretty' || name === 'transcript-only' || name === 'with-storyboards') {
+      if (equals !== -1 && name !== 'pretty') {
+        throw new WatchCliInputError(`--${name} does not accept a value.`);
+      }
       flags[name] = true;
       continue;
     }
@@ -102,7 +107,7 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
     if (equals === -1) index += 1;
   }
   const allowed: Record<Operation, string[]> = {
-    index: ['video-id', 'lang', 'granularity', 'transcript-only', 'proxy', 'pretty'],
+    index: ['video-id', 'lang', 'granularity', 'transcript-only', 'with-storyboards', 'proxy', 'pretty'],
     frames: ['workspace', 'timestamps', 'timestamps-ms', 'max-width', 'ffmpeg-path', 'proxy', 'pretty'],
     cleanup: ['workspace', 'pretty'],
   };
@@ -110,6 +115,9 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
     if (!allowed[operation as Operation].includes(name)) {
       throw new WatchCliInputError(`--${name} is not valid for ${operation}.`);
     }
+  }
+  if (flags['with-storyboards'] && flags['transcript-only']) {
+    throw new WatchCliInputError('Use either --with-storyboards or --transcript-only, not both.');
   }
   return { operation: operation as Operation, flags };
 }
@@ -242,7 +250,7 @@ export async function runWatchCli(
         outputDir: workspace,
         lang: stringFlag(flags, 'lang'),
         granularity: granularity as 'segment' | 'word' | undefined,
-        transcriptOnly: flags['transcript-only'] === true,
+        withStoryboards: flags['with-storyboards'] === true,
         fetch: fetchResource.fetch,
       });
       await writeFile(join(workspace, INDEX_FILE), JSON.stringify(result));

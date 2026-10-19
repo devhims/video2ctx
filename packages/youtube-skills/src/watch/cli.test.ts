@@ -54,7 +54,7 @@ describe('youtube-ctx visual CLI', () => {
     const fetchResource = fetchDependency();
 
     const code = await runWatchCli([
-      'index', '--video-id', 'abcdefghijk', '--lang', 'en', '--granularity', 'word',
+      'index', '--video-id', 'abcdefghijk', '--lang', 'en', '--granularity', 'word', '--with-storyboards',
     ], io, {}, {
       ...fetchResource,
       getWatchIndex,
@@ -63,7 +63,7 @@ describe('youtube-ctx visual CLI', () => {
 
     expect(code).toBe(0);
     expect(getWatchIndex).toHaveBeenCalledWith(expect.objectContaining({
-      videoId: 'abcdefghijk', outputDir: workspace, lang: 'en', granularity: 'word',
+      videoId: 'abcdefghijk', outputDir: workspace, lang: 'en', granularity: 'word', withStoryboards: true,
     }));
     const result = JSON.parse(io.output[0]!);
     expect(result.workspace).toBe(workspace);
@@ -74,7 +74,10 @@ describe('youtube-ctx visual CLI', () => {
     expect(fetchResource.close).toHaveBeenCalledOnce();
   });
 
-  test('creates a transcript-only workspace that can extract frames without a storyboard', async () => {
+  test.each([
+    ['by default', []],
+    ['with the compatibility alias', ['--transcript-only']],
+  ])('creates a transcript-only extraction workspace %s', async (_case, indexFlags) => {
     const io = capture();
     const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
     directories.push(workspace);
@@ -88,9 +91,9 @@ describe('youtube-ctx visual CLI', () => {
     }));
 
     expect(await runWatchCli([
-      'index', '--video-id', 'abcdefghijk', '--transcript-only',
+      'index', '--video-id', 'abcdefghijk', ...indexFlags,
     ], io, {}, { ...fetchDependency(), getWatchIndex, createWorkspace: async () => workspace })).toBe(0);
-    expect(getWatchIndex).toHaveBeenCalledWith(expect.objectContaining({ transcriptOnly: true }));
+    expect(getWatchIndex).toHaveBeenCalledWith(expect.objectContaining({ withStoryboards: false }));
     const index = JSON.parse(io.output[0]!);
     expect(index.storyboard).toBeUndefined();
 
@@ -110,10 +113,28 @@ describe('youtube-ctx visual CLI', () => {
     const getWatchIndex = vi.fn(async () => { throw new YouTubeClientError('NOT_FOUND', 'No captions.'); });
 
     expect(await runWatchCli([
-      'index', '--video-id', 'abcdefghijk', '--transcript-only',
+      'index', '--video-id', 'abcdefghijk',
     ], io, {}, { ...fetchDependency(), getWatchIndex, createWorkspace: async () => workspace })).toBe(1);
     expect(JSON.parse(io.errors[0]!).error).toMatchObject({ code: 'NOT_FOUND', message: 'No captions.' });
     await expect(access(workspace)).rejects.toBeDefined();
+  });
+
+  test.each([
+    ['--with-storyboards', '--transcript-only'],
+    ['--transcript-only', '--with-storyboards'],
+    ['--with-storyboards=false'],
+    ['--transcript-only=false'],
+  ])('rejects conflicting or valued index switches: %j', async (...indexFlags) => {
+    const io = capture();
+    const getWatchIndex = vi.fn();
+    const createFetch = vi.fn();
+
+    expect(await runWatchCli([
+      'index', '--video-id', 'abcdefghijk', ...indexFlags,
+    ], io, {}, { getWatchIndex, createFetch })).toBe(2);
+    expect(JSON.parse(io.errors[0]!).error.code).toBe('INVALID_INPUT');
+    expect(getWatchIndex).not.toHaveBeenCalled();
+    expect(createFetch).not.toHaveBeenCalled();
   });
 
   test('converts decimal seconds to milliseconds and returns partial frame results', async () => {

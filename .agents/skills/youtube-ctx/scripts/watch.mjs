@@ -22230,12 +22230,12 @@ async function getWatchIndex(options) {
       granularity: options.granularity ?? "segment",
       ...clientOptions
     }).then((value) => ({ value })).catch((error) => ({ error })),
-    options.transcriptOnly ? Promise.resolve({ value: void 0 }) : getStoryboard({
+    options.withStoryboards ? getStoryboard({
       videoId: options.videoId,
       outputDir,
       maxSheets,
       ...clientOptions
-    }).then((value) => ({ value })).catch((error) => ({ error }))
+    }).then((value) => ({ value })).catch((error) => ({ error })) : Promise.resolve({ value: void 0 })
   ]);
   const warnings = [];
   const transcript = "value" in transcriptResult ? transcriptResult.value : void 0;
@@ -22246,7 +22246,7 @@ async function getWatchIndex(options) {
   if ("error" in storyboardResult) warnings.push(safeWarning("Storyboard", storyboardResult.error));
   else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
   if (!transcript && !storyboard?.sheets.length) {
-    if (options.transcriptOnly && "error" in transcriptResult) throw transcriptResult.error;
+    if (!options.withStoryboards && "error" in transcriptResult) throw transcriptResult.error;
     throw new YouTubeClientError("UNAVAILABLE", "No transcript or storyboard index is available.");
   }
   const strategy = transcript && storyboard?.sheets.length ? "storyboard-transcript" : storyboard?.sheets.length ? "storyboard-only" : "transcript-only";
@@ -22504,6 +22504,7 @@ function createRequestFetch(proxyUrl) {
 var HELP = `youtube-ctx visual
 
 Locate frames from a timed transcript, with optional storyboard inspection and exact-frame extraction.
+Indexing is transcript-only by default; add --with-storyboards when captions are insufficient.
 
 Usage:
   watch.mjs index --video-id <id> [options]
@@ -22518,7 +22519,8 @@ Index options:
   --video-id <id>                Required 11-character YouTube video ID
   --lang <code>                  Desired transcript language
   --granularity segment|word     Transcript timing detail; default segment
-  --transcript-only             Skip storyboard downloads; locate frames from captions first
+  --with-storyboards            Include storyboard contact sheets
+  --transcript-only             Compatibility alias for the default; conflicts with --with-storyboards
 
 Frame options:
   --workspace <path>             Workspace returned by index
@@ -22551,7 +22553,10 @@ function parseArguments(argv) {
     const equals = argument.indexOf("=");
     const name = argument.slice(2, equals === -1 ? void 0 : equals);
     if (!name || Object.hasOwn(flags, name)) throw new WatchCliInputError(`Invalid repeated option: --${name}.`);
-    if (name === "pretty" || name === "transcript-only") {
+    if (name === "pretty" || name === "transcript-only" || name === "with-storyboards") {
+      if (equals !== -1 && name !== "pretty") {
+        throw new WatchCliInputError(`--${name} does not accept a value.`);
+      }
       flags[name] = true;
       continue;
     }
@@ -22563,7 +22568,7 @@ function parseArguments(argv) {
     if (equals === -1) index += 1;
   }
   const allowed = {
-    index: ["video-id", "lang", "granularity", "transcript-only", "proxy", "pretty"],
+    index: ["video-id", "lang", "granularity", "transcript-only", "with-storyboards", "proxy", "pretty"],
     frames: ["workspace", "timestamps", "timestamps-ms", "max-width", "ffmpeg-path", "proxy", "pretty"],
     cleanup: ["workspace", "pretty"]
   };
@@ -22571,6 +22576,9 @@ function parseArguments(argv) {
     if (!allowed[operation].includes(name)) {
       throw new WatchCliInputError(`--${name} is not valid for ${operation}.`);
     }
+  }
+  if (flags["with-storyboards"] && flags["transcript-only"]) {
+    throw new WatchCliInputError("Use either --with-storyboards or --transcript-only, not both.");
   }
   return { operation, flags };
 }
@@ -22691,7 +22699,7 @@ async function runWatchCli(argv, io, environment = process.env, dependencies = {
         outputDir: workspace2,
         lang: stringFlag(flags, "lang"),
         granularity,
-        transcriptOnly: flags["transcript-only"] === true,
+        withStoryboards: flags["with-storyboards"] === true,
         fetch: fetchResource.fetch
       });
       await writeFile2(join3(workspace2, INDEX_FILE), JSON.stringify(result2));

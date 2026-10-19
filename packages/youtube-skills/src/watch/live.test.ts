@@ -13,7 +13,7 @@ describeLive('youtube-ctx private visual workflow', () => {
     const outputDir = await mkdtemp(join(tmpdir(), 'youtube-ctx-live-'));
     try {
       const index = await getWatchIndex({
-        videoId: '4vItmdk8F_M', outputDir, maxStoryboardSheets: 1,
+        videoId: '4vItmdk8F_M', outputDir, withStoryboards: true, maxStoryboardSheets: 1,
       });
       const frames = await extractFrames({
         videoId: '4vItmdk8F_M', outputDir, timestampsMs: [30_000, 686_000, 1_000_000],
