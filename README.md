@@ -64,10 +64,10 @@ The CLI and skills are complementary. The CLI owns browser authentication, hoste
 
 The collection contains two skills with separate responsibilities:
 
-- **`youtube-ctx`** handles one-off public YouTube context directly from the user's machine. Its direct branch covers search, transcripts, metadata, comments, channels, and playlists. Its visual branch scans a storyboard/transcript index first and extracts focused frames with local FFmpeg only when the requested detail requires them.
+- **`youtube-ctx`** handles one-off public YouTube context directly from the user's machine. Its direct branch covers search, transcripts, metadata, comments, channels, and playlists. Its visual branch starts with timed captions to locate candidate frames. Storyboards are downloaded with `--with-storyboards` only when captions are insufficient. Local FFmpeg extracts exact frames when requested or needed to verify visual details.
 - **`video2ctx-platform`** handles authenticated production and cloud-backed work. Its data branch covers managed search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, account and usage requests, and automatic fallback when direct local access fails. Its monitoring branch covers recurring checks, schedules, alerts, and notification preferences.
 
-The local skill carries both Node executables. If local public YouTube access is all you need, install it without the hosted CLI. The `youtube-ctx` storyboard scan needs no additional dependency; install FFmpeg only for exact-frame verification:
+The local skill carries both Node executables. If local public YouTube access is all you need, install it without the hosted CLI. Timed-caption indexing and optional storyboard scans need no FFmpeg; install it only for exact-frame extraction:
 
 ```bash
 npx skills add devhims/video2ctx

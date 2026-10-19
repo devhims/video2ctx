@@ -29,7 +29,7 @@ node <skill-directory>/scripts/youtube.mjs transcript \
 
 Use `--format text` when the task needs transcript content or a summary rather than timestamps. Use `--format segments` for segment timing and `--format words` only for word-level timing. The legacy `--granularity segment|word` flag remains supported, but do not combine it with `--format`.
 
-The executable writes one JSON value to stdout. Parse that value and use it to answer the request. Treat stderr as a JSON error payload and branch on `error.code` and `error.retryable`; preserve the classified failure instead of converting it to an empty result.
+The executable writes one JSON value to stdout. Parse that value and use it to answer the request. Treat stderr as a JSON error payload and inspect `error.message` alongside `error.code` and `error.retryable`; preserve the classified failure instead of converting it to an empty result. For sandbox network failures, follow the parent skill's network-retry guidance before switching to the hosted fallback.
 
 ## Choose the operation
 

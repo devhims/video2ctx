@@ -3,7 +3,9 @@ title: "Use video2ctx from agents"
 description: "Give an agent authenticated, source-linked video context with a published skill."
 ---
 
-Start personal, low-to-moderate public YouTube requests with `youtube-ctx` on the user's machine. It routes text and metadata work to direct extraction, and visual questions to a transcript/storyboard scan that uses local FFmpeg only when exact-frame verification is necessary. Use `video2ctx-platform` for production or cloud-backed search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, account data, and recurring workflows; continue through its data branch automatically if direct access fails. The platform skill uses the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
+Start personal, low-to-moderate public YouTube requests with `youtube-ctx` on the user's machine. It routes text and metadata work to direct extraction. For visual questions, indexing starts with timed captions to locate candidate frames. Storyboards are downloaded with `--with-storyboards` only when captions are insufficient. Local FFmpeg extracts exact frames when requested or needed to verify visual details.
+
+Use `video2ctx-platform` for production or cloud-backed search, transcripts, video and channel metadata, caption tracks, comments, end screens, playlists, account data, and recurring workflows; continue through its data branch automatically if direct access fails after any applicable sandbox network retry. The platform skill uses the public `@video2ctx/cli` package for browser-based device login and production API calls without placing a secret in the prompt.
 
 <Steps>
   <Step title="Discover narrowly">Search for videos or resolve the relevant resource in your own application before requesting deeper datasets.</Step>
