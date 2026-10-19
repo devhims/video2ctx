@@ -15,7 +15,7 @@ import { createRequestFetch, type FetchResource } from '../direct/cli';
 
 const HELP = `youtube-ctx visual
 
-Inspect a YouTube storyboard and transcript, then optionally extract exact timestamped frames.
+Locate frames from a timed transcript, with optional storyboard inspection and exact-frame extraction.
 
 Usage:
   watch.mjs index --video-id <id> [options]
@@ -30,6 +30,7 @@ Index options:
   --video-id <id>                Required 11-character YouTube video ID
   --lang <code>                  Desired transcript language
   --granularity segment|word     Transcript timing detail; default segment
+  --transcript-only             Skip storyboard downloads; locate frames from captions first
 
 Frame options:
   --workspace <path>             Workspace returned by index
@@ -89,7 +90,7 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
     const equals = argument.indexOf('=');
     const name = argument.slice(2, equals === -1 ? undefined : equals);
     if (!name || Object.hasOwn(flags, name)) throw new WatchCliInputError(`Invalid repeated option: --${name}.`);
-    if (name === 'pretty') {
+    if (name === 'pretty' || name === 'transcript-only') {
       flags[name] = true;
       continue;
     }
@@ -101,7 +102,7 @@ function parseArguments(argv: string[]): { operation: Operation; flags: Flags } 
     if (equals === -1) index += 1;
   }
   const allowed: Record<Operation, string[]> = {
-    index: ['video-id', 'lang', 'granularity', 'proxy', 'pretty'],
+    index: ['video-id', 'lang', 'granularity', 'transcript-only', 'proxy', 'pretty'],
     frames: ['workspace', 'timestamps', 'timestamps-ms', 'max-width', 'ffmpeg-path', 'proxy', 'pretty'],
     cleanup: ['workspace', 'pretty'],
   };
@@ -241,6 +242,7 @@ export async function runWatchCli(
         outputDir: workspace,
         lang: stringFlag(flags, 'lang'),
         granularity: granularity as 'segment' | 'word' | undefined,
+        transcriptOnly: flags['transcript-only'] === true,
         fetch: fetchResource.fetch,
       });
       await writeFile(join(workspace, INDEX_FILE), JSON.stringify(result));

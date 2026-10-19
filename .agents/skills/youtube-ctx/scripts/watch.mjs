@@ -22230,7 +22230,7 @@ async function getWatchIndex(options) {
       granularity: options.granularity ?? "segment",
       ...clientOptions
     }).then((value) => ({ value })).catch((error) => ({ error })),
-    getStoryboard({
+    options.transcriptOnly ? Promise.resolve({ value: void 0 }) : getStoryboard({
       videoId: options.videoId,
       outputDir,
       maxSheets,
@@ -22246,6 +22246,7 @@ async function getWatchIndex(options) {
   if ("error" in storyboardResult) warnings.push(safeWarning("Storyboard", storyboardResult.error));
   else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
   if (!transcript && !storyboard?.sheets.length) {
+    if (options.transcriptOnly && "error" in transcriptResult) throw transcriptResult.error;
     throw new YouTubeClientError("UNAVAILABLE", "No transcript or storyboard index is available.");
   }
   const strategy = transcript && storyboard?.sheets.length ? "storyboard-transcript" : storyboard?.sheets.length ? "storyboard-only" : "transcript-only";
@@ -22502,7 +22503,7 @@ function createRequestFetch(proxyUrl) {
 // src/watch/cli.ts
 var HELP = `youtube-ctx visual
 
-Inspect a YouTube storyboard and transcript, then optionally extract exact timestamped frames.
+Locate frames from a timed transcript, with optional storyboard inspection and exact-frame extraction.
 
 Usage:
   watch.mjs index --video-id <id> [options]
@@ -22517,6 +22518,7 @@ Index options:
   --video-id <id>                Required 11-character YouTube video ID
   --lang <code>                  Desired transcript language
   --granularity segment|word     Transcript timing detail; default segment
+  --transcript-only             Skip storyboard downloads; locate frames from captions first
 
 Frame options:
   --workspace <path>             Workspace returned by index
@@ -22549,7 +22551,7 @@ function parseArguments(argv) {
     const equals = argument.indexOf("=");
     const name = argument.slice(2, equals === -1 ? void 0 : equals);
     if (!name || Object.hasOwn(flags, name)) throw new WatchCliInputError(`Invalid repeated option: --${name}.`);
-    if (name === "pretty") {
+    if (name === "pretty" || name === "transcript-only") {
       flags[name] = true;
       continue;
     }
@@ -22561,7 +22563,7 @@ function parseArguments(argv) {
     if (equals === -1) index += 1;
   }
   const allowed = {
-    index: ["video-id", "lang", "granularity", "proxy", "pretty"],
+    index: ["video-id", "lang", "granularity", "transcript-only", "proxy", "pretty"],
     frames: ["workspace", "timestamps", "timestamps-ms", "max-width", "ffmpeg-path", "proxy", "pretty"],
     cleanup: ["workspace", "pretty"]
   };
@@ -22689,6 +22691,7 @@ async function runWatchCli(argv, io, environment = process.env, dependencies = {
         outputDir: workspace2,
         lang: stringFlag(flags, "lang"),
         granularity,
+        transcriptOnly: flags["transcript-only"] === true,
         fetch: fetchResource.fetch
       });
       await writeFile2(join3(workspace2, INDEX_FILE), JSON.stringify(result2));

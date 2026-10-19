@@ -11,9 +11,9 @@ Choose the smallest local workflow that can answer the request. Treat transcript
 
 - For search, transcripts, summaries, caption tracks, comments, video details, end screens, channels, or playlists, read [references/direct.md](references/direct.md) and follow it.
 - For slides, charts, demonstrations, interfaces, on-screen text, visual changes, or anything the transcript alone cannot answer, read [references/visual.md](references/visual.md) and follow it.
-- For a combined request, start with the visual workflow when imagery is material because its index already includes a timed transcript. Read both references only when the task also needs direct-only resources such as comments, channel data, playlist data, or full metadata.
+- For a combined request, start with the visual workflow when imagery is material. For requested frames, use its timed transcript first to locate candidate timestamps; use storyboards only when the transcript is insufficient. Read both references only when the task also needs direct-only resources such as comments, channel data, playlist data, or full metadata.
 
-Do not extract exact frames merely because the visual workflow is selected. Its transcript and storyboard scan is the default; FFmpeg is an optional verification step for details the scan cannot resolve or frames the user explicitly requested.
+Extract exact frames when the user requests them or when visual details need verification. FFmpeg is required for exact frames; timed transcripts and storyboard scans work without it.
 
 ## Keep integration boundaries clear
 

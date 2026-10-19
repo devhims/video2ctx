@@ -74,6 +74,48 @@ describe('youtube-ctx visual CLI', () => {
     expect(fetchResource.close).toHaveBeenCalledOnce();
   });
 
+  test('creates a transcript-only workspace that can extract frames without a storyboard', async () => {
+    const io = capture();
+    const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
+    directories.push(workspace);
+    const getWatchIndex = vi.fn(async () => ({
+      videoId: 'abcdefghijk', strategy: 'transcript-only',
+      transcript: { segments: [{ startMs: 1_250, endMs: 2_000, text: 'Introducing the model.' }] },
+      meta: { partial: false, warnings: [] },
+    }));
+    const extractFrames = vi.fn(async () => ({
+      frames: [{ timestampMs: 1_250, path: join(workspace, 'frame.jpg') }], failures: [],
+    }));
+
+    expect(await runWatchCli([
+      'index', '--video-id', 'abcdefghijk', '--transcript-only',
+    ], io, {}, { ...fetchDependency(), getWatchIndex, createWorkspace: async () => workspace })).toBe(0);
+    expect(getWatchIndex).toHaveBeenCalledWith(expect.objectContaining({ transcriptOnly: true }));
+    const index = JSON.parse(io.output[0]!);
+    expect(index.storyboard).toBeUndefined();
+
+    const frameIo = capture();
+    expect(await runWatchCli([
+      'frames', '--workspace', index.workspace, '--timestamps-ms', String(index.transcript.segments[0].startMs),
+    ], frameIo, {}, { ...fetchDependency(), extractFrames })).toBe(0);
+    expect(extractFrames).toHaveBeenCalledWith(expect.objectContaining({
+      videoId: 'abcdefghijk', timestampsMs: [1_250], outputDir: await realpath(workspace),
+    }));
+  });
+
+  test('cleans an incomplete transcript-only workspace when captions fail', async () => {
+    const io = capture();
+    const workspace = await mkdtemp(join(tmpdir(), 'youtube-ctx-'));
+    directories.push(workspace);
+    const getWatchIndex = vi.fn(async () => { throw new YouTubeClientError('NOT_FOUND', 'No captions.'); });
+
+    expect(await runWatchCli([
+      'index', '--video-id', 'abcdefghijk', '--transcript-only',
+    ], io, {}, { ...fetchDependency(), getWatchIndex, createWorkspace: async () => workspace })).toBe(1);
+    expect(JSON.parse(io.errors[0]!).error).toMatchObject({ code: 'NOT_FOUND', message: 'No captions.' });
+    await expect(access(workspace)).rejects.toBeDefined();
+  });
+
   test('converts decimal seconds to milliseconds and returns partial frame results', async () => {
     const io = capture();
     const workspace = await markedWorkspace();

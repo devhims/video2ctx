@@ -230,6 +230,28 @@ describe('youtube-ctx visual workflow', () => {
     expect(result.meta).toMatchObject({ partial: true, warnings: ['Transcript: NOT_FOUND'] });
   });
 
+  test('locates frames from timed captions without fetching storyboards', async () => {
+    const result = await getWatchIndex({
+      videoId: video.id, outputDir: '/tmp/watch-test', transcriptOnly: true,
+    });
+
+    expect(result).toMatchObject({
+      strategy: 'transcript-only', transcript, meta: { partial: false, warnings: [] },
+    });
+    expect(result.storyboard).toBeUndefined();
+    expect(mocks.getStoryboard).not.toHaveBeenCalled();
+  });
+
+  test('preserves caption errors in transcript-only mode so callers can choose the fallback', async () => {
+    const error = new YouTubeClientError('NOT_FOUND', 'No captions.');
+    mocks.getTranscript.mockRejectedValue(error);
+
+    await expect(getWatchIndex({
+      videoId: video.id, outputDir: '/tmp/watch-test', transcriptOnly: true,
+    })).rejects.toBe(error);
+    expect(mocks.getStoryboard).not.toHaveBeenCalled();
+  });
+
   test('rejects only when neither transcript nor storyboard is usable', async () => {
     mocks.getTranscript.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No captions.'));
     mocks.getStoryboard.mockRejectedValue(new YouTubeClientError('NOT_FOUND', 'No storyboard.'));

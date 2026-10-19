@@ -93,7 +93,7 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
       granularity: options.granularity ?? 'segment',
       ...clientOptions,
     }).then((value) => ({ value })).catch((error: unknown) => ({ error })),
-    getStoryboard({
+    options.transcriptOnly ? Promise.resolve({ value: undefined }) : getStoryboard({
       videoId: options.videoId,
       outputDir,
       maxSheets,
@@ -114,6 +114,7 @@ export async function getWatchIndex(options: WatchIndexRequest): Promise<WatchIn
   else if (storyboard?.meta.partial) warnings.push(...storyboard.meta.warnings);
 
   if (!transcript && !storyboard?.sheets.length) {
+    if (options.transcriptOnly && 'error' in transcriptResult) throw transcriptResult.error;
     throw new YouTubeClientError('UNAVAILABLE', 'No transcript or storyboard index is available.');
   }
   const strategy = transcript && storyboard?.sheets.length

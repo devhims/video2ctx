@@ -13,6 +13,8 @@ export interface WatchIndexRequest extends YouTubeClientOptions {
   outputDir: string;
   lang?: string;
   granularity?: 'segment' | 'word';
+  /** Skip storyboard downloads when locating frames from spoken cues. */
+  transcriptOnly?: boolean;
   maxStoryboardSheets?: number;
 }
 
