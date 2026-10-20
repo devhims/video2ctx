@@ -3,6 +3,7 @@ import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore } from './session-evidence';
+import { firstMatchSpan, matchMarkers, type MatchMarkers } from './search-highlight';
 import { withVisualProvenanceWarning } from './model-evidence';
 
 export interface HistoryEntry {
@@ -14,7 +15,10 @@ export interface HistoryEntry {
   createdAt: number;
 }
 
-type SearchRow = { id: string; owner: string; content: string; metadata: string };
+type SearchRow = { id: string; owner: string; content: string; metadata: string; marked?: string };
+/** A matched row with the markers its highlight() used. */
+type MatchedRow = SearchRow & { markers?: MatchMarkers };
+
 
 /** The only dependency on the experimental SDK. agents is pinned in package.json. */
 export class SessionSearch {
@@ -155,21 +159,33 @@ export class SessionSearch {
       JSON.stringify(metadata),
     );
   }
-  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): SearchRow[] {
+  private matches(scope: 'memory' | 'evidence', query: string, excludedOwners: readonly string[] = []): MatchedRow[] {
     // Literal tokens joined with AND support nonadjacent terms without exposing FTS operators.
     const tokens = queryTokens(query);
     if (!tokens.length) return [];
     // Exclusions apply before the limit, so excluded rows can never fill the top 20.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
+    // A comment packet repeats entries of its saved page. Once that page is indexed, its rows
+    // represent every comment, so the packet copies must not take result slots before the limit.
+    // Packets whose page is not indexed, such as unreadable legacy pages, stay searchable.
+    // The bare packet_id comparison uses its primary key rather than scanning every packet per row.
+    const duplicates = scope === 'evidence' ? ` AND NOT EXISTS (SELECT 1 FROM session_packets p
+      WHERE owner LIKE 'packet:%' AND p.packet_id = substr(owner, 8) AND json_extract(p.packet_json,'$.kind')='youtube_comments'
+      AND EXISTS (SELECT 1 FROM json_each(p.versions_json) v WHERE v.value IN (SELECT version FROM session_search_assets)))` : '';
+    const markers = matchMarkers();
     return this.sql
       .exec<SearchRow>(
-        `SELECT id,owner,content,metadata FROM session_context_fts
-      WHERE session_context_fts MATCH ? AND scope=?${excluded} ORDER BY rank LIMIT 20`,
+        // highlight() reports where the tokenizer itself matched, so passages never re-derive matching.
+        `SELECT id,owner,content,metadata,highlight(session_context_fts, 3, ?, ?) AS marked FROM session_context_fts
+      WHERE session_context_fts MATCH ? AND scope=?${excluded}${duplicates} ORDER BY rank LIMIT 20`,
+        markers.start,
+        markers.end,
         tokens.map((t) => `"${t}"`).join(' AND '),
         scope,
         ...excludedOwners,
       )
-      .toArray();
+      .toArray()
+      .map((row) => ({ ...row, markers }));
   }
   searchMemory(query: string) {
     return this.matches('memory', query).flatMap((row) => {
@@ -186,12 +202,14 @@ export class SessionSearch {
     // Long transcripts indexed before the length limit existed are left out of the query itself.
     // Their index rows stay, so raising the limit makes them searchable again without reindexing.
     const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
+    // One parsed page and asset record per version for this search; availability is rechecked per hit.
+    const pages = store.commentPageCache();
     for (const row of this.matches('evidence', query, excluded)) {
       if (seen.has(row.id)) continue;
       const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string; kind?: string };
       if (metadata.kind === 'comments' && metadata.version) {
         // A comment hit is shown around the matched terms, which may lie past one excerpt's length.
-        const found = store.has(metadata.version) ? (await store.readSavedComment(metadata.version, metadata.offset ?? 0, queryTokens(query))).packets : [];
+        const found = store.has(metadata.version) ? (await store.readSavedComment(metadata.version, metadata.offset ?? 0, firstMatchSpan(row), pages)).packets : [];
         const excerpt = found[0]?.excerpts[0];
         if (found[0] && excerpt) {
           packets.push({ ...found[0], packetId: `search:${excerpt.id}`, excerpts: [excerpt], artifacts: [] });

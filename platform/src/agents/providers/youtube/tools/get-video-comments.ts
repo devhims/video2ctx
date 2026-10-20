@@ -131,7 +131,8 @@ export function executeGetVideoComments(
           ...(remaining > 0 ? [{
             code: 'COMMENT_PAGE_REMAINING',
             message: nextOffset !== undefined
-              ? `This read holds comments ${slice.start + 1} to ${slice.start + slice.page.length} of ${value.comments.length} on the saved provider page. Read offset ${nextOffset} with pageVersion ${savedVersion} and the same continuation for the rest; do not describe unread comments.`
+              // How to read the rest is stated once, in the packet's collection coverage and nextOffset.
+              ? `This read holds comments ${slice.start + 1} to ${slice.start + slice.page.length} of ${value.comments.length} on the saved provider page. The rest were not read in this packet.`
               : `This read holds comments ${slice.start + 1} to ${slice.start + slice.page.length} of ${value.comments.length} on the provider page. The page was not saved, so the other ${remaining} cannot be read without fetching it again; do not describe them.`,
           }] : []),
         ],
@@ -164,24 +165,43 @@ export function summarizeComment(comment: Comment): string {
 }
 
 /**
- * A bounded passage of one comment. With search terms, a body longer than one excerpt is
- * shown around the earliest matching term, so a match in its tail stays visible.
+ * A bounded passage of one comment. A body longer than one excerpt is shown around a match,
+ * so a match in its tail stays visible. `rawMatch` is the matched span in the unmodified
+ * comment text, as reported by session search; without it the earliest literal occurrence
+ * of a term is used, the same substring rule a filtered saved read applies.
  * `start` is set only when the passage does not begin at the start of the body.
  */
-export function commentPassage(comment: Comment, terms: readonly string[] = []): { text: string; start?: number } {
+export function commentPassage(comment: Comment, terms: readonly string[] = [], rawMatch?: { at: number; end: number }): { text: string; start?: number } {
   const attribution = commentAttribution(comment);
   const body = normalizeCommentText(comment.text ?? '');
   const budget = COMMENT_EXCERPT_CHARACTERS - attribution.length - 1;
   if (body.length <= budget) return { text: body ? `${body}\n${attribution}` : attribution };
-  const lower = body.toLowerCase();
-  const match = terms.map(term => ({ term, at: lower.indexOf(term.toLowerCase()) }))
-    .filter(item => item.term && item.at >= 0).sort((a, b) => a.at - b.at)[0];
-  if (!match || match.at + match.term.length <= budget - 1)
+  const match = rawMatch ? normalizedMatch(comment.text ?? '', rawMatch) : literalMatch(body, terms);
+  if (!match || match.end <= budget - 1)
     return { text: `${body.slice(0, budget - 1)}…\n${attribution}` };
   // Start just before the match, so a later shortening of the passage keeps the match.
   const start = Math.max(0, match.at - PASSAGE_LEAD_CHARACTERS);
   const end = Math.min(body.length, start + budget - 2);
   return { text: `…${body.slice(start, end)}${end < body.length ? '…' : ''}\n${attribution}`, start };
+}
+
+function literalMatch(body: string, terms: readonly string[]): { at: number; end: number } | undefined {
+  const lower = body.toLowerCase();
+  return terms.map(term => ({ at: lower.indexOf(term.toLowerCase()), end: lower.indexOf(term.toLowerCase()) + term.length }))
+    .filter((item, index) => terms[index] && item.at >= 0).sort((a, b) => a.at - b.at)[0];
+}
+
+/**
+ * A raw-text span translated into the whitespace-normalized body, keeping the whole matched
+ * token. Normalizing only a prefix can differ from the full body by one trimmed space, which
+ * the passage lead absorbs; the end is extended by that space so the token is never cut.
+ * A span past the body, such as an author-only match, has no body position.
+ */
+function normalizedMatch(raw: string, span: { at: number; end: number }): { at: number; end: number } | undefined {
+  if (span.at < 0 || span.at >= raw.length || span.end <= span.at) return undefined;
+  const at = normalizeCommentText(raw.slice(0, span.at)).length;
+  const end = normalizeCommentText(raw.slice(0, Math.min(span.end, raw.length))).length + 1;
+  return { at, end: Math.max(end, at + 1) };
 }
 
 /** Full searchable comment content: the whole body and the author, never a shortened excerpt. */

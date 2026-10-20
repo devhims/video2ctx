@@ -5,7 +5,7 @@ import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/t
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
-import type { Transcript } from 'all-things-youtube';
+import type { Comment, Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
 import { remember } from './fixtures/memory';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
@@ -14,6 +14,7 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
+import { summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
 
 function visualGate() {
   let release!: () => void;
@@ -1148,4 +1149,180 @@ test('versioned shared observations keep resolvable references, and search keeps
       expect(hit.excerpts).toHaveLength(1);
       expect(hit.warnings.map(warning => warning.code)).toContain('LEGACY_VISUAL_PROVENANCE');
     }
+  }));
+
+function commentPage(count: number, text: (index: number) => string) {
+  return { videoId: id, totalCount: count, replyContinuations: [], meta: transcript().meta,
+    comments: Array.from({ length: count }, (_, index) => ({ id: `c${index + 1}`, author: { name: `Viewer ${index + 1}`, thumbnails: [] },
+      text: text(index), isPinned: false, isHearted: false, replies: [] })) };
+}
+
+/**
+ * The first eight-comment packet a get_video_comments read saves for this page. Excerpts are
+ * bounded by the production summary, as the tool does; the saved page keeps the full text.
+ */
+function firstCommentPacket(version: string, page: ReturnType<typeof commentPage>): EvidencePacket {
+  const sourceId = `youtube:${id}:comments`;
+  return { packetId: 'packet:run:comments', kind: 'youtube_comments', assetVersions: [version],
+    sources: [{ id: sourceId, provider: 'youtube', kind: 'comments', videoId: id }],
+    excerpts: page.comments.slice(0, 8).map((comment, index) => ({ id: `comment:${comment.id}:${index}`, sourceId,
+      text: summarizeComment(comment as unknown as Comment) })),
+    artifacts: [{ type: 'youtube_comments', data: {} }], warnings: [], usage: [] };
+}
+
+test('comment search returns distinct comments, not packet copies of an indexed page', async () =>
+  within('comment-search-dedup', async (store, reopen) => {
+    const page = commentPage(30, index => `Brush review ${index + 1}. ${'Detail. '.repeat(500)}`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    store.savePacket(firstCommentPacket(version, page));
+    const found = await reopen().search.searchEvidence(reopen(), 'brush review');
+    expect(found.packets).toHaveLength(20);
+    const positions = found.packets.map(packet => packet.excerpts[0]!.id.match(new RegExp(`^evidence:${version}:(\\d+)`))?.[1]);
+    expect(positions.every(Boolean)).toBe(true);
+    expect(new Set(positions).size).toBe(20);
+    // Packet citations still resolve for answers that cited them.
+    expect(reopen().evidenceForCitations(['comment:c1:0'])).toHaveLength(1);
+  }));
+
+test('a legacy comment packet stays searchable when its saved page cannot be indexed', async () =>
+  within('comment-search-legacy', async (store, reopen, sql) => {
+    const page = commentPage(10, index => `Legacy opinion ${index + 1}`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    store.savePacket(firstCommentPacket(version, page));
+    // The page blob is unreadable, so the page is never indexed and only the packet rows remain.
+    const blob = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', version).one().blob_key;
+    await env.RESEARCH.delete(blob);
+    const found = await reopen().search.searchEvidence(reopen(), 'legacy opinion');
+    expect(found.packets.map(packet => packet.excerpts[0]!.id).sort()).toEqual(
+      Array.from({ length: 8 }, (_, index) => `comment:c${index + 1}:${index}`).sort());
+  }));
+
+test('one search reads and parses each saved comment page once', async () =>
+  within('comment-search-cache', async (store) => {
+    const page = commentPage(20, index => `Palette note ${index + 1}`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    await sessionProvider(p, store).comments(id);
+    await store.ensureSearchIndexed();
+    const read = vi.spyOn(store, 'read');
+    const brief = vi.spyOn(store, 'brief');
+    const found = await store.search.searchEvidence(store, 'palette note');
+    expect(found.packets).toHaveLength(20);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(brief).toHaveBeenCalledTimes(1);
+    // A new search after deletion never serves the page from an earlier cache.
+    const version = found.packets[0]!.assetVersions![0]!;
+    await store.delete(version);
+    expect((await store.search.searchEvidence(store, 'palette note')).packets).toEqual([]);
+  }));
+
+test('deleting an unrelated asset during a comment search keeps its other hits', async () =>
+  within('comment-search-unrelated-delete', async (store) => {
+    const p = provider();
+    p.comments = vi.fn(async (_id: string, options?: { continuation?: string }) => ({ cacheStatus: 'miss' as const,
+      value: commentPage(4, index => options?.continuation ? `Unrelated remark ${index + 1}` : `Easel tip ${index + 1}`) }));
+    const session = sessionProvider(p, store);
+    await session.comments(id);
+    const other = (await session.comments(id, { continuation: 'next' })).assetVersions![0]!;
+    await store.ensureSearchIndexed();
+    const read = store.read.bind(store);
+    vi.spyOn(store, 'read').mockImplementationOnce(async version => {
+      await store.delete(other);
+      return read(version);
+    });
+    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toHaveLength(4);
+  }));
+
+test('repeated comment searches showing the same passages reuse their saved rows', async () =>
+  within('comment-search-saved-rows', async (store, _reopen, sql) => {
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(6, index => `Canvas grain opinion ${index + 1}`) }));
+    await sessionProvider(p, store).comments(id);
+    const rows = () => sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM session_packets WHERE packet_id LIKE 'session:%'").one().count;
+    expect((await store.search.searchEvidence(store, 'canvas')).packets).toHaveLength(6);
+    const after = rows();
+    expect((await store.search.searchEvidence(store, 'grain opinion')).packets).toHaveLength(6);
+    expect(rows()).toBe(after);
+  }));
+
+test('an unfiltered saved comment read names its page version for continuation', async () =>
+  within('comment-saved-read-version', async (store) => {
+    const page = commentPage(14, index => `Opinion ${index + 1}`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const first = await store.readEvidence(version);
+    expect(first.packets[0]!.artifacts[0]!.data.collection).toMatchObject({ nextPageOffset: 8, pageVersion: version });
+    const filtered = await store.readEvidence(version, 0, 'opinion 1');
+    expect(filtered.packets[0]!.artifacts[0]!.data.collection).toMatchObject({ matchesOnly: true });
+    expect(filtered.packets[0]!.artifacts[0]!.data.collection).not.toHaveProperty('pageVersion');
+  }));
+
+// Durable Object storage is real SQLite, so these cases check the actual unicode61 tokenizer.
+test.each([
+  ['a circled digit is not the digit', '① ', ' 1 marks the late match.', '1'],
+  ['a ligature is not its letters', 'ﬃ ', ' ffi marks the late match.', 'ffi'],
+  ['an accented Greek letter is not folded', 'ό ', ' ο marks the late match.', 'ο'],
+  ['a letter with two diacritics is not folded', 'ộ ', ' o marks the late match.', 'o'],
+  ['a term inside a longer word is not a match', 'start ', ' art marks the late match.', 'art'],
+  ['a single diacritic is folded', 'cafeteria ', ' café marks the late match.', 'cafe'],
+])('search passages follow the real tokenizer: %s', async (_name, early, late, query) =>
+  within(`comment-search-tokenizer-${query}`, async (store) => {
+    const page = commentPage(1, () => `${early}${'Padding words here. '.repeat(160)}${late}`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    await sessionProvider(p, store).comments(id);
+    const found = await store.search.searchEvidence(store, query);
+    expect(found.packets).toHaveLength(1);
+    expect(found.packets[0]!.excerpts[0]!.text).toContain(late.trim());
+    expect(found.packets[0]!.excerpts[0]!.text).toContain('Author: Viewer 1');
+  }));
+
+test('an author-only comment match shows the comment start with its author', async () =>
+  within('comment-search-author-only', async (store) => {
+    const page = commentPage(1, () => `Opening line. ${'Padding words here. '.repeat(160)}`);
+    page.comments[0]!.author.name = 'Janine';
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    await sessionProvider(p, store).comments(id);
+    const excerpt = (await store.search.searchEvidence(store, 'Janine')).packets[0]!.excerpts[0]!;
+    expect(excerpt.text.startsWith('Opening line.')).toBe(true);
+    expect(excerpt.text).toContain('Author: Janine');
+  }));
+
+test('control characters and marker-like text in a comment cannot move the reported match', async () =>
+  within('comment-search-marker-collision', async (store) => {
+    const early = 'Start \u0001early\u0002 [[match-start:00000000-0000-0000-0000-000000000000]] note. ';
+    const page = commentPage(1, () => `${early}${'Padding words here. '.repeat(160)} the real art is patience.`);
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const excerpt = (await store.search.searchEvidence(store, 'art')).packets[0]!.excerpts[0]!;
+    expect(excerpt.text).toContain('the real art is patience.');
+    // The passage is an unmodified slice of the saved comment, and its ID records where it starts.
+    const body = excerpt.text.split('\nAuthor: ')[0]!.replace(/^…/, '').replace(/…$/, '');
+    expect(page.comments[0]!.text.replace(/[ \t]+/g, ' ')).toContain(body);
+    const start = Number(excerpt.id.split(':').at(-1));
+    expect(excerpt.id.startsWith(`evidence:${version}:0:`)).toBe(true);
+    expect(page.comments[0]!.text.replace(/[ \t]+/g, ' ').slice(start).startsWith(body)).toBe(true);
+    // The early control characters remain in the saved page.
+    expect((await store.readEvidence(version)).packets[0]!.excerpts[0]!.text).toContain('\u0001early\u0002');
+  }));
+
+// Author "Reviewer" leaves a 1,983-character body budget. Real SQLite reports the span of
+// a token placed on every offset around that cutoff; the passage must contain all of it.
+test.each(Array.from({ length: 11 }, (_, index) => 1975 + index))('a matched token at offset %i near the excerpt cutoff stays whole', async at =>
+  within(`comment-search-cutoff-${at}`, async (store) => {
+    const page = commentPage(1, () => `${'w'.repeat(at - 1)} needle ${'tail '.repeat(100)}`);
+    page.comments[0]!.author.name = 'Reviewer';
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
+    await sessionProvider(p, store).comments(id);
+    const excerpt = (await store.search.searchEvidence(store, 'needle')).packets[0]!.excerpts[0]!;
+    expect(excerpt.text).toMatch(/\bneedle\b/);
+    expect(excerpt.text).toContain('Author: Reviewer');
   }));

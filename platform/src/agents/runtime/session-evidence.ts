@@ -9,6 +9,7 @@ import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video
 import { commentPageSlice, commentPassage, commentSearchText } from '../providers/youtube/tools/get-video-comments';
 import { COMMENT_READ_LIMIT, collectionRetrieval } from './collection-coverage';
 import { withVisualProvenanceWarning } from './model-evidence';
+import type { MatchSpan } from './search-highlight';
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
@@ -554,23 +555,47 @@ export class SessionEvidenceStore implements SessionAccess {
         savedPageCount: comments.length,
         ...(query ? { matchingCount: positions.length } : {}),
         ...(slice.nextOffset !== undefined ? { nextOffset: slice.nextOffset } : {}),
-        // Counts describe the matching entries when a query filters the saved page.
+        // With a query, counts and offsets count matching entries, not saved-page positions.
+        // Without one they are page positions, readable from this exact version.
         collection: collectionRetrieval({ fetchedCount: positions.length, retainedCount: slice.page.length,
-          continuationAccepted: true, pageOffset: slice.start, nextPageOffset: slice.nextOffset }),
+          continuationAccepted: true, pageOffset: slice.start, nextPageOffset: slice.nextOffset,
+          ...(needle ? { matchesOnly: true } : { pageVersion: slice.nextOffset !== undefined ? asset.version : undefined }) }),
       });
     this.savePacket(packet);
     return { packets: [packet], nextOffset: slice.nextOffset };
   }
-  /** One saved comment for a search hit, shown around the earliest matching term. */
-  async readSavedComment(version: string, position: number, terms: readonly string[]) {
-    const asset = this.brief().assets.find((item) => item.version === version);
-    if (asset?.kind !== 'comments') throw new Error('Session asset is unavailable or deleted.');
-    const comment = (await this.savedCommentPage(asset))[position];
+  /**
+   * A per-search cache of saved comment pages. Versions are content-addressed and never
+   * change, so a parsed page stays valid for as long as its own version exists.
+   */
+  commentPageCache(): CommentPageCache {
+    return { pages: new Map() };
+  }
+  /**
+   * One saved comment for a search hit, shown around the span search reported as `rawMatch`.
+   * A hit whose page was deleted or could not be read returns no packet; deleting any other
+   * asset or memory does not affect it.
+   */
+  async readSavedComment(version: string, position: number, rawMatch: MatchSpan | undefined, cache?: CommentPageCache) {
+    const loaded = cache?.pages.get(version) ?? this.loadCommentPage(version);
+    cache?.pages.set(version, loaded);
+    const page = await loaded;
+    // A read interrupted by a deletion elsewhere returns nothing; let a later hit retry it.
+    if (!page) cache?.pages.delete(version);
+    // Never serve a page from memory after its own version is deleted.
+    if (!page || !this.has(version)) return { packets: [] };
+    const comment = page.comments[position];
     if (!comment) return { packets: [] };
-    const packet = await this.commentPacket(asset, [{ comment, position }], terms,
-      `session:${version}:comment:${position}:${await sha256(terms.join(' '))}`, { savedPageCount: 1 });
+    const packet = await this.commentPacket(page.asset, [{ comment, position, rawMatch }], [], undefined, { savedPageCount: 1 }, page.current);
     this.savePacket(packet);
     return { packets: [packet] };
+  }
+  private async loadCommentPage(version: string): Promise<CommentPage | undefined> {
+    const asset = this.brief().assets.find((item) => item.version === version);
+    if (asset?.kind !== 'comments') return undefined;
+    const value = await this.read(version);
+    const comments = value === null ? undefined : savedComments(value);
+    return comments && { asset, comments, current: this.currentVersions().has(version) };
   }
   private async savedCommentPage(asset: SessionAsset): Promise<Comment[]> {
     const value = await this.read(asset.version);
@@ -578,23 +603,28 @@ export class SessionEvidenceStore implements SessionAccess {
     if (!comments) throw new Error('Session asset is unavailable or deleted.');
     return comments;
   }
-  private async commentPacket(asset: SessionAsset, entries: Array<{ comment: Comment; position: number }>, terms: readonly string[],
-    packetId: string, data: Record<string, unknown>) {
+  /**
+   * Without `packetId`, the packet is named after its single excerpt, so repeated searches
+   * that show the same passage replace one saved row instead of adding another.
+   */
+  private async commentPacket(asset: SessionAsset, entries: Array<{ comment: Comment; position: number; rawMatch?: MatchSpan }>, terms: readonly string[],
+    packetId: string | undefined, data: Record<string, unknown>, current = this.currentVersions().has(asset.version)) {
     const sourceId = `youtube:${asset.videoId}:comments`;
+    // Version-specific IDs: a refreshed page can reuse comment IDs with different text.
+    // A passage that does not start at the body start has its own ID, so one ID never names two texts.
+    const excerpts = entries.map(({ comment, position, rawMatch }) => {
+      const passage = commentPassage(comment, terms, rawMatch);
+      return { id: `evidence:${asset.version}:${position}${passage.start === undefined ? '' : `:${passage.start}`}`, sourceId, text: passage.text };
+    });
     return evidencePacketSchema.parse({
-      packetId,
+      packetId: packetId ?? `session:${excerpts[0]!.id}`,
       kind: 'youtube_comments',
       assetVersions: [asset.version],
       sources: [{ id: sourceId, provider: 'youtube', kind: 'comments', videoId: asset.videoId,
         url: `https://www.youtube.com/watch?v=${asset.videoId}` }],
-      // Version-specific IDs: a refreshed page can reuse comment IDs with different text.
-      // A passage that does not start at the body start has its own ID, so one ID never names two texts.
-      excerpts: entries.map(({ comment, position }) => {
-        const passage = commentPassage(comment, terms);
-        return { id: `evidence:${asset.version}:${position}${passage.start === undefined ? '' : `:${passage.start}`}`, sourceId, text: passage.text };
-      }),
+      excerpts,
       artifacts: [{ type: 'youtube_comments', title: `Saved comments for ${asset.videoId}`, data: { returnedCount: entries.length, ...data } }],
-      warnings: this.currentVersions().has(asset.version) ? [] : [{ code: 'SUPERSEDED_SESSION_EVIDENCE',
+      warnings: current ? [] : [{ code: 'SUPERSEDED_SESSION_EVIDENCE',
         message: 'This evidence refers to an older stored comment page. Use the current version for current facts.' }],
       usage: [],
     });
@@ -934,6 +964,12 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
           : shared);
   }
   return result;
+}
+
+interface CommentPage { asset: SessionAsset; comments: Comment[]; current: boolean }
+/** Saved comment pages loaded during one search, by version. */
+export interface CommentPageCache {
+  pages: Map<string, Promise<CommentPage | undefined>>;
 }
 
 /** Comments of a saved provider page, or undefined for an unexpected payload. */

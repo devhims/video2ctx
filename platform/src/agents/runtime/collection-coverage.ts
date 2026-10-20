@@ -55,6 +55,8 @@ export const collectionRetrievalSchema = z.object({
   nextPageOffset: z.number().int().nonnegative().optional(),
   /** Saved page version that later offsets must read. */
   pageVersion: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Counts and offsets refer to entries matching a saved-page query, not provider-page positions. */
+  matchesOnly: z.boolean().optional(),
 });
 
 export type CollectionRetrieval = z.infer<typeof collectionRetrievalSchema>;
@@ -70,6 +72,7 @@ export function collectionRetrieval(options: {
   pageOffset?: number;
   nextPageOffset?: number;
   pageVersion?: string;
+  matchesOnly?: boolean;
 }): CollectionRetrieval {
   return {
     version: 1,
@@ -83,6 +86,7 @@ export function collectionRetrieval(options: {
     ...(options.pageOffset ? { pageOffset: options.pageOffset } : {}),
     ...(options.nextPageOffset !== undefined ? { nextPageOffset: options.nextPageOffset } : {}),
     ...(options.pageVersion ? { pageVersion: options.pageVersion } : {}),
+    ...(options.matchesOnly ? { matchesOnly: true } : {}),
   };
 }
 
@@ -144,10 +148,17 @@ export function modelCollection(options: {
   if (!recorded) {
     sentences.push('The provider page size before the agent item limit was not recorded for this packet, so it is unknown whether the page had more entries.');
   } else {
-    const parts = [`The provider page had ${recorded.fetchedCount} ${plural(recorded.fetchedCount, 'entry', 'entries')}.`];
+    const parts = [recorded.matchesOnly
+      ? `${recorded.fetchedCount} saved ${plural(recorded.fetchedCount, 'entry matches', 'entries match')} the query.`
+      : `The provider page had ${recorded.fetchedCount} ${plural(recorded.fetchedCount, 'entry', 'entries')}.`];
     if (excluded) parts.push(`${excluded} ${plural(excluded, 'was', 'were')} excluded by agent policy.`);
-    if (before) parts.push(`This packet starts at page entry ${before + 1}; ${before} earlier ${plural(before, 'entry is', 'entries are')} in a read with a smaller offset.`);
-    if (notRetained) parts.push(pageable
+    if (before) parts.push(recorded.matchesOnly
+      ? `This packet starts at match ${before + 1}; ${before} earlier ${plural(before, 'match is', 'matches are')} in a read with a smaller offset.`
+      : `This packet starts at page entry ${before + 1}; ${before} earlier ${plural(before, 'entry is', 'entries are')} in a read with a smaller offset.`);
+    if (notRetained && recorded.matchesOnly) parts.push(pageable
+      ? `${notRetained} later ${plural(notRetained, 'match is', 'matches are')} not in this packet. Repeat this saved read with the same query at offset ${recorded.nextPageOffset}; offsets count matches, not page positions. Do not describe them before reading.`
+      : `${notRetained} more ${plural(notRetained, 'match was', 'matches were')} not retained and ${plural(notRetained, 'is', 'are')} not available in this evidence.`);
+    else if (notRetained) parts.push(pageable
       ? `${notRetained} later ${plural(notRetained, 'entry', 'entries')} on this saved page ${plural(notRetained, 'is', 'are')} not in this packet. Read offset ${recorded.nextPageOffset}${recorded.pageVersion ? ` with pageVersion ${recorded.pageVersion}` : ''} and the same continuation to load them; do not describe them before reading.`
       : `${notRetained} more ${plural(notRetained, 'was', 'were')} not retained because of the agent item limit and ${plural(notRetained, 'is', 'are')} not available in this evidence.`);
     sentences.push(parts.join(' '));

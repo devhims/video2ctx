@@ -57,27 +57,21 @@ export function visualAnalysisExcerpts<F>(options: {
     excerpts.push({ id, sourceId: options.sourceId, text: text(times), startMs: times[0]!, endMs: times.at(-1)! });
     if (shared) sharedObservations.push({ excerptId: id, framesMs: times });
   };
-  options.findings.forEach((finding, index) => {
+  // Ordinary multi-frame findings are combined and attributed to no frame; shared findings
+  // are visible in each listed frame and recorded as such. Single frames read the same in both.
+  const add = (finding: { observation: string; frames: readonly F[] }, prefix: string, shared: boolean) => {
     const frames = distinctFrames(finding.frames);
     frames.forEach(options.assertAvailable);
     if (frames.length === 1) {
       const time = options.timeOf(frames[0]!);
-      excerpts.push({ id: `${options.idPrefix}:${index}:${key(frames[0]!)}`, sourceId: options.sourceId,
+      excerpts.push({ id: `${prefix}:${key(frames[0]!)}`, sourceId: options.sourceId,
         text: visualObservationText(options.kind, finding.observation, time), startMs: time, endMs: time });
     } else if (frames.length > 1) {
-      span(`${options.idPrefix}:${index}:combined`, frames, times => combinedVisualObservationText(options.kind, finding.observation, times), false);
+      span(shared ? prefix : `${prefix}:combined`, frames, times => (shared ? sharedVisualObservationText : combinedVisualObservationText)(
+        options.kind, finding.observation, times), shared);
     }
-  });
-  options.sharedFindings.forEach((finding, index) => {
-    const frames = distinctFrames(finding.frames);
-    frames.forEach(options.assertAvailable);
-    if (frames.length === 1) {
-      const time = options.timeOf(frames[0]!);
-      excerpts.push({ id: `${options.idPrefix}:shared:${index}:${key(frames[0]!)}`, sourceId: options.sourceId,
-        text: visualObservationText(options.kind, finding.observation, time), startMs: time, endMs: time });
-    } else if (frames.length > 1) {
-      span(`${options.idPrefix}:shared:${index}`, frames, times => sharedVisualObservationText(options.kind, finding.observation, times), true);
-    }
-  });
+  };
+  options.findings.forEach((finding, index) => add(finding, `${options.idPrefix}:${index}`, false));
+  options.sharedFindings.forEach((finding, index) => add(finding, `${options.idPrefix}:shared:${index}`, true));
   return { excerpts, sharedObservations };
 }

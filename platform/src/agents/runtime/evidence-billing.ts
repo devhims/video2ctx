@@ -304,12 +304,6 @@ export class RunEvidenceLedger {
     });
   }
 
-  /**
-   * Admit saved or inherited evidence before a model receives it. Each operation-sized
-   * unit with an asset not yet delivered in this run charges its cached price once.
-   * Units are grouped per call, so one read of several frames of a video is one frames
-   * charge. New units that do not fit the remaining reserve are withheld, never free.
-   */
   /** Records one admitted delivery for disclosure. Never affects pricing. */
   private recordOperation(runId: string, packetId: string, source: Exclude<EvidenceChargeSource, 'tool'>, now: number) {
     this.sql.exec('INSERT OR IGNORE INTO agent_evidence_packet_operations VALUES (?, ?, ?, ?)', runId, packetId, source, now);
@@ -326,6 +320,12 @@ export class RunEvidenceLedger {
     return operations;
   }
 
+  /**
+   * Admit saved or inherited evidence before a model receives it. Each operation-sized
+   * unit with an asset not yet delivered in this run charges its cached price once.
+   * Units are grouped per call, so one read of several frames of a video is one frames
+   * charge. New units that do not fit the remaining reserve are withheld, never free.
+   */
   deliver(
     runId: string,
     source: Exclude<EvidenceChargeSource, 'tool'>,
