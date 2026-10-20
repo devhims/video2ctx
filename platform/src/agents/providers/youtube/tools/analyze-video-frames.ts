@@ -57,10 +57,11 @@ export function executeAnalyzeVideoFrames(
       assertAvailable();
       packet.assetVersions = versions;
       packet.artifacts[0]!.data.sessionReused = true;
-      if (assets.some(({ asset }) => !asset.current)) packet.warnings.push({
+      if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
         code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored frame version.',
       });
-      return packet;
+      packet.warnings = packet.warnings.slice(0, 50);
+      return evidencePacketSchema.parse(packet);
     },
   });
 }

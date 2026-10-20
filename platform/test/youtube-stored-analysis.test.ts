@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
-import type { EvidencePacket } from '../src/agents/contracts';
+import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
 import { createCapabilityToolSet } from '../src/agents/providers/youtube/tool-library';
 import { executeGetVideoTranscriptForModel } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
@@ -444,4 +444,22 @@ it.each(['frames', 'storyboard', 'inspection-transcript'] as const)('%s wires re
   expect(recovered.excerpts.length).toBeGreaterThan(0);
   expect(model).toHaveBeenCalledTimes(2);
   expect(kind === 'frames' ? provider.frames : kind === 'storyboard' ? provider.storyboard : provider.transcript).toHaveBeenCalledTimes(1);
+});
+
+
+it.each(['frame', 'transcript'] as const)('caps final saved %s warnings and retains the superseded warning', async kind => {
+  const { context, store, versions } = setup();
+  const version = versions[kind];
+  store.saved.get(version)!.asset.current = false;
+  // Boundary contract test: current production analysts emit fewer warnings.
+  const warnings = Array.from({ length: kind === 'frame' ? 49 : 50 }, (_, index) => `Warning ${index}`);
+  if (kind === 'frame') context.analyzeFrames = async () => ({ findings: [], warnings });
+  else if (context.transcriptPolicy.mode === 'contextual_analysis') {
+    const original = context.transcriptPolicy.analyze;
+    context.transcriptPolicy.analyze = async input => ({ ...await original(input), warnings });
+  }
+  const packet = await analyze(kind, version, context);
+  expect(packet.warnings).toHaveLength(50);
+  expect(packet.warnings[0]?.code).toBe('SUPERSEDED_SESSION_EVIDENCE');
+  expect(evidencePacketSchema.parse(JSON.parse(JSON.stringify(packet))).warnings).toHaveLength(50);
 });

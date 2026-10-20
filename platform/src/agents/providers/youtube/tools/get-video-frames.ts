@@ -1,3 +1,4 @@
+import { withPreviewCleanup } from '../../../runtime/preview-lifecycle';
 import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
 import { analyzeFrameEvidence, executeAnalyzeVideoFrames } from './analyze-video-frames';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
@@ -36,7 +37,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   const parsed = getVideoFramesInputSchema.parse(input);
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
-  return context.executeEvidenceTool({
+  return withPreviewCleanup(context, context => context.executeEvidenceTool({
     retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
       () => executeAnalyzeVideoFrames({ assetVersions: packet.assetVersions!, focus: parsed.analysis! }, context, `${toolCallId}:analyze`)) : undefined,
     input: parsed,
@@ -108,5 +109,5 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       context.signal.throwIfAborted();
       return finish(packet);
     }, { runId: context.runId, toolCallId }),
-  });
+  }));
 }

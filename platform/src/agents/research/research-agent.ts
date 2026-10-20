@@ -157,6 +157,7 @@ async function executeResearchRunWithAssets(options: {
   executeEvidenceTool: (execution: EvidenceToolExecution) => Promise<EvidencePacket>;
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
   saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
+  discardPreviews?: AgentToolContext['discardPreviews'];
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
 }, assetCache?: RunAssetCache): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
@@ -284,6 +285,7 @@ async function executeResearchRunWithAssets(options: {
     saveFramePreviews: options.saveFramePreviews,
     onExtractionDiagnostic: options.onExtractionDiagnostic,
     saveStoryboardPreviews: options.saveStoryboardPreviews,
+    discardPreviews: options.discardPreviews,
     analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
       runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,

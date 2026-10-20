@@ -11,7 +11,7 @@ import { sessionCatalog } from './runtime/session-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
-import { saveFramePreviews } from './runtime/frame-previews';
+import { framePreviewKey, saveFramePreviews } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -713,6 +713,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         saveStoryboardPreviews: (storyboard, signal, verifiedImages) => {
           this.assertRunActive(runId);
           return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal, this.env.VIDEO_ASSETS, verifiedImages);
+        },
+        discardPreviews: async previews => {
+          this.sessionStore.queueCleanup(previews.map(preview => framePreviewKey(preview.collectionId, preview.assetId)));
+          try { await this.sessionStore.cleanup(); }
+          catch (error) {
+            // Keep the durable queue for retry without replacing the tool's error.
+            console.error({ event: 'agent_preview_cleanup_failure', runId, ...safeErrorLog(error) });
+          }
         },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });

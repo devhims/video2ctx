@@ -92,10 +92,11 @@ export async function executeAnalyzeVideoTranscript(
         const packet = await analyzeTranscriptEvidence(transcript, parsed.focus, context, toolCallId, semanticKey);
         assertAvailable();
         packet.assetVersions = [parsed.assetVersion];
-        if (!asset.current) packet.warnings.push({
+        if (!asset.current) packet.warnings.unshift({
           code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored transcript version.',
         });
-        return packet;
+        packet.warnings = packet.warnings.slice(0, 50);
+        return evidencePacketSchema.parse(packet);
       },
     });
   } catch (error) {

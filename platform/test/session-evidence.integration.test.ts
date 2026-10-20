@@ -1116,3 +1116,20 @@ test.each(['transcript', 'frame', 'storyboard_sheet'] as const)(
     }
   },
 );
+
+
+test('failed preview cleanup stays queued across store reconstruction and removes only private objects', async () =>
+  within('preview-cleanup-retry', async (store, reopen, sql) => {
+    const key = 'agent-frames/cleanup-owner/abandoned.jpg';
+    const retained = 'agent-frames/cleanup-owner/published.jpg';
+    await env.RESEARCH.put(key, new Uint8Array([255, 216, 255, 217]));
+    await env.RESEARCH.put(retained, 'retained');
+    store.queueCleanup([key]);
+    const failing = new SessionEvidenceStore(sql, { delete: async () => { throw new Error('R2 unavailable'); } } as unknown as R2Bucket, 'test-session/preview-cleanup-retry/');
+    await expect(failing.cleanup()).rejects.toThrow('R2 unavailable');
+    expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toEqual([{ blob_key: key }]);
+    await reopen().cleanup();
+    expect(await env.RESEARCH.head(key)).toBeNull();
+    expect(await env.RESEARCH.head(retained)).not.toBeNull();
+    expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toEqual([]);
+  }));

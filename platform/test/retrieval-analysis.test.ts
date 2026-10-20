@@ -1,5 +1,6 @@
-import { packetFramePreviews } from '../src/agents/runtime/frame-previews';
-import { packetStoryboardPreviews } from '../src/agents/runtime/storyboard-previews';
+import { withPreviewCleanup } from '../src/agents/runtime/preview-lifecycle';
+import { framePreviewKey, saveFramePreviews, packetFramePreviews } from '../src/agents/runtime/frame-previews';
+import { saveStoryboardPreviews, packetStoryboardPreviews } from '../src/agents/runtime/storyboard-previews';
 import { z } from 'zod';
 import { describe, expect, test, vi } from 'vitest';
 import type { Transcript } from 'all-things-youtube';
@@ -266,4 +267,89 @@ describe('previews overlap inference after persistence', () => {
     await rejected;
     expect(analysisDrained).toBe(true);
   });
+});
+
+describe.each(['frames', 'storyboard'] as const)('%s preview ownership', kind => {
+  test.each(['deleted', 'changed', 'cancelled', 'publication-failed', 'success', 'analysis-failed'] as const)(
+    'cleans up only abandoned previews after %s', async outcome => {
+    const { ctx, controller } = context();
+    const inference = deferred(), started = deferred(), previewSaved = deferred();
+    let generation = 0;
+    ctx.session = { brief: () => ({ assets: [], memories: [] }), generation: () => generation,
+      has: () => true, evidence: () => [], readEvidence: async () => ({ packets: [] }) };
+    const objects = new Map<string, unknown>([['existing-preview', 'keep']]);
+    // Exercise raw JPEG copies and private pointers through the real preview savers.
+    const bucket = { put: async (key: string, body: unknown) => { objects.set(key, body); },
+      delete: async (keys: string[]) => { keys.forEach(key => objects.delete(key)); } } as unknown as R2Bucket;
+    const shared = kind === 'storyboard' ? { head: async () => ({}) } as unknown as R2Bucket : undefined;
+    ctx.saveFramePreviews = async (...args) => {
+      const result = await saveFramePreviews(bucket, 'owner', args[0], args[1], shared, args[2]);
+      previewSaved.resolve(); return result;
+    };
+    ctx.saveStoryboardPreviews = async (...args) => {
+      const result = await saveStoryboardPreviews(bucket, 'owner', args[0], args[1], shared, args[2]);
+      previewSaved.resolve(); return result;
+    };
+    ctx.discardPreviews = vi.fn<NonNullable<AgentToolContext['discardPreviews']>>(async previews => bucket.delete(previews.map(preview => framePreviewKey(preview.collectionId, preview.assetId))));
+    const result = <T>(value: T) => ({ value, cacheStatus: 'miss' as const, assetVersions: [version] });
+    ctx.provider.frames = async (_r, _s, _l, _d, ready) => {
+      ready?.(frames);
+      return result(outcome === 'changed' ? { ...frames, frames: [{ ...frames.frames[0]!, imageBase64: '/9j/AA==' }] } : frames);
+    };
+    ctx.provider.storyboard = async (_id, _t, _o, _d, ready) => {
+      ready?.(storyboard);
+      return result(outcome === 'changed' ? { ...storyboard, sheets: [{ ...storyboard.sheets[0]!, imageBase64: '/9j/AA==' }] } : storyboard);
+    };
+    const analyze = async () => {
+      started.resolve(); await inference.promise;
+      if (outcome === 'analysis-failed') throw new Error('Analyst unavailable');
+      return { findings: [], warnings: [] };
+    };
+    ctx.analyzeFrames = ctx.analyzeStoryboard = analyze;
+    ctx.executeEvidenceTool = async execution => {
+      const packet = await execution.execute();
+      if (outcome === 'publication-failed') throw new Error('Packet commit failed');
+      return packet;
+    };
+    const work = kind === 'frames' ? executeGetVideoFrames({ videoId, timestampsMs: [1000], analysis: 'Read chart' }, ctx, 'cleanup')
+      : executeGetVideoStoryboard({ videoId, analysis: 'Read chart' }, ctx, 'cleanup');
+    const settled = Promise.allSettled([work]);
+    await Promise.all([started.promise, previewSaved.promise]);
+    expect(objects.size).toBe(2); // The new preview exists while inference is pending.
+    if (outcome === 'deleted') generation++;
+    if (outcome === 'cancelled') controller.abort(new Error('cancelled'));
+    inference.resolve();
+    const [finished] = await settled;
+    if (outcome === 'success' || outcome === 'analysis-failed') {
+      expect(finished!.status).toBe('fulfilled');
+      expect(objects.size).toBe(2);
+      expect(ctx.discardPreviews).not.toHaveBeenCalled();
+    } else {
+      expect(finished!.status).toBe('rejected');
+      expect([...objects.keys()]).toEqual(['existing-preview']);
+      expect(ctx.discardPreviews).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+
+test('preview rollback drains late writes before removing them', async () => {
+  const { ctx } = context();
+  const writing = deferred(), release = deferred();
+  const preview = { assetId: 'b'.repeat(64), collectionId: 'c'.repeat(64), timestampMs: 1000, width: 200, height: 100 };
+  let stored = false;
+  ctx.saveFramePreviews = async () => { writing.resolve(); await release.promise; stored = true; return [preview]; };
+  ctx.discardPreviews = vi.fn(async () => { expect(stored).toBe(true); stored = false; });
+  const work = withPreviewCleanup(ctx, async inner => {
+    void inner.saveFramePreviews!(frames, ctx.signal);
+    await writing.promise;
+    throw new Error('Tool deadline expired');
+  });
+  const rejected = expect(work).rejects.toThrow('Tool deadline expired');
+  await writing.promise;
+  expect(ctx.discardPreviews).not.toHaveBeenCalled();
+  release.resolve();
+  await rejected;
+  expect(stored).toBe(false);
+  expect(ctx.discardPreviews).toHaveBeenCalledWith([preview]);
 });

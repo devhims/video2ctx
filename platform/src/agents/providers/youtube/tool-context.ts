@@ -67,6 +67,8 @@ export interface AgentToolContext {
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
   saveStoryboardPreviews?: SaveStoryboardPreviews;
+  /** Remove unpublished previews, durably queuing failed storage deletions for retry. */
+  discardPreviews?(previews: readonly import('../../runtime/frame-previews').FramePreview[]): Promise<void>;
   /** Qualify likely unit errors in place and add notes, such as unverified figures. Never rejects the answer. */
   reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): { blocks: { text: string; evidenceIds: string[] }[]; warnings: FinalizeAnswerInput['warnings'] };
   runId: string;

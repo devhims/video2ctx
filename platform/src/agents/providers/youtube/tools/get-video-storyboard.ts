@@ -1,3 +1,4 @@
+import { withPreviewCleanup } from '../../../runtime/preview-lifecycle';
 import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
 import { analyzeStoryboardEvidence, executeAnalyzeVideoStoryboard } from './analyze-video-storyboard';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
@@ -52,7 +53,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
   const parsed = requested.maxSheets === undefined && !requested.sheetIndexes && !requested.timestampsMs
     ? getVideoStoryboardInputSchema.parse({ ...requested, maxSheets: DEFAULT_STORYBOARD_SHEETS })
     : requested;
-  return context.executeEvidenceTool({
+  return withPreviewCleanup(context, context => context.executeEvidenceTool({
     retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
       () => executeAnalyzeVideoStoryboard({ assetVersions: packet.assetVersions!.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')), focus: parsed.analysis! }, context, `${toolCallId}:analyze`)) : undefined,
     input: parsed,
@@ -69,7 +70,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
         signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId, deadlineAt),
         'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
     }, { runId: context.runId, toolCallId }),
-  });
+  }));
 }
 
 /** A selection retrieves its manifest and images in a single provider request. */

@@ -91,7 +91,13 @@ available, run ID and tool-call ID; raw provider errors are not added to the pac
 
 Preview saving starts after source persistence and runs alongside any unfinished
 inference. The tool waits for both before returning. Preview failure preserves
-successful findings with a warning; cancellation still drains inference.
+successful findings with a warning; cancellation still drains inference. Each call
+tracks its newly written previews until the final evidence packet is published.
+If deletion, cancellation, changed content or publication failure rejects the call,
+cleanup drains outstanding preview writes and removes its unpublished private
+objects. Failed deletions remain in the session cleanup queue for retry on restart.
+Shared catalog images are retained. Saved analysis validates its final warning list
+after adding the superseded-version warning and keeps at most 50 warnings.
 
 The retrieval’s existing maximum-price credit hold covers the combined operation.
 Its single returned usage entry settles through the existing ledger; no nested
