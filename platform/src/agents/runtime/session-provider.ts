@@ -1,3 +1,4 @@
+import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
 import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
@@ -15,8 +16,16 @@ export function sessionProvider(
   store: SessionEvidenceStore,
   refresh = false,
   onRetrieved?: (claim: string, version: string) => void,
+  assetCache?: RunAssetCache,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
+  const remember = (result: CachedResult<unknown>, generation: number) => {
+    const version = result.assetVersions?.[0];
+    // Only the exact single-asset payload returned by successful persistence or
+    // a verified session read may seed analysis. Never cache an uncommitted result.
+    if (version && result.assetVersions!.length === 1 && generation === store.generation() && store.has(version))
+      assetCache?.remember(store, version, generation, result.value);
+  };
   // Resource keys this run retrieved from the provider, with the claim of that paid
   // retrieval. A later hit or join served only by such keys names their claims; the run
   // ledger prices it against them, never against "fetched earlier" alone.
@@ -40,6 +49,7 @@ export function sessionProvider(
   return {
     ...provider,
     transcript: async (id, language, options, diagnostic) => {
+      const generation = store.generation();
       const key = transcriptKey(id, language);
       // A saved over-limit transcript is rejected from its stored metadata, before any blob read.
       const saved = store.transcriptOverLimitForKey(key);
@@ -95,6 +105,7 @@ export function sessionProvider(
           );
         refreshed.add(resolvedKey);
       }
+      remember(result, generation);
       return claimed(result, [key]);
     },
     comments: async (id, options = {}) => {
@@ -223,6 +234,7 @@ export function sessionProvider(
             }
             if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
             options.signal?.throwIfAborted();
+            for (const result of results) remember(result, generation);
             const partial = results.length < indexes.length || results.some((r) => r.value.meta.partial);
             const claim = claimed({ value: null, cacheStatus: 'hit', sessionReused: missing.length === 0, providerClaim: storyboardClaim },
               indexes.map(index => `storyboard:${id}:${manifestVersion}:${index}`));
@@ -324,6 +336,7 @@ export function sessionProvider(
               frameTimingsMs.sessionPin = Date.now() - pinStarted;
             }
             signal?.throwIfAborted();
+            for (const result of hits) remember(result, generation);
             return {
               verifiedImages: hits.flatMap(result => result.verifiedImages ?? []),
               frameTimingsMs,

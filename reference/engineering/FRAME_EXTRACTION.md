@@ -42,8 +42,9 @@ creates request-local frame receipts tied to the bucket, immutable catalog refer
 and exact frame payload. Session attachment can consume a matching receipt without
 downloading the newly saved images again. Receipts cannot be serialized or supplied
 by tool input. Missing, mismatched, cache-hit, and stale receipts use the existing
-catalog verification path. Later session reads still load the immutable stored
-version. Session generation checks, cancellation, and preview revocation are retained.
+catalog verification path. Later session reads load the immutable stored
+version. Within the same research run, analysis can reuse the bounded cache of published
+frame payloads while checking current session ownership and deletion generation. Session generation checks, cancellation, and preview revocation are retained.
 Preview references can resolve either a shared JPEG or the JPEG inside a frame
 object. They remain private, individually revocable R2 records. Roll back decoding
 with the backend flag while retaining this compatible reader; older Worker builds

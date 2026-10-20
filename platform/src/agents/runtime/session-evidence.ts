@@ -1,3 +1,4 @@
+import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -62,7 +63,7 @@ export interface SessionAccess {
   /** Synchronous SQLite checks for deletion while analysis is in flight. */
   generation?(): number;
   has?(version: string): boolean;
-  readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
+  readAsset?(version: string, cache?: RunAssetCache): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(version?: string): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
@@ -328,13 +329,18 @@ export class SessionEvidenceStore implements SessionAccess {
     const row = this.sql.exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key).toArray()[0];
     return row ? this.transcriptOverLimit(row.version) : undefined;
   }
-  async readAsset(version: string) {
+  async readAsset(version: string, cache?: RunAssetCache) {
+    const generation = this.generation();
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) return null;
     const tooLong = this.overLimit(asset);
     if (tooLong) throw tooLong;
+    const cached = cache?.get(this, version, generation);
+    if (cached !== undefined) return { asset, value: cached };
     const value = await this.read(version);
-    return value === null ? null : { asset, value };
+    if (value === null || generation !== this.generation() || !this.has(version)) return null;
+    cache?.remember(this, version, generation, value);
+    return { asset, value };
   }
   async read(version: string): Promise<unknown | null> {
     const key = `${this.generation()}:${version}`;

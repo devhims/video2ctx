@@ -1,3 +1,4 @@
+import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
@@ -106,7 +107,13 @@ export function agentCoreReasoningEffort(
   return 'low';
 }
 
-export async function executeResearchRun(options: {
+export async function executeResearchRun(options: Parameters<typeof executeResearchRunWithAssets>[0]): Promise<void> {
+  return options.session
+    ? withRunAssetCache(options.session, options.signal, cache => executeResearchRunWithAssets(options, cache))
+    : executeResearchRunWithAssets(options);
+}
+
+async function executeResearchRunWithAssets(options: {
   session?: SessionEvidenceStore;
   classificationDeadlineAt?: number;
   onClassifying?: (deadlineAt: number) => void | Promise<void>;
@@ -150,7 +157,7 @@ export async function executeResearchRun(options: {
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
   saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
-}): Promise<void> {
+}, assetCache?: RunAssetCache): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
   const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
   modelFailover.beforeAttempt = () => assertModelCostAvailable(options.modelBudget);
@@ -253,7 +260,7 @@ export async function executeResearchRun(options: {
   // that have already arrived. The research context also limits active models.
   const analysisLimiter = new ConcurrencyLimiter(4);
   const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset) : upstream, decision);
+  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     runModel(options.env, options.sessionAffinity, 'low', {
       ...modelMetadata,
@@ -268,6 +275,7 @@ export async function executeResearchRun(options: {
   const context: AgentToolContext = {
     traceToolCall: options.traceToolCall,
     session: options.session,
+    assetCache,
     deliverEvidence: options.deliverEvidence,
     deliverSavedAssets: options.deliverSavedAssets,
     runId: options.runId,

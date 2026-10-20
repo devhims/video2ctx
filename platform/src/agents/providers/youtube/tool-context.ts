@@ -1,3 +1,4 @@
+import type { RunAssetCache } from '../../runtime/run-asset-cache';
 import type { StoredExtractionDiagnostic } from '../../../lib/extraction-diagnostics';
 import type { FrameAnalyst } from './frame-analyst';
 import type { SaveFramePreviews } from '../../runtime/frame-previews';
@@ -41,6 +42,7 @@ export interface AgentToolContext {
   maxVideoSeconds?: number;
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
+  assetCache?: RunAssetCache;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;

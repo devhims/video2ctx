@@ -6,7 +6,7 @@ Descriptions are retained as separate citable excerpts of at most 2,000 characte
 
 ## Analysis availability and read timing
 
-Frame, storyboard and transcript analysis load their saved inputs once. Before loading,
+Frame, storyboard and transcript analysis obtain their saved inputs once. Before loading,
 they capture the session's SQLite deletion generation. After loading and again after
 inference, they synchronously check that the generation is unchanged and every selected
 asset row still exists. The post-inference check does not read D1 or R2. Deleting and
@@ -14,7 +14,8 @@ retrieving the same version during inference cannot restore that in-flight analy
 Any generation change fences the analysis, including deletion of unrelated evidence or
 memory. Normal retrieval and refresh do not advance the generation.
 
-The initial read still verifies the shared catalog payload. The final check establishes
+Storage reads still verify the shared catalog payload; cache hits reuse a snapshot
+verified earlier in the run. The final check establishes
 session availability only; it does not detect a shared catalog version or R2 object
 removed during inference. Shared sources currently have no deletion or retention policy.
 A future shared-source deletion feature must revisit this boundary.
@@ -24,8 +25,39 @@ load and validate the selected input batch, including session checks, catalog lo
 R2 downloads and payload hydration. Each event carries `runId`, `toolCallId`, asset kind,
 count and outcome, with `elapsedMs` on completion. Concurrent reads contribute their
 batch duration, not the sum of individual read durations. These logs contain no source
-payloads. They are separate from inference timing. This change adds no run-scoped cache;
-analysis still performs its initial saved-payload read even after same-run retrieval.
+payloads. They are separate from inference timing. A cache hit still appears in this
+stage because the session checks and snapshot decoding run before inference.
+
+## Run-scoped analysis cache
+
+Each execution of a research run owns a separate cache for transcripts, frames and
+storyboard sheets. Retrieval seeds it only after persistence or a verified session read
+returns a single immutable asset version. Analysis reuses that exact payload while
+checking current session metadata, ownership, duration limits and deletion generation.
+Explicit refresh still retrieves fresh evidence; older versions retain their own cache
+entries and current/superseded status comes from SQLite. Billing still passes through
+`deliverSavedAssets` and the existing per-run ledger.
+
+The cache retains at most 64 entries and a 16 MiB snapshot budget, using twice each JSON
+string's character count plus its version key and an entry allowance. This is a bound
+on retained snapshots, not the whole Worker heap or transient serialization/model memory.
+Oversized assets bypass it. Least-recently-used entries are evicted and fall back to the
+normal verified D1/R2 read. Snapshots are serialized once on admission and decoded on each
+hit so mutation by one caller cannot change another analysis's input. This trades local
+serialization work for fewer remote reads; production latency remains to be measured.
+
+The cache belongs to one session-store instance and one execution. Completion, failure
+and cancellation clear and close it, so late work cannot refill it. Concurrent runs do
+not share it. A resumed run starts empty. A deletion generation change invalidates all
+entries before reuse; missing session rows still fail. Cache hits trust the source
+verification performed earlier in the same run, so shared catalog/object removal or
+corruption during that run is not detected until the next storage read. The current
+shared catalog has no deletion policy.
+
+For three retained inline frames, retrieval followed by analysis makes zero additional
+analysis-side D1/R2 reads. A later run analyzing those saved frames loads each once and
+can reuse them for another question in that run. Retrieval still waits for persistence;
+this cache does not defer writes or change preview ownership.
 
 ## Flow
 

@@ -59,7 +59,7 @@ export async function readAnalysisAssets(
         throw new Error(
           'Fresh evidence was requested. Retrieve this asset in the current run before analysis.',
         );
-      const stored = await readAsset(version);
+      const stored = await readAsset(version, context.assetCache);
       context.signal.throwIfAborted();
       if (!stored)
         throw new Error('Saved asset is unavailable or deleted. Retrieve it explicitly before analysis.');
