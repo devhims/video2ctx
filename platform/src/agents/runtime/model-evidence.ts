@@ -404,15 +404,13 @@ function fitChapterPoints(packet: ModelEvidencePacket, fits: (candidate: ModelEv
     return build(kept, `Only ${count} of ${withPoints.length} chapters with points fit the finalization context, one point each with the caption where it starts. Omitted chapters: ${
       omitted.slice(0, 12).map(chapter => `"${chapter.title.slice(0, 60)}"`).join(', ')}${omitted.length > 12 ? ` and ${omitted.length - 12} more` : ''}. Those parts of the video are not covered here; do not claim exhaustive coverage.`.slice(0, 1_000));
   };
-  let low = 1, high = withPoints.length - 1;
-  let fitted: ModelEvidencePacket | undefined;
-  while (low <= high) {
-    const count = Math.floor((low + high) / 2);
+  // Each count selects a different spread of chapters, so size does not grow with the count and a
+  // search could stop early. Try counts from the largest down and keep the first that fits.
+  for (let count = withPoints.length - 1; count >= 1; count--) {
     const candidate = spread(count);
-    if (fits(candidate)) { fitted = candidate; low = count + 1; }
-    else high = count - 1;
+    if (fits(candidate)) return candidate;
   }
-  return fitted;
+  return undefined;
 }
 
 /**

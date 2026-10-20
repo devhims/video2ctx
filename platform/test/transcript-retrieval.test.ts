@@ -436,6 +436,12 @@ describe('review fixes: minimum fit, warning bounds and cancellation', () => {
     return evidencePacketSchema.parse({ packetId: 'p', kind: 'youtube_transcript',
       sources: [{ id: `youtube:${VIDEO}:transcript`, provider: 'youtube', kind: 'transcript', videoId: VIDEO }], ...evidence, usage: [] });
   }
+  const expectAlignedWithin = (prepared: ReturnType<typeof finalizationEvidenceForModel>, budget: number) => {
+    const shown = prepared.evidence[0]!;
+    const ids = new Set(shown.excerpts!.map(excerpt => excerpt.id));
+    expect(shown.transcriptRetrieval!.chapters!.flatMap(chapter => chapter.points).every(point => point.excerptIds.length > 0 && point.excerptIds.every(id => ids.has(id)))).toBe(true);
+    expect(JSON.stringify(prepared.evidence).length).toBeLessThanOrEqual(budget);
+  };
   const expectAligned = (prepared: ReturnType<typeof finalizationEvidenceForModel>) => {
     const shown = prepared.evidence[0]!;
     const ids = new Set(shown.excerpts!.map(excerpt => excerpt.id));
@@ -456,6 +462,24 @@ describe('review fixes: minimum fit, warning bounds and cancellation', () => {
     const shown = finalizationEvidenceForModel([dense], 60_000);
     expectAligned(shown);
     expect(shown.evidence[0]!.warnings.find(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED')!.message).toMatch(/Omitted chapters: "Chapter /);
+  });
+
+  it('finds the largest spread that fits even when a smaller count picks a longer chapter', async () => {
+    // Five chapters: a count of 4 picks {0, 1, 2, 3} and 2 picks {0, 2}, but 3 picks {0, 1, 3}. With
+    // chapter 2 long, {0, 1, 3} fits at budgets where {0, 2} does not. A search that tries 2 first and
+    // assumes sizes grow with the count would then keep one chapter there.
+    const caption = (index: number) => index === 40 ? `${index} ${'long '.repeat(400)}`.slice(0, 1_990) : `${index} short caption.`;
+    const packet = await chapterPacket(5, caption, 'A point about this chapter.');
+    for (let budget = 500; budget <= 8_000; budget += 25) {
+      const prepared = finalizationEvidenceForModel([packet], budget);
+      if (!prepared.evidence.length) continue;
+      expectAlignedWithin(prepared, budget);
+      if (prepared.evidence[0]!.transcriptRetrieval!.chapters!.map(chapter => chapter.index).join(',') !== '0,1,3') continue;
+      // Three chapters are kept as soon as they fit, not only once the longer {0, 2} would also fit.
+      expect(budget - JSON.stringify(prepared.evidence).length).toBeLessThan(100);
+      return;
+    }
+    throw new Error('No budget kept chapters 0, 1 and 3.');
   });
 
   it('omits a chapter packet that cannot fit one aligned point, instead of keeping unsupported points', async () => {
