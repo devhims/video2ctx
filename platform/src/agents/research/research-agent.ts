@@ -1,3 +1,5 @@
+import { inspectionRecordsForModel, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
+import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { scheduleEvidenceTools } from '../runtime/evidence-scheduler';
 import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
@@ -411,6 +413,8 @@ export async function runResearchAgentWithModel(
   });
 }
 
+const VISUAL_TOOL_NAMES: readonly string[] = ['get_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'analyze_video_storyboard'];
+
 async function runResearchAgentWithModelWithinDeadline(options: {
   researchDeadlineAt: number;
   finalizationDeadlineAt?: number;
@@ -438,7 +442,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !['get_video_storyboard','get_video_frames','analyze_video_frames','analyze_video_storyboard'].includes(name) || options.decision.useStoryboard !== false);
+    .filter(name => !VISUAL_TOOL_NAMES.includes(name) || options.decision.useStoryboard !== false);
   // With a configured finalizer, research only signals completion. The finalizer writes
   // the answer, so research never composes one that would be discarded.
   const completionTool = options.finalizationModel ? COMPLETE_RESEARCH_TOOL_NAME : FINALIZE_ANSWER_TOOL_NAME;
@@ -714,6 +718,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             '',
             `Activated capability: ${capability.id}`,
             capability.instructions(completionTool),
+            // The skill accompanies exactly the visual tools this model can call.
+            ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
@@ -843,7 +849,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
 }
 
 /** Describing what was read must match what this turn's context actually holds. */
-export const EVIDENCE_DELIVERY_GUIDANCE = 'Each evidence packet\'s delivery.operation is recorded by the application for this turn. Say you inspected, looked at or watched images only for image_analysis evidence. transcript_analysis evidence is an analyst\'s findings, not caption text: never claim you read or reread a full transcript. retrieval evidence was fetched or reused by a tool this turn. saved_read evidence is saved text read this turn; for visual packets it is an earlier analysis, so do not describe it as viewing images now. inherited evidence comes from earlier in the conversation; attribute it there and do not claim to have checked it again. Describe only the comments, frames or entries actually supplied, using collection counts, visualDelivery counts and truncation warnings.';
+export const EVIDENCE_DELIVERY_GUIDANCE = 'Evidence delivery labels describe this turn: image_analysis supplies image findings; transcript_analysis supplies analyst findings rather than a full transcript; retrieval supplies fetched or reused content; saved_read and inherited visual evidence contain earlier analysis. Use these distinctions internally. When the user explicitly asks about the workflow, explain only recorded activity and distinguish earlier evidence from current operations. Otherwise answer with findings, citations and material limitations.';
 
 function transcriptAnalysisKeys(recoveredEvidence: readonly EvidencePacket[]): string[] {
   return recoveredEvidence.flatMap((packet) => {
@@ -908,6 +914,15 @@ async function runUnifiedFinalizer(options: {
     options.context.evidenceRunRecords?.(options.evidence.map(packet => packet.packetId)));
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
+  // Inspection records come only from this turn and the earlier turns on this conversation
+  // branch, never from other conversations that share the session's saved assets.
+  const subjects = new Set([...options.evidence.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])),
+    ...(options.conversationHistory?.at(-1)?.resourceIds ?? []), ...extractYouTubeVideoIds(options.message)]);
+  const inspected = conversational ? [] : [...options.evidence].reverse()
+    .concat([...options.conversationHistory ?? []].reverse().flatMap(turn => [...turn.inspection ?? [], ...turn.evidence ?? []]))
+    .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
+  const inspectionRecords = inspected.length
+    ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -1006,6 +1021,7 @@ async function runUnifiedFinalizer(options: {
           `Return blocks containing text and evidenceIds. Use the short ref_N excerpt IDs from supplied evidence, including transcriptAnalysis.findings.excerptIds. ${ANSWER_CITATION_GUIDANCE}`,
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           EVIDENCE_DELIVERY_GUIDANCE,
+          INSPECTION_RECORD_GUIDANCE,
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           'For list evidence such as playlists, take counts from collection: entriesShown are the entries supplied here, and collection.coverage states what was not retained, not shown, or not stated by the provider. Never report fewer available entries than are shown. Describe unshown or unretained entries as a context limit, not as absent from the source. When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note stating the provider total, the 12-video listing limit and which videos had content reviewed; do not contradict it. Otherwise no note is appended, so state any material playlist coverage limit yourself. Never present listing details as reviewed video content. evidenceOmittedFromContext counts saved list packets that did not fit at all; notListed of them are counted but not named.',
@@ -1029,6 +1045,7 @@ async function runUnifiedFinalizer(options: {
           applicationDurationNotice: currentDurationNotice() || undefined,
           providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
             ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure),
+          inspectionRecords,
           validationFeedback: feedback,
         })}, {role:'user',content:'Return the complete structured answer from the supplied inputs now. Do not promise future work or request another inspection. State any remaining gap.'}],
         temperature: 0,

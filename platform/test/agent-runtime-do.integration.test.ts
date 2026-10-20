@@ -2127,6 +2127,31 @@ test('an inherited packet read explicitly later is reported as read after a resu
   });
 });
 
+test('conversation history carries only the inspection records its own turns produced or received', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('inspection-history-scope', 'completed');
+  await runInDurableObject(runtime, async instance => {
+    const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
+    instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
+      agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'She holds a microphone.', confidence: 'medium',
+      citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } })} WHERE id = ${runId}`;
+    const frames = (packetId: string, basis: string) => JSON.stringify({ packetId, kind: 'youtube_frames',
+      sources: [{ id: 'frames', provider: 'youtube', kind: 'frames', videoId: lineageVideo }], excerpts: [], warnings: [], usage: [],
+      artifacts: [{ type: 'youtube_frame_retrieval', data: { requestedTimestampsMs: [200000],
+        selections: [{ timestampMs: 200000, basis, evidenceIds: [] }],
+        frames: [{ timestampMs: 200000, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [] } }] });
+    instance.sql`INSERT INTO agent_evidence_packets VALUES ('own-frames',${runId},'tool',${frames('own-frames', 'user_requested')},2000)`;
+    // The same video inspected in another conversation shares the session, not this branch.
+    const foreignRun = crypto.randomUUID();
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,turn_ordinal,message,status,phase,
+      credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
+      VALUES (${foreignRun},${userId},${crypto.randomUUID()},${crypto.randomUUID()},${crypto.randomUUID()},1,'Other','completed','completed',1000,0,0,0)`;
+    instance.sql`INSERT INTO agent_evidence_packets VALUES ('foreign-frames',${foreignRun},'tool',${frames('foreign-frames', 'exploratory')},2001)`;
+    const probe = { ...parent, id: crypto.randomUUID(), parent_message_id: parent.agent_message_id };
+    const history = (instance as unknown as LineageRuntime).readConversationHistory(probe);
+    expect(history[0]?.inspection?.map(packet => packet.packetId)).toEqual(['own-frames']);
+  });
+});
+
 test.each(['recover', 'fail-again', 'deleted', 'cancelled'] as const)(
   'combined transcript retry %s uses saved inputs and preserves billing', async scenario => {
   const { createResearchVideoTranscriptsTool } = await import('../src/agents/providers/youtube/tools/research-video-transcripts');

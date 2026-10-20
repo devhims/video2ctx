@@ -43,7 +43,7 @@ function setup(delayMs: number) {
         ? JSON.stringify({assetVersions:['1'.padStart(64,'0')],focus:'Read names printed on shirts.'})
         : JSON.stringify({intent:'inspect_video',confidence:'medium',artifacts:[],warnings:[],blocks:[{text:'The shirt reads SMRITI.',evidenceIds:['ref_1']}]}) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
   }) });
-  const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: JSON.stringify({
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => ({ content: [{ type: 'text', text: JSON.stringify({
     confidence: 'low', warnings: [], blocks: [{ text: 'The available evidence is limited.', evidenceIds: ['ref_1'] }],
   }) }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
   const options = { model, finalizationModel: finalizer, context, message: 'Look at frames to confirm player names.',
