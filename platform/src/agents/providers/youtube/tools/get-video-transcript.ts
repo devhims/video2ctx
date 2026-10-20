@@ -1,5 +1,5 @@
-import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
-import { analyzeTranscriptEvidence } from './analyze-video-transcripts';
+import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
+import { analyzeTranscriptEvidence, executeAnalyzeVideoTranscript } from './analyze-video-transcripts';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
@@ -56,7 +56,8 @@ export function executeGetVideoTranscript(
   const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}), ...(parsed.analysis ? { analysis: parsed.analysis } : {}) })}`;
 
   return context.executeEvidenceTool({
-    includesAnalysis: !!parsed.analysis,
+    retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
+      () => executeAnalyzeVideoTranscript({ assetVersion: packet.assetVersions![0]!, focus: parsed.analysis! }, transcriptAnalysisContext(context, parsed.analysis!), `${toolCallId}:analyze`)) : undefined,
     input: requested,
     toolCallId,
     toolName: 'get_video_transcript',
@@ -92,7 +93,7 @@ export function executeGetVideoTranscript(
       let finish: (packet: EvidencePacket) => EvidencePacket = packet => packet;
       try {
         const combined = await retrieveWithAnalysis<Transcript>(context, parsed.analysis ? {
-          videoId: parsed.videoId, budgetKey: semanticKey,
+          videoId: parsed.videoId, toolCallId, budgetKey: semanticKey,
           content: value => {
             if (value.videoId !== parsed.videoId || value.meta.partial || !value.segments.some(segment => segment.text.trim()))
               throw new Error('Analysis requires a complete nonempty transcript.');
@@ -100,10 +101,7 @@ export function executeGetVideoTranscript(
             return { videoId: value.videoId, track: value.track, translatedTo: value.translatedTo, segments: value.segments };
           },
           analyze: (value, analysisContext) => analyzeTranscriptEvidence(value, parsed.analysis!,
-            analysisContext.transcriptPolicy.mode === 'contextual_analysis' ? analysisContext : {
-              ...analysisContext, transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: context.researchQuestion ?? parsed.analysis!,
-                analyze: context.analyzeTranscript ?? (() => { throw new Error('Transcript analysis is unavailable.'); }) },
-            }, toolCallId, semanticKey),
+            transcriptAnalysisContext(analysisContext, parsed.analysis!), toolCallId, semanticKey),
         } : undefined, onReady => observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal,
           () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : []))));
         response = combined.response;
@@ -231,4 +229,11 @@ function chunkText(value: string, maximum: number): string[] {
 
 function safeIdPart(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120);
+}
+
+function transcriptAnalysisContext(context: AgentToolContext, focus: string): AgentToolContext {
+  return context.transcriptPolicy.mode === 'contextual_analysis' ? context : {
+    ...context, transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: context.researchQuestion ?? focus,
+      analyze: context.analyzeTranscript ?? (() => { throw new Error('Transcript analysis is unavailable.'); }) },
+  };
 }

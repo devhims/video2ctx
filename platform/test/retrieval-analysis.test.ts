@@ -45,7 +45,7 @@ describe('retrieval with optional analysis', () => {
     const started = deferred();
     const inferred = deferred();
     const captured: string[] = [];
-    ctx.executeEvidenceTool = execution => { captured.push(execution.semanticKey); expect(execution.includesAnalysis).toBe(true); return execution.execute(); };
+    ctx.executeEvidenceTool = execution => { captured.push(execution.semanticKey); expect(execution.retrySavedAnalysis).toBeTypeOf('function'); return execution.execute(); };
     const response = <T>(value: T) => ({ value, cacheStatus: 'miss' as const, assetVersions: [version] });
     ctx.provider.frames = async (_r, _s, _l, _d, ready) => { ready?.(frames); await save.promise; return response(frames); };
     ctx.provider.storyboard = async (_id, _t, _o, _d, ready) => { ready?.(storyboard); await save.promise; return response(storyboard); };
@@ -128,7 +128,7 @@ describe('parallel analysis failure boundaries', () => {
     const { ctx } = context();
     const started = deferred();
     let aborted = false;
-    const work = retrieveWithAnalysis(ctx, { videoId, content: value => value,
+    const work = retrieveWithAnalysis(ctx, { videoId, toolCallId: 'test', content: value => value,
       analyze: async (_value, c) => { started.resolve(); await new Promise<void>(resolve => c.signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true })); return emptyPacket; },
     }, async ready => { ready?.('bytes'); await started.promise; throw new Error('R2 save failed'); });
     await expect(work).rejects.toThrow('R2 save failed');
@@ -138,13 +138,20 @@ describe('parallel analysis failure boundaries', () => {
   test('analyst failure returns saved inputs with a retry warning and original usage', async () => {
     const { ctx } = context();
     ctx.provider.frames = async (_r, _s, _l, _d, ready) => { ready?.(frames); return { value: frames, cacheStatus: 'miss', assetVersions: [version] }; };
-    ctx.analyzeFrames = async () => { throw new Error('private model failure'); };
+    ctx.analyzeFrames = async () => { throw Object.assign(new Error('private model failure'), { name: 'AI_APICallError', statusCode: 503, responseHeaders: { 'x-request-id': 'safe-request-id', authorization: 'secret' } }); };
+    const log = vi.spyOn(console, 'error');
     const packet = await executeGetVideoFrames({ videoId, timestampsMs: [1000], analysis: 'Read chart' }, ctx, 'failure');
     expect(packet.assetVersions).toEqual([version]);
     expect(packet.usage[0]?.credits).toBeGreaterThan(0);
     expect(packet.excerpts).toEqual([]);
     expect(packet.warnings).toContainEqual(expect.objectContaining({ code: 'RETRIEVAL_ANALYSIS_FAILED' }));
     expect(JSON.stringify(packet)).not.toContain('private model failure');
+    expect(packet.artifacts.find(a => a.type === 'retrieval_analysis_failure')?.data).toMatchObject({
+      runId: ctx.runId, toolCallId: 'failure', failureCode: 'ANALYSIS_FAILED', errorType: 'AI_APICallError',
+      statusCode: 503, providerRequestId: 'safe-request-id',
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/private model failure|secret/);
+    log.mockRestore();
   });
 
   test.each(['deletion', 'cancellation', 'different content', 'missing save'] as const)('rejects %s after early analysis', async reason => {
@@ -152,7 +159,7 @@ describe('parallel analysis failure boundaries', () => {
     let generation = 0;
     ctx.session = { brief: () => ({ assets: [], memories: [] }), generation: () => generation, has: () => reason !== 'missing save', evidence: () => [], readEvidence: async () => ({ packets: [] }) };
     const started = deferred();
-    const work = retrieveWithAnalysis(ctx, { videoId, content: value => value, analyze: async () => { started.resolve(); return emptyPacket; } }, async ready => {
+    const work = retrieveWithAnalysis(ctx, { videoId, toolCallId: 'test', content: value => value, analyze: async () => { started.resolve(); return emptyPacket; } }, async ready => {
       ready?.('original'); await started.promise;
       if (reason === 'deletion') generation++;
       if (reason === 'cancellation') controller.abort(new Error('User canceled'));
@@ -165,7 +172,7 @@ describe('parallel analysis failure boundaries', () => {
     const { ctx } = context();
     const analyze = vi.fn(async () => emptyPacket);
     let late!: (value: string) => void;
-    await retrieveWithAnalysis(ctx, { videoId, content: value => value, analyze }, async ready => {
+    await retrieveWithAnalysis(ctx, { videoId, toolCallId: 'test', content: value => value, analyze }, async ready => {
       late = ready!; ready?.('bytes'); ready?.('bytes'); return { value: 'bytes', cacheStatus: 'hit' };
     });
     late('other');
@@ -177,7 +184,7 @@ describe('parallel analysis failure boundaries', () => {
     const budget = { tryReserve: vi.fn(() => false), release: vi.fn(), isExhausted: () => false };
     ctx.transcriptPolicy = { mode: 'contextual_analysis', researchQuestion: 'question', analyze: vi.fn(), budget };
     const retrieve = vi.fn(async () => ({ value: 'bytes', cacheStatus: 'miss' as const }));
-    const analysis = { videoId, budgetKey: 'key', content: (value: string) => value, analyze: async (): Promise<EvidencePacket> => { throw new Error('failed'); } };
+    const analysis = { videoId, toolCallId: 'budget', budgetKey: 'key', content: (value: string) => value, analyze: async (): Promise<EvidencePacket> => { throw new Error('failed'); } };
     await expect(retrieveWithAnalysis(ctx, analysis, retrieve)).rejects.toThrow('budget');
     expect(retrieve).not.toHaveBeenCalled();
     budget.tryReserve.mockReturnValue(true);

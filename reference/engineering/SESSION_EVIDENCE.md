@@ -80,14 +80,25 @@ response. Pending bytes never enter the saved-asset cache. Only successful sessi
 attachment makes references eligible for returned findings. Cancellation or a save
 failure aborts and observes outstanding inference; deletion or mismatched content
 rejects the result. If inference alone fails, the tool returns the saved retrieval
-with `RETRIEVAL_ANALYSIS_FAILED`, preserving its usage and allowing explicit retry.
+with `RETRIEVAL_ANALYSIS_FAILED`, preserving its usage and saved asset versions.
+Batch research includes the saved transcript version in its failure response. A
+new call ID with the same question retries through the standalone saved-analysis
+tool, without calling the retrieval provider or charging the source again. A repeat
+of the original completed call ID remains idempotent. Successful saved analysis is
+reused on subsequent retries. Deletion and cancellation still reject unavailable
+inputs. Failed analysis records allowlisted error classification, request ID when
+available, run ID and tool-call ID; raw provider errors are not added to the packet.
 
 The retrieval’s existing maximum-price credit hold covers the combined operation.
 Its single returned usage entry settles through the existing ledger; no nested
 saved-analysis delivery adds another charge. Model usage is still recorded by the
 analyst. A failed save can waste inference work and does not produce a successful
-evidence packet. Combined tools use the analysis queue so their nested metadata
-lookups cannot deadlock behind occupied provider slots.
+evidence packet. All provider calls share four retrieval slots, including combined
+calls and metadata lookups. The slot ends when the provider returns, before the
+tool waits for inference. Ready inputs enter the existing inference limiter, while
+saved-analysis tools separately bound payload reads. Slow extraction cannot occupy
+analysis slots, and metadata never waits on an enclosing tool that holds a retrieval
+slot until analysis completes.
 
 `combinedTimingsMs` records retrieval completion, inference duration, their overlap,
 and total tool work. The early private RPC notification transports the input once

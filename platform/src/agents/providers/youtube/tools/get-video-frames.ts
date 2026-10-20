@@ -1,5 +1,5 @@
-import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
-import { analyzeFrameEvidence } from './analyze-video-frames';
+import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
+import { analyzeFrameEvidence, executeAnalyzeVideoFrames } from './analyze-video-frames';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, visualSpan, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { tool } from 'ai';
@@ -37,7 +37,8 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
   return context.executeEvidenceTool({
-    includesAnalysis: !!parsed.analysis,
+    retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
+      () => executeAnalyzeVideoFrames({ assetVersions: packet.assetVersions!, focus: parsed.analysis! }, context, `${toolCallId}:analyze`)) : undefined,
     input: parsed,
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
     semanticKey: `frames:${JSON.stringify({ ...request, ...(parsed.analysis ? { analysis: parsed.analysis } : {}) })}`,
@@ -52,7 +53,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       const startedAt = Date.now();
       const extractionDiagnostics: ExtractionAttempt[] = [];
       const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
-        videoId: parsed.videoId,
+        videoId: parsed.videoId, toolCallId,
         content: value => {
           const frames = validateFrameResponse(request, value);
           if (!frames.frames.length) throw new Error('No frames are available for analysis.');

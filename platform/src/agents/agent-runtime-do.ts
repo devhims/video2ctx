@@ -771,7 +771,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE run_id = ${runId} AND semantic_key = ${execution.semanticKey} AND status = 'completed'
       LIMIT 1
     `[0];
-    if (completedByMeaning?.result_json) return Promise.resolve(evidencePacketSchema.parse(JSON.parse(completedByMeaning.result_json)));
+    if (completedByMeaning?.result_json) {
+      const packet = evidencePacketSchema.parse(JSON.parse(completedByMeaning.result_json));
+      if (execution.retrySavedAnalysis && packet.warnings.some(warning => warning.code === 'RETRIEVAL_ANALYSIS_FAILED')) {
+        this.assertRunActive(runId);
+        return execution.retrySavedAnalysis(packet);
+      }
+      return Promise.resolve(packet);
+    }
 
     // The provider already exhausted its bounded route retries. Repeating the
     // same retrieval in this run must not start another full extraction sequence.

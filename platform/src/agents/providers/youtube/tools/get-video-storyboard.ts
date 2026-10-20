@@ -1,5 +1,5 @@
-import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
-import { analyzeStoryboardEvidence } from './analyze-video-storyboard';
+import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
+import { analyzeStoryboardEvidence, executeAnalyzeVideoStoryboard } from './analyze-video-storyboard';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { withRunDeadline } from '../../../runtime/deadline';
@@ -53,7 +53,8 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     ? getVideoStoryboardInputSchema.parse({ ...requested, maxSheets: DEFAULT_STORYBOARD_SHEETS })
     : requested;
   return context.executeEvidenceTool({
-    includesAnalysis: !!parsed.analysis,
+    retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
+      () => executeAnalyzeVideoStoryboard({ assetVersions: packet.assetVersions!.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')), focus: parsed.analysis! }, context, `${toolCallId}:analyze`)) : undefined,
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
@@ -79,7 +80,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   const evidence = context.getEvidence?.() ?? [];
   if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
   const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
-    videoId: parsed.videoId,
+    videoId: parsed.videoId, toolCallId,
     content: value => {
       const board = storyboardSchema.parse(value);
       if (board.videoId !== parsed.videoId || !board.sheets.length) throw new Error('Invalid storyboard analysis input.');

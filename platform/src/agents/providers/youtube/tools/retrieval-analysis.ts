@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { failureDetails } from '../../../runtime/diagnostics';
 import { sha256 } from '../../../../lib/http';
 import type { CachedResult } from '../../../../lib/youtube';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
@@ -9,6 +10,7 @@ export const retrievalAnalysisSchema = z.string().trim().min(1).max(500).optiona
 
 type Analysis<T> = {
   videoId: string;
+  toolCallId: string;
   /** Validates the selection and excludes incidental storage metadata from identity. */
   content(value: T): unknown;
   analyze(value: T, context: AgentToolContext): Promise<EvidencePacket>;
@@ -78,9 +80,7 @@ export async function retrieveWithAnalysis<T>(
     if (outcome.status === 'rejected') budget?.release(analysis.budgetKey!);
     return { response, retrievalMs, finish: (packet: EvidencePacket): EvidencePacket => {
       assertAvailable();
-      if (outcome.status === 'rejected') return evidencePacketSchema.parse({ ...packet, warnings: [{
-        code: 'RETRIEVAL_ANALYSIS_FAILED', message: 'The content was saved, but analysis failed. Analyze its saved asset versions to retry.',
-      }, ...packet.warnings].slice(0, 50) });
+      if (outcome.status === 'rejected') return analysisFailurePacket(packet, outcome.reason, context, analysis.toolCallId);
       const result = outcome.value;
       if (result.artifacts[0] && packet.kind !== 'youtube_transcript') {
         // Dashboard readers select the analysis artifact first. Carry its saved
@@ -108,4 +108,47 @@ export async function retrieveWithAnalysis<T>(
     budget?.release(analysis.budgetKey!);
     throw error;
   } finally { closed = true; }
+}
+
+function analysisFailurePacket(packet: EvidencePacket, error: unknown, context: AgentToolContext, toolCallId: string): EvidencePacket {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  const failureCode = typeof code === 'string' && [
+    'TRANSCRIPT_ANALYSIS_TIMEOUT', 'TRANSCRIPT_ANALYSIS_INVALID_REFERENCE',
+    'TRANSCRIPT_ANALYSIS_UNGROUNDED', 'TRANSCRIPT_ANALYSIS_FAILED',
+  ].includes(code) ? code : 'ANALYSIS_FAILED';
+  const cause = error instanceof Error && error.cause ? error.cause : error;
+  const diagnostic = { runId: context.runId, toolCallId, failureCode, ...failureDetails(cause, context.signal) };
+  console.error(JSON.stringify({ event: 'agent_retrieval_analysis_failure', ...diagnostic }));
+  return evidencePacketSchema.parse({ ...packet,
+    artifacts: [{ type: 'retrieval_analysis_failure', data: diagnostic },
+      ...packet.artifacts.filter(artifact => artifact.type !== 'retrieval_analysis_failure')].slice(0, 10),
+    warnings: [{ code: 'RETRIEVAL_ANALYSIS_FAILED',
+      message: 'The content was saved, but analysis failed. Retry this request or analyze its saved asset versions.' },
+      ...packet.warnings.filter(warning => warning.code !== 'RETRIEVAL_ANALYSIS_FAILED')].slice(0, 50),
+  });
+}
+
+/** A semantic retry uses the normal saved-analysis tool, including its own durable
+ * record and once-per-run input delivery. Never invoke the retrieval provider. */
+export async function retrySavedAnalysis(
+  packet: EvidencePacket, context: AgentToolContext, toolCallId: string,
+  analyze: () => Promise<EvidencePacket>,
+): Promise<EvidencePacket> {
+  const generation = context.session?.generation?.();
+  const assertAvailable = () => {
+    context.signal.throwIfAborted();
+    if (generation !== context.session?.generation?.()
+      || !packet.assetVersions?.length
+      || packet.assetVersions.some(version => context.session && !context.session.has?.(version)))
+      throw new Error('Saved asset is unavailable or deleted.');
+  };
+  assertAvailable();
+  try {
+    const result = await analyze();
+    assertAvailable();
+    return result;
+  } catch (error) {
+    assertAvailable();
+    return analysisFailurePacket(packet, error, context, toolCallId);
+  }
 }

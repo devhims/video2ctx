@@ -21,11 +21,14 @@ export interface EvidenceToolExecution {
   semanticKey: string;
   operation: EvidenceOperation;
   input: unknown;
+  /** Current phase cancellation, propagated internally to queued provider admission. */
+  signal?: AbortSignal;
   /** Supplemental lookups leave this many provider slots for required retrieval.
    * Trusted runtime policy only, never a model-supplied tool argument. */
   reserveProviderCalls?: number;
-  /** Combined tools may request metadata from inside inference; do not hold a provider queue slot. */
-  includesAnalysis?: boolean;
+  /** Retry only analysis of a completed retrieval whose analyst failed. The runtime
+   * invokes this for a new call ID, never by re-running extraction or its billing. */
+  retrySavedAnalysis?: (packet: EvidencePacket) => Promise<EvidencePacket>;
   execute: () => Promise<EvidencePacket>;
 }
 

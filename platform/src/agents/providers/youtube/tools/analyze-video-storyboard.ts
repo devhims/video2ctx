@@ -70,19 +70,20 @@ export function executeAnalyzeVideoStoryboard(
       // billed once per run per unit, immediately before inference. A later analyst
       // failure keeps the charge; a rejected selection above never reaches this line.
       context.deliverSavedAssets?.(versions);
-      const packet = await analyzeStoryboardEvidence(storyboard, parsed.focus, context, toolCallId);
+      const packet = await analyzeStoryboardEvidence(storyboard, parsed.focus, context, toolCallId, values.flatMap(value => value.meta.warnings));
       assertAvailable();
       packet.assetVersions = versions;
       packet.artifacts[0]!.data.sessionReused = true;
-      if (assets.some(({ asset }) => !asset.current)) packet.warnings.push({
+      if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
         code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored storyboard version.',
       });
-      return packet;
+      packet.warnings = packet.warnings.slice(0, 50);
+      return evidencePacketSchema.parse(packet);
     },
   });
 }
 
-export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof storyboardSchema>, focus: string, context: AgentToolContext, toolCallId: string) {
+export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof storyboardSchema>, focus: string, context: AgentToolContext, toolCallId: string, sourceWarnings: readonly string[] = storyboard.meta.warnings) {
   context.signal.throwIfAborted();
   if (!context.analyzeStoryboard) throw new Error('Storyboard analysis is unavailable.');
   if (!canAnalyzeStoryboard(context.researchDeadlineAt)) throw new Error('Not enough research time to analyze storyboards.');
@@ -151,7 +152,7 @@ export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof story
         message:
           'Observations cover sampled storyboard frames only. Brief events and small text may be missed.',
       },
-      ...storyboard.meta.warnings
+      ...sourceWarnings
         .map((message) => ({ code: 'PARTIAL_STORYBOARD', message })),
       ...analysis.warnings.map((message) => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
     ].filter((warning, index, all) => all.findIndex(other => other.code === warning.code && other.message === warning.message) === index).slice(0, 50),

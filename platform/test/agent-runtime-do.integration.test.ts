@@ -1960,3 +1960,85 @@ test.each([false, true])('automatic metadata leaves four provider slots for late
     }
   });
 });
+
+
+test.each(['recover', 'fail-again', 'deleted', 'cancelled'] as const)(
+  'combined transcript retry %s uses saved inputs and preserves billing', async scenario => {
+  const { createResearchVideoTranscriptsTool } = await import('../src/agents/providers/youtube/tools/research-video-transcripts');
+  const { sessionProvider } = await import('../src/agents/runtime/session-provider');
+  const { runtime, runId } = await seed(`combined-retry-${scenario}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as {
+      sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+      deliverSavedAssets(runId: string, versions: readonly string[]): void;
+    };
+    const store = internal.sessionStore;
+    const value: import('all-things-youtube').Transcript = {
+      videoId: 'abcdefghijk', track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: false, isDefault: true },
+      segments: [{ text: 'Revenue grew.', startMs: 0, endMs: 1000, durationMs: 1000 }], text: 'Revenue grew.',
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    };
+    const fetch = vi.fn(async () => ({ value, cacheStatus: 'miss' as const }));
+    const analyze = vi.fn<import('../src/agents/providers/youtube/transcript-analyst').TranscriptAnalyst>()
+      .mockRejectedValueOnce(new Error('private provider failure'));
+    if (scenario === 'fail-again') analyze.mockRejectedValue(new Error('second private failure'));
+    else analyze.mockResolvedValue({ summary: 'Revenue grew.', findings: [{ claim: 'Revenue grew.', excerptIds: ['quote'] }],
+      excerpts: [{ id: 'quote', text: 'Revenue grew.', startMs: 0, endMs: 1000 }],
+      coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 }, warnings: [] });
+    const controller = new AbortController();
+    const context: AgentToolContext = {
+      runId, signal: controller.signal, session: store,
+      provider: sessionProvider({ transcript: fetch } as unknown as AgentToolContext['provider'], store),
+      transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Revenue?', analyze },
+      executeEvidenceTool: execution => internal.executeEvidenceTool(runId, execution),
+      deliverSavedAssets: versions => internal.deliverSavedAssets(runId, versions), finalize: vi.fn(),
+    };
+    const { scheduleEvidenceTools } = await import('../src/agents/runtime/evidence-scheduler');
+    Object.assign(context, scheduleEvidenceTools(context.provider, context.executeEvidenceTool, context.signal));
+    const tool = createResearchVideoTranscriptsTool(context);
+    const input = { sources: [{ videoId: value.videoId }], focus: 'Revenue?' };
+    const run = async (toolCallId: string) => await tool.execute!(input, { toolCallId, messages: [], context: {} });
+    const first = await run('first');
+    if (!first || typeof first !== 'object' || !('failures' in first)) throw new Error('Expected batch result');
+    expect(first.evidence).toEqual([]);
+    const version = store.brief().assets[0]!.version;
+    expect(first.failures).toEqual([expect.objectContaining({ assetVersion: version })]);
+    expect(analyze).toHaveBeenCalledTimes(1);
+    // The same tool-call ID remains idempotent, even though analysis failed.
+    expect(await run('first')).toEqual(first);
+    expect(analyze).toHaveBeenCalledTimes(1);
+    if (scenario === 'deleted') await store.delete(version);
+    if (scenario === 'cancelled') controller.abort(new Error('cancelled'));
+    if (scenario === 'cancelled') await expect(run('second')).rejects.toThrow('cancelled');
+    else {
+      const second = await run('second');
+      if (!second || typeof second !== 'object' || !('failures' in second)) throw new Error('Expected batch result');
+      if (scenario === 'recover') {
+        expect(second.failures).toEqual([]);
+        expect(second.evidence).toHaveLength(1);
+        expect(analyze).toHaveBeenCalledTimes(2);
+        await run('third');
+        expect(analyze).toHaveBeenCalledTimes(2); // Completed saved analysis is reusable too.
+      } else {
+        expect(second.evidence).toEqual([]);
+        expect(second.failures).toHaveLength(1);
+        if (scenario === 'fail-again') {
+          expect(second.failures[0]).toHaveProperty('assetVersion', version);
+          expect(JSON.stringify(second)).not.toContain('private');
+          expect(analyze).toHaveBeenCalledTimes(2);
+        } else expect(analyze).toHaveBeenCalledTimes(1);
+      }
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const retrievals = instance.sql<{ credits: number; status: string }>`SELECT credits, status FROM agent_tool_calls
+      WHERE run_id = ${runId} AND tool_name = 'get_video_transcript'`;
+    expect(retrievals).toEqual([{ credits: 1, status: 'completed' }]);
+    expect(instance.sql`SELECT * FROM agent_evidence_charges WHERE run_id = ${runId}`).toHaveLength(1);
+    if (scenario === 'recover' || scenario === 'fail-again') {
+      expect(instance.sql`SELECT credits, status FROM agent_tool_calls
+        WHERE run_id = ${runId} AND tool_name = 'analyze_video_transcript'`)
+        .toEqual([{ credits: 0, status: scenario === 'recover' ? 'completed' : 'failed' }]);
+    }
+  });
+});

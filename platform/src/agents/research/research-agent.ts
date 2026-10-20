@@ -1,3 +1,4 @@
+import { scheduleEvidenceTools } from '../runtime/evidence-scheduler';
 import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
@@ -80,7 +81,7 @@ import {
 } from './capability-router';
 
 type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research' | 'inspect_video' }>;
-const MAX_CONCURRENT_EVIDENCE_REQUESTS = 4;
+
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
 // A single inspected video is answered from its whole transcript in one call, without a
@@ -255,10 +256,7 @@ async function executeResearchRunWithAssets(options: {
   const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(decision.useStoryboard);
   modelFailover.deadlineAt = researchDeadlineAt;
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
-  const limiter = new ConcurrencyLimiter(MAX_CONCURRENT_EVIDENCE_REQUESTS);
-  // Slow provider requests must not occupy the slots needed to analyze assets
-  // that have already arrived. The research context also limits active models.
-  const analysisLimiter = new ConcurrencyLimiter(4);
+
   const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
@@ -282,7 +280,7 @@ async function executeResearchRunWithAssets(options: {
     userMessageId: options.userMessageId,
     currentDate: options.currentDate,
     maxVideoSeconds: agentMaxVideoSeconds(options.env),
-    provider,
+    ...scheduleEvidenceTools(provider, options.executeEvidenceTool, options.signal),
     saveFramePreviews: options.saveFramePreviews,
     onExtractionDiagnostic: options.onExtractionDiagnostic,
     saveStoryboardPreviews: options.saveStoryboardPreviews,
@@ -301,15 +299,6 @@ async function executeResearchRunWithAssets(options: {
       analyze: transcriptAnalyst,
     },
     signal: options.signal,
-    executeEvidenceTool: (execution) => (execution.includesAnalysis || execution.toolName.startsWith('analyze_') ? analysisLimiter : limiter).run(() => {
-      options.signal.throwIfAborted();
-      return options.executeEvidenceTool({ ...execution, execute: async () => {
-        options.signal.throwIfAborted();
-        const packet = await execution.execute();
-        options.signal.throwIfAborted();
-        return packet;
-      } });
-    }),
     finalize: options.finalize,
   };
 
@@ -511,7 +500,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         const reserveProviderCalls = options.decision.route === 'topic_research'
           ? Math.max(0, researchVideoTarget(options.decision) - transcriptVideos.size) : 0;
         try { await executeGetVideo({ videoId }, { ...trackedContext, signal,
-          executeEvidenceTool: execution => trackedContext.executeEvidenceTool({ ...execution, reserveProviderCalls }),
+          executeEvidenceTool: execution => trackedContext.executeEvidenceTool({ ...execution, signal, reserveProviderCalls }),
         }, `analysis-metadata:${videoId}`); }
         catch { signal.throwIfAborted(); }
         return transcriptSourceContext(videoId, [...evidence.values()]);
@@ -666,7 +655,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         ...trackedContext, signal,
         executeEvidenceTool: (execution) => {
           signal.throwIfAborted();
-          return trackedContext.executeEvidenceTool({ ...execution, execute: async () => {
+          return trackedContext.executeEvidenceTool({ ...execution, signal, execute: async () => {
             signal.throwIfAborted();
             const packet = await execution.execute();
             signal.throwIfAborted();
