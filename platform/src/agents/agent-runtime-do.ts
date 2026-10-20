@@ -511,6 +511,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ...(row.error ? { error: row.error } : {}),
       route: this.readRoute(runId) ?? undefined,
     };
+    const activities = new Map<string, 'loading' | 'analyzing' | 'finishing'>();
+    for (const event of this.sql<{ payload_json: string }>`
+      SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'tool.activity' ORDER BY id
+    `) {
+      const { toolCallId, activity } = JSON.parse(event.payload_json);
+      if (typeof toolCallId === 'string' && ['loading', 'analyzing', 'finishing'].includes(activity))
+        activities.set(toolCallId, activity);
+    }
     return agentRunProgressSchema.parse({
       run: compactAgentRun(run, []),
       phase: terminal ? row.status : row.status === 'pending' ? 'queued'
@@ -518,7 +526,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ...(!terminal && row.phase === 'finalizing' && row.draft_json
         ? { draft: agentDraftSchema.parse(JSON.parse(row.draft_json)) } : {}),
       tools: this.sql<ToolCallRow>`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} ORDER BY created_at, tool_call_id`
-        .map(tool => toolTrace(tool, terminal)),
+        .map(tool => toolTrace(tool, terminal, activities.get(tool.tool_call_id))),
     });
   }
 
@@ -705,6 +713,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           await this.updatePhase(runId, 'finalizing', deadlineAt);
         },
         onDraft: draft => this.updateDraft(runId, draft),
+        onToolActivity: (toolCallId, activity) => {
+          if (this.readRun(runId)?.status === 'running')
+            this.recordEvent(runId, 'tool.activity', { toolCallId, activity });
+        },
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
         saveFramePreviews: (frames, signal, verifiedImages) => {
           this.assertRunActive(runId);

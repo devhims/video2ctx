@@ -43,6 +43,7 @@ export async function retrieveWithAnalysis<T>(
       throw new Error('Session assets changed during retrieval or analysis.');
   };
   assertAvailable();
+  context.onToolActivity?.(analysis.toolCallId, 'loading');
   const budget = analysis.budgetKey && context.transcriptPolicy.mode === 'contextual_analysis'
     ? context.transcriptPolicy.budget : undefined;
   if (budget && !budget.tryReserve(analysis.budgetKey!)) throw new Error('Transcript analysis budget reached.');
@@ -64,8 +65,12 @@ export async function retrieveWithAnalysis<T>(
       assertAvailable();
       signal.throwIfAborted();
       analysisStartedAt = Date.now();
+      context.onToolActivity?.(analysis.toolCallId, 'analyzing');
       try { return await analysis.analyze(value, { ...context, signal }); }
-      finally { analysisFinishedAt = Date.now(); }
+      finally {
+        analysisFinishedAt = Date.now();
+        if (!signal.aborted) context.onToolActivity?.(analysis.toolCallId, 'finishing');
+      }
     }).then(value => ({ status: 'fulfilled' as const, value }), reason => ({ status: 'rejected' as const, reason }));
   };
   try {

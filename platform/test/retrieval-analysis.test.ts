@@ -42,6 +42,9 @@ function context() {
 describe('retrieval with optional analysis', () => {
   test.each(['frames', 'storyboard', 'transcript'] as const)('%s starts inference before persistence completes, returns one billed packet, and exposes no image bytes', async kind => {
     const { ctx } = context();
+    const activities: string[] = [];
+    const finishing = deferred();
+    ctx.onToolActivity = (id, activity) => { expect(id).toBe('combined'); activities.push(activity); if (activity === 'finishing') finishing.resolve(); };
     const save = deferred();
     const started = deferred();
     const inferred = deferred();
@@ -65,9 +68,12 @@ describe('retrieval with optional analysis', () => {
       : executeGetVideoTranscriptForModel({ videoId, analysis }, ctx, 'combined');
     let returned = false;
     void work.then(() => { returned = true; });
+    expect(activities).toEqual(['loading']);
     await started.promise;
+    expect(activities).toEqual(['loading', 'analyzing']);
     inferred.resolve();
-    await Promise.resolve();
+    await finishing.promise;
+    expect(activities).toEqual(['loading', 'analyzing', 'finishing']);
     expect(returned).toBe(false);
     save.resolve();
     const packet = await work;
@@ -86,10 +92,12 @@ describe('retrieval with optional analysis', () => {
     const { ctx } = context();
     ctx.provider.frames = async () => ({ value: frames, cacheStatus: 'hit', assetVersions: [version] });
     ctx.analyzeFrames = vi.fn(async () => ({ findings: [], warnings: [] }));
+    ctx.onToolActivity = vi.fn();
     const keys: string[] = [];
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'raw');
     expect(ctx.analyzeFrames).not.toHaveBeenCalled();
+    expect(ctx.onToolActivity).not.toHaveBeenCalled();
     for (const analysis of ['Read the title', 'Read the legend']) await executeGetVideoFrames({ videoId, timestampsMs: [1000], analysis }, ctx, analysis);
     expect(new Set(keys).size).toBe(3);
     expect(ctx.analyzeFrames).toHaveBeenCalledTimes(2);

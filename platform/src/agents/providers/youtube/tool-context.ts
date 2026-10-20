@@ -48,6 +48,8 @@ export interface AgentToolContext {
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
   assetCache?: RunAssetCache;
+  /** Public activity only; never include analysis prompts or content. */
+  onToolActivity?(toolCallId: string, activity: 'loading' | 'analyzing' | 'finishing'): void;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;

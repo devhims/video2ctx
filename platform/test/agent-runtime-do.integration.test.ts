@@ -2042,3 +2042,18 @@ test.each(['recover', 'fail-again', 'deleted', 'cancelled'] as const)(
     }
   });
 });
+
+
+test('progress restores the latest persisted tool activity and keeps interruption distinct', async () => {
+  const { runtime, runId } = await seed('agent-tool-activity-runtime', 'running');
+  await runInDurableObject(runtime, async instance => {
+    instance.sql`UPDATE agent_tool_calls SET tool_name='get_video_transcript', status='running', result_json=null WHERE run_id=${runId}`;
+    for (const activity of ['loading', 'analyzing']) {
+      instance.sql`INSERT INTO agent_events (run_id,type,payload_json,created_at)
+        VALUES (${runId},'tool.activity',${JSON.stringify({toolCallId:'tool',activity})},0)`;
+    }
+  });
+  expect(await runtime.getRunProgress(runId)).toMatchObject({ tools: [{ activity: 'analyzing', status: 'running' }] });
+  await runtime.reconcileRun(runId);
+  expect(await runtime.getRunProgress(runId)).toMatchObject({ tools: [{ activity: 'analyzing', status: 'interrupted' }] });
+});

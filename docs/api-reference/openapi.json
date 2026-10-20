@@ -8352,6 +8352,21 @@
                     "interrupted"
                   ]
                 },
+                "activity": {
+                  "type": "string",
+                  "enum": [
+                    "loading",
+                    "analyzing",
+                    "finishing"
+                  ]
+                },
+                "analysis": {
+                  "type": "string",
+                  "enum": [
+                    "completed",
+                    "failed"
+                  ]
+                },
                 "startedAt": {
                   "type": "number"
                 },

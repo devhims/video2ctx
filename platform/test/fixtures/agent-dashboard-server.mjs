@@ -124,11 +124,19 @@ createServer(async (req, res) => {
       const send = snapshot => res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store, no-transform' });
       if (runId === failedId) { send({ run: { sessionId: id, runId, status: 'failed', error: 'Classification returned an invalid routing decision.' }, phase: 'failed', tools: [] }); return res.end(); }
-      const completed = { run: { ...success(id), runId, ...(turn ? { result: { ...success(id).result, answer: 'The follow-up highlights three practical differences. [1]' } } : {}) }, phase: 'completed', tools: [finishedTool] };
+      const combined = turn?.message.includes('Show analysis phases');
+      const analyzedTool = combined ? { ...finishedTool, analysis: turn.message.includes('failure') ? 'failed' : 'completed' } : finishedTool;
+      const completed = { run: { ...success(id), runId, ...(turn ? { result: { ...success(id).result, answer: 'The follow-up highlights three practical differences. [1]' } } : {}) }, phase: 'completed', tools: [analyzedTool] };
       if (turn?.completed || (!turn && id !== activeId)) { send(completed); return res.end(); }
       const timers = [];
       req.on('close', () => timers.forEach(clearTimeout));
       send({ run: { sessionId: id, runId, status: 'running' }, phase: 'research', tools: [tool] });
+      if (combined) {
+        for (const [activity, delay] of [['analyzing', 700], ['finishing', 1500]])
+          timers.push(setTimeout(() => send({ run: { sessionId: id, runId, status: 'running' }, phase: 'research', tools: [{ ...tool, activity }] }), delay));
+        timers.push(setTimeout(() => { turn.completed = true; send(completed); res.end(); }, 2400));
+        return;
+      }
       if (turn && ++turn.connections === 1) {
         // End an active stream once to exercise restoration without a second POST.
         timers.push(setTimeout(() => res.end(), 700)); return;

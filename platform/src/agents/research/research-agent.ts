@@ -147,6 +147,7 @@ async function executeResearchRunWithAssets(options: {
   modelCallPrefix: string;
   onClassificationDiagnostic?: (event: ClassificationDiagnostic) => void;
   onTranscriptDiagnostic?: TranscriptDiagnosticSink;
+  onToolActivity?: AgentToolContext['onToolActivity'];
   onExtractionDiagnostic?: AgentToolContext['onExtractionDiagnostic'];
   persistedRoute?: CapabilityRouteDecision;
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
@@ -283,6 +284,7 @@ async function executeResearchRunWithAssets(options: {
     maxVideoSeconds: agentMaxVideoSeconds(options.env),
     ...scheduleEvidenceTools(provider, options.executeEvidenceTool, options.signal),
     saveFramePreviews: options.saveFramePreviews,
+    onToolActivity: options.onToolActivity,
     onExtractionDiagnostic: options.onExtractionDiagnostic,
     saveStoryboardPreviews: options.saveStoryboardPreviews,
     discardPreviews: options.discardPreviews,
