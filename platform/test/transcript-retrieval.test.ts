@@ -421,3 +421,73 @@ describe('review fixes: whole-video evidence', () => {
     expect(recordUsage.mock.calls[0]![0]).toMatchObject({ category: 'chapter_extraction', usage: { inputTokens: 100, outputTokens: 20 } });
   });
 });
+
+describe('review fixes: minimum fit, warning bounds and cancellation', () => {
+  async function chapterPacket(chapterCount: number, captionText: (index: number) => string, pointText: string, failedFrom = Infinity) {
+    const { indexedTranscriptEvidence } = await import('../src/agents/providers/youtube/tools/get-video-transcript');
+    const perChapter = 20;
+    const captions = Array.from({ length: chapterCount * perChapter }, (_, index) => ({ startMs: index * 3_000, endMs: index * 3_000 + 3_000, durationMs: 3_000, text: captionText(index) }));
+    const plan = { mode: 'chapter_extraction' as const, scope: 'whole_video' as const,
+      failedChapters: Array.from({ length: Math.max(0, chapterCount - failedFrom) }, (_, offset) => failedFrom + offset),
+      chapters: Array.from({ length: chapterCount }, (_, index) => ({ index, title: `Chapter ${index}`, first: index * perChapter, last: index * perChapter + perChapter - 1,
+        ...(index >= failedFrom ? { failed: true as const, points: [] } : { points: [{ point: pointText, caption: index * perChapter }] }) })) };
+    const evidence = indexedTranscriptEvidence(VIDEO, captions, `youtube:${VIDEO}:transcript`, plan);
+    const { evidencePacketSchema } = await import('../src/agents/contracts');
+    return evidencePacketSchema.parse({ packetId: 'p', kind: 'youtube_transcript',
+      sources: [{ id: `youtube:${VIDEO}:transcript`, provider: 'youtube', kind: 'transcript', videoId: VIDEO }], ...evidence, usage: [] });
+  }
+  const expectAligned = (prepared: ReturnType<typeof finalizationEvidenceForModel>) => {
+    const shown = prepared.evidence[0]!;
+    const ids = new Set(shown.excerpts!.map(excerpt => excerpt.id));
+    const points = shown.transcriptRetrieval!.chapters!.flatMap(chapter => chapter.points);
+    expect(points.length).toBeGreaterThan(0);
+    expect(points.every(point => point.excerptIds.length > 0 && point.excerptIds.every(id => ids.has(id)))).toBe(true);
+    expect(shown.warnings.map(warning => warning.code)).toContain('TRANSCRIPT_CONTEXT_TRUNCATED');
+    expect(JSON.stringify(prepared.evidence).length).toBeLessThanOrEqual(60_000);
+    return points.length;
+  };
+
+  it('keeps chapters spread across the video, each aligned, when one point per chapter does not fit', async () => {
+    // Review reproductions: 34 chapters with 1,800-character captions, and 120 chapters with 300-character captions.
+    const long = await chapterPacket(34, index => `${index} ${'long caption words '.repeat(95)}`.slice(0, 1_800), 'p'.repeat(100));
+    const kept = expectAligned(finalizationEvidenceForModel([long], 60_000));
+    expect(kept).toBeLessThan(34);
+    const dense = await chapterPacket(120, index => `${index} ${'dense caption text '.repeat(16)}`.slice(0, 300), 'q'.repeat(120));
+    const shown = finalizationEvidenceForModel([dense], 60_000);
+    expectAligned(shown);
+    expect(shown.evidence[0]!.warnings.find(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED')!.message).toMatch(/Omitted chapters: "Chapter /);
+  });
+
+  it('omits a chapter packet that cannot fit one aligned point, instead of keeping unsupported points', async () => {
+    const packet = await chapterPacket(10, index => `${index} ${'caption '.repeat(200)}`.slice(0, 1_500), 'r'.repeat(100));
+    const prepared = finalizationEvidenceForModel([packet], 1_200);
+    expect(prepared.evidence).toEqual([]);
+    expect(prepared.missingInputs).toContainEqual(expect.objectContaining({ reason: 'prompt_evidence_cut', packetId: 'p' }));
+  });
+
+  it('returns partial evidence with one bounded warning when more than 50 chapters fail', async () => {
+    const packet = await chapterPacket(68, index => `Caption ${index}.`, 'One point.', 1);
+    const partial = packet.warnings.filter(warning => warning.code === 'PARTIAL_EVIDENCE');
+    expect(partial).toHaveLength(1);
+    expect(partial[0]!.message).toMatch(/^67 chapters could not be read: "Chapter 1" \(1:00 to 2:00\);.* and 37 more\. Those parts of the video are not covered\.$/);
+    expect(partial[0]!.message.length).toBeLessThanOrEqual(1_000);
+    expect((packet.artifacts[0]!.data as { failedChapters: number[] }).failedChapters).toHaveLength(67);
+  });
+
+  it('leaves no unhandled rejection when a shadow run is cancelled during retrieval', async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      storage.read.mockReturnValue(new Promise((_, reject) => setTimeout(() => reject(new Error('Agent run finished.')), 10)));
+      const controller = new AbortController();
+      controller.abort(new Error('Agent run finished.'));
+      const plan = await retrieval({ mode: 'shadow' }).access.resolve({ videoId: VIDEO, segments, reference, signal: controller.signal, deadlineAt: Date.now() + 60_000 });
+      expect(plan).toMatchObject({ mode: 'complete_transcript', reason: 'shadow' });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+  });
+});

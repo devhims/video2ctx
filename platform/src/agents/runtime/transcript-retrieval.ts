@@ -51,8 +51,10 @@ function deadlineSignal(signal: AbortSignal, deadlineAt: number) {
   return { signal: controller.signal, dispose: () => { clearTimeout(timer); signal.removeEventListener('abort', abort); } };
 }
 
-/** Rejects with RetrievalTimeout when work outlives its signal; work without a signal of its own keeps running unobserved. */
+/** Rejects with the signal's reason when work outlives it; work without a signal of its own keeps running in the background. */
 function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  // The work is always observed, so a rejection after an early return is never unhandled.
+  work.catch(() => undefined);
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason);

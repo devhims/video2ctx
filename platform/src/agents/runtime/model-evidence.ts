@@ -337,8 +337,11 @@ function packEvidence(
       continue;
     }
     if (packet.transcriptRetrieval?.chapters?.length && packet.excerpts?.length) {
+      // Never fall through to generic reduction, which would keep point text without its captions.
+      // A chapter packet that cannot fit even one aligned point is omitted and reported as cut.
       const fitted = fitChapterPoints(packet, fits);
-      if (fitted) { add(fitted); continue; }
+      if (fitted) add(fitted);
+      continue;
     }
     if (packet.artifacts?.some(artifact => artifact.type === 'youtube_complete_transcript') && packet.excerpts?.length) {
       // Keep as much of a long transcript as fits, spread across its timeline.
@@ -369,26 +372,47 @@ function packEvidence(
 
 /**
  * Whole-video points that do not fit keep their alignment with the captions they cite. Context
- * captions go first, then later points of each chapter; every chapter keeps its first point.
+ * captions go first, then later points of each chapter. If even one point per chapter is too much,
+ * chapters spread across the video keep their first point and the rest are disclosed as omitted.
  */
 function fitChapterPoints(packet: ModelEvidencePacket, fits: (candidate: ModelEvidencePacket) => boolean): ModelEvidencePacket | undefined {
   const chapters = packet.transcriptRetrieval!.chapters!;
   const total = chapters.reduce((sum, chapter) => sum + chapter.points.length, 0);
-  for (const [context, perChapter] of [[1, 6], [1, 3], [1, 2], [1, 1]] as const) {
-    const kept = chapters.map(chapter => ({ ...chapter,
-      points: chapter.points.slice(0, perChapter).map(point => ({ ...point, excerptIds: point.excerptIds.slice(0, context) })) }));
+  const withPoints = chapters.filter(chapter => chapter.points.length);
+  const build = (kept: typeof chapters, message: string): ModelEvidencePacket => {
     const ids = new Set(kept.flatMap(chapter => chapter.points.flatMap(point => point.excerptIds)));
-    const shown = kept.reduce((sum, chapter) => sum + chapter.points.length, 0);
-    const candidate: ModelEvidencePacket = { ...packet,
+    return { ...packet,
       excerpts: packet.excerpts!.filter(excerpt => ids.has(excerpt.id)),
       transcriptRetrieval: { ...packet.transcriptRetrieval!, chapters: kept },
-      warnings: [...packet.warnings, { code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message: shown === total
-        ? 'Chapter points fit the finalization context only with the caption where each point starts, without the captions after it.'
-        : `Only ${shown} of ${total} chapter points fit the finalization context, at most ${perChapter} per chapter with the caption where each starts. Later points of longer chapters were omitted; do not claim exhaustive coverage.` }],
-    };
+      warnings: [...packet.warnings, { code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message }] };
+  };
+  const trimmed = (perChapter: number) => chapters.map(chapter => ({ ...chapter,
+    points: chapter.points.slice(0, perChapter).map(point => ({ ...point, excerptIds: point.excerptIds.slice(0, 1) })) }));
+  for (const perChapter of [6, 3, 2, 1]) {
+    const kept = trimmed(perChapter);
+    const shown = kept.reduce((sum, chapter) => sum + chapter.points.length, 0);
+    const candidate = build(kept, shown === total
+      ? 'Chapter points fit the finalization context only with the caption where each point starts, without the captions after it.'
+      : `Only ${shown} of ${total} chapter points fit the finalization context, at most ${perChapter} per chapter with the caption where each starts. Later points of longer chapters were omitted; do not claim exhaustive coverage.`);
     if (fits(candidate)) return candidate;
   }
-  return undefined;
+  // The largest set of chapters, spread evenly across the video, whose first aligned point fits.
+  const spread = (count: number) => {
+    const chosen = new Set(Array.from({ length: count }, (_, index) => withPoints[Math.floor(index * withPoints.length / count)]!.index));
+    const kept = trimmed(1).filter(chapter => chosen.has(chapter.index));
+    const omitted = withPoints.filter(chapter => !chosen.has(chapter.index));
+    return build(kept, `Only ${count} of ${withPoints.length} chapters with points fit the finalization context, one point each with the caption where it starts. Omitted chapters: ${
+      omitted.slice(0, 12).map(chapter => `"${chapter.title.slice(0, 60)}"`).join(', ')}${omitted.length > 12 ? ` and ${omitted.length - 12} more` : ''}. Those parts of the video are not covered here; do not claim exhaustive coverage.`.slice(0, 1_000));
+  };
+  let low = 1, high = withPoints.length - 1;
+  let fitted: ModelEvidencePacket | undefined;
+  while (low <= high) {
+    const count = Math.floor((low + high) / 2);
+    const candidate = spread(count);
+    if (fits(candidate)) { fitted = candidate; low = count + 1; }
+    else high = count - 1;
+  }
+  return fitted;
 }
 
 /**

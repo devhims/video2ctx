@@ -284,11 +284,24 @@ export function indexedTranscriptEvidence(
       failedChapters: plan.failedChapters,
       note: 'The whole transcript was read chapter by chapter. Chapters are in video order with their key points; cite the caption excerpt each point names, and cover every chapter that has points.',
     } }],
-    warnings: [
-      ...failed.map(chapter => ({ code: 'PARTIAL_EVIDENCE', videoId,
-        message: `The chapter "${chapter.title}" (${clock(segments[chapter.first]?.startMs ?? 0)} to ${clock(segments[chapter.last]?.endMs ?? 0)}) could not be read. That part of the video is not covered.` })),
-    ],
+    // One bounded warning, however many chapters failed; the artifact keeps each failed chapter.
+    warnings: failed.length ? [{ code: 'PARTIAL_EVIDENCE', videoId, message: failedChaptersMessage(failed.map(chapter =>
+      `"${chapter.title.slice(0, 80)}" (${clock(segments[chapter.first]?.startMs ?? 0)} to ${clock(segments[chapter.last]?.endMs ?? 0)})`)) }] : [],
   };
+}
+
+function failedChaptersMessage(chapters: string[]): string {
+  const prefix = chapters.length === 1 ? 'The chapter ' : `${chapters.length} chapters could not be read: `;
+  const suffix = chapters.length === 1 ? ' could not be read. That part of the video is not covered.' : '. Those parts of the video are not covered.';
+  const listed: string[] = [];
+  for (const [index, chapter] of chapters.entries()) {
+    const more = chapters.length - index - 1;
+    const candidate = [...listed, chapter].join('; ') + (more ? `; and ${more} more` : '');
+    if ((prefix + candidate + suffix).length > 1_000) break;
+    listed.push(chapter);
+  }
+  const rest = chapters.length - listed.length;
+  return prefix + listed.join('; ') + (rest ? `${listed.length ? '; and ' : ''}${rest} more` : '') + suffix;
 }
 
 function clock(ms: number): string {
