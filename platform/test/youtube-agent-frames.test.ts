@@ -7,6 +7,7 @@ import { createGetVideoFramesTool, executeGetVideoFrames } from '../src/agents/p
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
+import type { EvidencePacket } from '../src/agents/contracts';
 import { toolTrace } from '../src/agents/runtime/run-progress';
 
 const frames = { videoId: 'abcdefghijk', frames: [{ timestampMs: 1234, mimeType: 'image/jpeg' as const,
@@ -188,4 +189,59 @@ test('accepts one grounded finding for every image in a six-frame batch', async 
   const result = await createFrameAnalyst(model)({ frames: { ...frames, frames: timestamps.map(timestampMs => ({ ...frames.frames[0]!, timestampMs })) },
     focus: 'Describe each frame', signal: new AbortController().signal, modelCallId: 'six-frames' });
   expect(result.findings.flatMap(f => f.timestampsMs)).toEqual(timestamps);
+});
+
+
+describe('recorded frame selection', () => {
+  test('rejects unknown or mismatched locating evidence before provider I/O', async () => {
+    const ctx = context();
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, basis: 'spoken_introduction', evidenceIds: ['invented'] }] }, ctx, 'bad-cue')).toThrow('not delivered');
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 70000, basis: 'exploratory', evidenceIds: [] }] }, ctx, 'bad-time')).toThrow('per requested timestamp');
+    ctx.getEvidence = () => [{ packetId: 'other-video', kind: 'youtube_transcript', sources: [{ id: 'other', provider: 'youtube', kind: 'transcript', videoId: 'xxxxxxxxxxx' }],
+      excerpts: [{ id: 'wrong-video-cue', sourceId: 'other', text: 'Introduction' }], artifacts: [], warnings: [], usage: [] }];
+    expect(() => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, basis: 'spoken_introduction', evidenceIds: ['wrong-video-cue'] }] }, ctx, 'wrong-video')).toThrow('not delivered');
+    expect(ctx.provider.frames).not.toHaveBeenCalled();
+  });
+
+  test('accepts only a fixed basis, with locating excerpts exactly when the basis needs them', () => {
+    const ctx = context();
+    const attempt = (selection: Record<string, unknown>) => () => executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, ...selection }] } as never, ctx, 'basis');
+    expect(attempt({ basis: 'spoken_introduction', evidenceIds: [] })).toThrow('Cite the locating excerpts');
+    expect(attempt({ basis: 'exploratory', evidenceIds: ['cue'] })).toThrow('cite no excerpts');
+    // Free text is not a basis, so a source-bearing note cannot be recorded.
+    expect(attempt({ basis: 'The captions say revenue doubled', evidenceIds: [] })).toThrow();
+    expect(ctx.provider.frames).not.toHaveBeenCalled();
+  });
+
+  test('preserves a recorded basis through saved analysis and model projection', async () => {
+    const ctx = context();
+    const packets: any[] = [];
+    ctx.getEvidence = () => packets;
+    attachTestAssetStore(ctx);
+    const retrieval = await executeGetVideoFrames({ ...input, selections: [{ timestampMs: 1234, basis: 'exploratory', evidenceIds: [] }] }, ctx, 'selection');
+    // The fixture's asset store pins frames when the wrapped provider is used.
+    packets.push(retrieval);
+    const analysis = await executeAnalyzeVideoFrames({ assetVersions: retrieval.assetVersions!, focus: 'Read the chart' }, ctx, 'selection-analysis');
+    const projected = evidencePacketForModel(analysis);
+    expect(projected.frameCoverage?.selections).toEqual([{ timestampMs: 1234, basis: 'exploratory', evidenceIds: [] }]);
+    expect(projected.frameCoverage?.requestedTimestampsMs).toEqual([1234]);
+  });
+
+  test('drops free-text reasons recorded before bases existed', () => {
+    const legacy = { packetId: 'legacy', kind: 'youtube_frames', sources: [{ id: 'f', provider: 'youtube', kind: 'frames', videoId: input.videoId }],
+      excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_frame_retrieval', data: { requestedTimestampsMs: [1234],
+        selections: [{ timestampMs: 1234, reason: 'The captions say revenue doubled here', evidenceIds: [] }],
+        frames: [{ timestampMs: 1234, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [] } }] } as EvidencePacket;
+    const projected = evidencePacketForModel(legacy);
+    expect(projected.frameCoverage?.selections).toEqual([{ timestampMs: 1234, evidenceIds: [] }]);
+    expect(JSON.stringify(projected)).not.toContain('revenue doubled');
+  });
+
+  test('a changed basis does not silently reuse the original selection', async () => {
+    const ctx = context(); const keys: string[] = [];
+    ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
+    for (const basis of ['exploratory', 'user_requested'] as const) await executeGetVideoFrames({ ...input,
+      selections: [{ timestampMs: 1234, basis, evidenceIds: [] }] }, ctx, basis);
+    expect(new Set(keys).size).toBe(2);
+  });
 });

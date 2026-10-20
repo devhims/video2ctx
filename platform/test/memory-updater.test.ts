@@ -1,6 +1,7 @@
 import { MockLanguageModelV4 } from 'ai/test';
 import {
   generateMemoryDelta,
+  memoryDeltaSchema,
   MEMORY_UPDATE_COST_RESERVE_MICROS,
   MEMORY_UPDATE_TIMEOUT_MESSAGE,
   memoryUpdaterPrompt,
@@ -88,10 +89,25 @@ describe('bounded projection authorizes proposals (reviewer round 1, finding 1)'
       .changes).toHaveLength(1);
   });
 
-  it('documents the limit: a real quote does not prove the stored paraphrase is entailed (reviewer round 1, finding 3)', () => {
-    // Structural check only. The quote exists, so this unentailed paraphrase is accepted.
+  it('stores the user quote instead of an unentailed assistant paraphrase', () => {
     expect(validate([change({ kind: 'context', topic: 'scope', text: 'Dislikes the first video', userQuote: 'only care about the second video' })])
-      .changes).toHaveLength(1);
+      .changes[0]?.text).toBe('only care about the second video');
+  });
+
+  it('stores the user\'s own letters even when the model changes case or spacing', () => {
+    const question = 'Note: I only care about the  iPhone 15 Pro (2023)\nreview.';
+    expect(validate([change({ kind: 'context', topic: 'device', userQuote: 'i only care about the IPHONE 15 pro (2023) review' })], input({ question }))
+      .changes[0]?.text).toBe('I only care about the iPhone 15 Pro (2023) review');
+    expect(validate([change({ kind: 'context', topic: 'device', userQuote: 'care about the iPhone 16' })], input({ question })).changes).toEqual([]);
+  });
+
+  it('rejects fabricated frame history stored as an unresolved question', () => {
+    const question = 'Why 3:20 instead of 3:30?';
+    const invented = 'The agent sampled 0:55, 1:10, 1:30 and 3:20.';
+    expect(validate([change({ topic: 'frame sampling', text: invented })], input({ question }))).toEqual({ changes: [], rejected: 1 });
+    const result = validate([change({ topic: 'frame sampling', text: invented, userQuote: question })], input({ question }));
+    expect(result.changes[0]?.text).toBe(question);
+    expect(result.changes[0]?.text).not.toContain('1:10');
   });
 });
 
@@ -102,7 +118,7 @@ describe('delta semantics', () => {
 
   it('a correction targets one shown topic and leaves the rest untouched', () => {
     const result = validate([change({ kind: 'context', topic: 'Focus', text: 'Only the second video', userQuote: 'I only care about the second video' })]);
-    expect(result.changes).toEqual([{ action: 'upsert', kind: 'context', topic: 'Focus', text: 'Only the second video', evidenceIds: [] }]);
+    expect(result.changes).toEqual([{ action: 'upsert', kind: 'context', topic: 'Focus', text: 'I only care about the second video', evidenceIds: [] }]);
   });
 
   it('rejects unsupported findings, unquoted context and assistant-only preferences', () => {
@@ -126,7 +142,7 @@ describe('delta semantics', () => {
   });
 
   it('processes at most four proposals and counts the overflow as rejected', () => {
-    const result = validate(Array.from({ length: 6 }, (_, index) => change({ topic: `open ${index}` })));
+    const result = validate(Array.from({ length: 6 }, (_, index) => change({ topic: `open ${index}`, userQuote: 'Compare the interviewers' })));
     expect(result.changes).toHaveLength(4);
     expect(result.rejected).toBe(2);
   });
@@ -227,4 +243,12 @@ it('reports accepted backup memory usage and leaves the canceled primary request
     expect(await pending).toBe(accepted);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
+});
+
+it.each(['context', 'question'] as const)('accepts a quote-only %s upsert with omitted or empty text', kind => {
+  for (const supplied of [{}, { text: '' }]) {
+    const delta = memoryDeltaSchema.parse({ changes: [{ action: 'upsert', kind, topic: 'preference', userQuote: 'I prefer detailed answers', ...supplied }] });
+    const projection = projectMemoryUpdaterInput({ question: 'I prefer detailed answers', answer: 'Understood.', citations: [], memories: [] });
+    expect(validateMemoryDelta(delta, projection)).toEqual({ rejected: 0, changes: [{ action: 'upsert', kind, topic: 'preference', text: 'I prefer detailed answers', evidenceIds: [] }] });
+  }
 });

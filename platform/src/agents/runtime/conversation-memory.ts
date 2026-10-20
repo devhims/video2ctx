@@ -13,6 +13,8 @@ export interface ConversationTurn {
   metadata?: EvidencePacket[];
   /** Persisted source packets cited by this turn, separate from assistant claims. */
   evidence?: EvidencePacket[];
+  /** Frame and storyboard packets this turn produced or received, for structural inspection records only. */
+  inspection?: EvidencePacket[];
 }
 
 export interface LinkedConversationTurn extends ConversationTurn {
