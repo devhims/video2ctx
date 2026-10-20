@@ -74,6 +74,8 @@ youtube/videos/abcdefghijk/
   storyboard_manifest/<variant-hash>/<payload-hash>.json
   storyboard_sheet/<variant-hash>/<payload-hash>.json
   frame/<variant-hash>/<payload-hash>.json
+  transcript_index/<variant-hash>/<payload-hash>.json
+  transcript_chapters/<variant-hash>/<payload-hash>.json
   images/<image-hash>.jpg
 ```
 
@@ -91,11 +93,26 @@ Complete legacy video KV entries are promoted on demand with their original fetc
 
 Recovery retains historical objects. Images written before a failed manifest write can remain unreferenced. There is no garbage collector or retention policy in this first version. Do not attach a blanket bucket expiration rule: it could delete current evidence. Add reference-aware cleanup and capacity monitoring before sustained large ingestion.
 
+## Transcript retrieval index
+
+Two derived kinds sit beside the transcript version they were built from, for agent single-video inspection (`AGENT_TRANSCRIPT_RETRIEVAL`, see `reference/agents/platform-internals.md`):
+
+| Kind | Variant (JSON) | Payload |
+| --- | --- | --- |
+| `transcript_index` | `{ transcriptHash, language, passageVersion, embeddingModel }` | `{ captionCount, dims, passages: [{index, first, last}], vectors }` |
+| `transcript_chapters` | `{ transcriptHash, language, chapterVersion, model, embeddingModel, chapterMinutes }` | `{ captionCount, dims, chapters: [{index, first, last, title, summary}], vectors }` |
+
+`transcriptHash` is the transcript version's `content_hash`, so an index is only ever read for that exact transcript; a refreshed transcript gets its own index and the old one stays with the old version. Vectors are L2-normalized Qwen3 Embedding 8B outputs stored as base64 float16, about 0.7 MB for a 53-minute keynote and 1.4 MB for 80 minutes. Payloads hold caption indexes, model-written chapter titles and summaries, and vectors, never transcript text, which is always rebuilt from the transcript version.
+
+`TranscriptIndexWorkflow` (`platform/src/workflows.ts`) is the only writer, through `VideoCatalog.save`. The coordinator starts it after publishing a complete word-level transcript, the variant the agent reads, and an agent question that finds no index starts it too. Its instance ID is derived from the video, transcript hash and builder versions, so a duplicate start is a no-op and a failed instance is restarted. Step 1 (passages and embeddings) is saved before step 2 (one DeepSeek chapter call and chapter embeddings), and each step retries independently. Transcripts past `AGENT_MAX_VIDEO_SECONDS` are skipped and logged as `transcript_index_skipped`. Readers make one D1 lookup per kind; a missing version means not ready.
+
+The index is shared, derived, public data with no owner. It is never recorded in session tables or user references, no route or agent tool exposes it or accepts its ID, and no lifecycle rule may match these prefixes. Session deletion, account deletion and transcript refresh leave it intact. Removing it, for example for a takedown, is an operator action that must remove the transcript version and its indexes together.
+
 ## Session boundary
 
 Only reusable public provider evidence enters the shared catalog. Prompts, user IDs, private analysis, citations and conversation packets remain in the existing session store. Frame analysis still runs in the session against reusable source images. Deleting a session deletes its private evidence according to the existing lifecycle; it does not purge shared public video sources.
 
-This version does not add timeline summaries, embeddings, similarity search or a catalog management API. Those can build on these durable source references. Existing session assets migrate lazily on read or when an active session inventory opens. Dormant sessions and historical run snapshots are not bulk backfilled.
+There is no catalog management API. The transcript retrieval index below is the first derived asset built on these durable source references. Existing session assets migrate lazily on read or when an active session inventory opens. Dormant sessions and historical run snapshots are not bulk backfilled.
 
 Session references identify an exact `(video_id, kind, variant, content_hash)` in `video_asset_versions`. Reads verify the stored manifest hash and hydrate that version's images. They never follow `video_assets` to a newer payload. A small session-local envelope preserves the metadata the session originally received. The session's existing asset hash remains the citation identity.
 

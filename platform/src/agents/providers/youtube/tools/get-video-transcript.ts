@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { dataOperationCost } from '../../../../lib/metering';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
+import type { TranscriptRetrievalPlan } from '../../../runtime/transcript-retrieval';
+import { INDEXED_TRANSCRIPT_ARTIFACT } from '../../../runtime/model-evidence';
 
 import { regionRestricted, captionsUnavailable, youtubeUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
 
@@ -112,6 +114,30 @@ export function executeGetVideoTranscript(
         }
       }
       const sourceId = `youtube:${parsed.videoId}:transcript`;
+      const retrieval = context.transcriptPolicy.mode === 'complete_transcript' ? context.transcriptPolicy.retrieval : undefined;
+      if (retrieval) {
+        const reference = (response.assetVersions?.[0] ? context.session?.transcriptCatalogReference?.(response.assetVersions[0]) : undefined)
+          ?? response.catalogVersions?.find(version => version.kind === 'transcript');
+        const plan = await retrieval.resolve({ videoId: parsed.videoId, segments: response.value.segments, reference,
+          signal: context.signal, deadlineAt: context.researchDeadlineAt });
+        context.signal.throwIfAborted();
+        if (plan.mode !== 'complete_transcript') {
+          const indexed = indexedTranscriptEvidence(parsed.videoId, response.value.segments, sourceId, plan);
+          return evidencePacketSchema.parse({
+            packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
+            kind: 'youtube_transcript',
+            sources: [{ id: sourceId, provider: 'youtube', kind: 'transcript', videoId: parsed.videoId,
+              url: `https://www.youtube.com/watch?v=${parsed.videoId}` }],
+            ...indexed,
+            warnings: [
+              ...response.value.meta.warnings.map(message => ({ code: 'YOUTUBE_PROVIDER_WARNING', message, videoId: parsed.videoId })),
+              ...indexed.warnings,
+            ],
+            assetVersions: response.assetVersions,
+            usage: [retrievalUsage('transcript', response, status => dataOperationCost('transcript', status))],
+          });
+        }
+      }
       const evidence = completeTranscriptEvidence(parsed.videoId, response.value.segments, sourceId);
       const offset = parsed.offset ?? 0;
       const excerpts = evidence.excerpts.slice(offset, offset + TRANSCRIPT_PAGE_SIZE);
@@ -166,21 +192,28 @@ export function executeGetVideoTranscript(
   });
 }
 
+/** One excerpt per caption chunk. IDs are identical in every transcript mode, so citations stay caption-precise. */
+export function captionExcerpts(
+  videoId: string,
+  segment: Pick<TranscriptSegment, 'text' | 'startMs' | 'endMs'>,
+  segmentIndex: number,
+  sourceId: string,
+) {
+  return chunkText(segment.text, 2_000).map((text, chunkIndex) => ({
+    id: `transcript:${safeIdPart(videoId)}:${segmentIndex}:${segment.startMs}:${chunkIndex}`,
+    sourceId,
+    text,
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+  }));
+}
+
 export function completeTranscriptEvidence(
   videoId: string,
   segments: TranscriptSegment[],
   sourceId: string,
 ) {
-  const excerpts = segments.flatMap((segment, segmentIndex) => {
-    const chunks = chunkText(segment.text, 2_000);
-    return chunks.map((text, chunkIndex) => ({
-      id: `transcript:${safeIdPart(videoId)}:${segmentIndex}:${segment.startMs}:${chunkIndex}`,
-      sourceId,
-      text,
-      startMs: segment.startMs,
-      endMs: segment.endMs,
-    }));
-  });
+  const excerpts = segments.flatMap((segment, segmentIndex) => captionExcerpts(videoId, segment, segmentIndex, sourceId));
   return {
     excerpts,
     artifactType: 'youtube_complete_transcript',
@@ -195,6 +228,88 @@ export function completeTranscriptEvidence(
     },
     warnings: [],
   };
+}
+
+/** Captions after a point's start that are shown with it, inside its chapter. */
+const POINT_CONTEXT_CAPTIONS = 2;
+
+/**
+ * Bounded evidence from the shared index. Excerpts are always caption text with the same IDs as
+ * the complete transcript; extracted points only reference them.
+ */
+export function indexedTranscriptEvidence(
+  videoId: string,
+  segments: TranscriptSegment[],
+  sourceId: string,
+  plan: Exclude<TranscriptRetrievalPlan, { mode: 'complete_transcript' }>,
+) {
+  const durationMs = segments.reduce((latest, segment) => Math.max(latest, segment.endMs), 0);
+  const usable = (index: number) => !!segments[index]?.text.trim();
+  if (plan.mode === 'passage_retrieval') {
+    const excerpts = plan.captions.flatMap(index => captionExcerpts(videoId, segments[index]!, index, sourceId));
+    return {
+      excerpts,
+      artifacts: [{ type: INDEXED_TRANSCRIPT_ARTIFACT, title: `Relevant transcript passages for ${videoId}`, data: {
+        videoId, mode: plan.mode, scope: plan.scope, segmentCount: segments.length, selectedCaptions: plan.captions.length,
+        excerptCount: excerpts.length, evidenceTokens: plan.evidenceTokens, endMs: durationMs,
+        passages: plan.excerpts.map(excerpt => ({ startMs: segments[excerpt.first]!.startMs, endMs: segments[excerpt.last]!.endMs })),
+        ...(plan.chapter ? { chapter: plan.chapter } : {}),
+        note: `These are the ${plan.captions.length} transcript captions most relevant to the request, out of ${segments.length}, selected by passage search${plan.chapter ? ` with the chapter "${plan.chapter.title}"` : ''}. They are complete passages in time order, not the whole transcript. Do not claim exhaustive coverage of the video.`,
+      } }],
+      warnings: [],
+    };
+  }
+  const excerpts = new Map<string, ReturnType<typeof captionExcerpts>[number]>();
+  const chapters = plan.chapters.map(chapter => ({
+    index: chapter.index, title: chapter.title,
+    startMs: segments[chapter.first]?.startMs ?? 0, endMs: segments[chapter.last]?.endMs ?? 0,
+    ...(chapter.failed ? { failed: true } : {}),
+    points: chapter.points.map(point => {
+      const context = Array.from({ length: POINT_CONTEXT_CAPTIONS + 1 }, (_, offset) => point.caption + offset)
+        .filter(index => index <= chapter.last && usable(index));
+      const ids: string[] = [];
+      for (const index of context) for (const excerpt of captionExcerpts(videoId, segments[index]!, index, sourceId)) {
+        excerpts.set(excerpt.id, excerpt);
+        ids.push(excerpt.id);
+      }
+      // The first ID is the caption where the point starts; the rest are its context.
+      return { point: point.point, excerptIds: ids.slice(0, POINT_CONTEXT_CAPTIONS + 1) };
+    }),
+  }));
+  const failed = plan.chapters.filter(chapter => chapter.failed);
+  return {
+    excerpts: [...excerpts.values()].sort((a, b) => a.startMs - b.startMs),
+    artifacts: [{ type: INDEXED_TRANSCRIPT_ARTIFACT, title: `Chapter points for ${videoId}`, data: {
+      videoId, mode: plan.mode, scope: plan.scope, segmentCount: segments.length, endMs: durationMs, chapters,
+      failedChapters: plan.failedChapters,
+      note: 'The whole transcript was read chapter by chapter. Chapters are in video order with their key points; cite the caption excerpt each point names, and cover every chapter that has points.',
+    } }],
+    // One bounded warning, however many chapters failed; the artifact keeps each failed chapter.
+    warnings: failed.length ? [{ code: 'PARTIAL_EVIDENCE', videoId, message: failedChaptersMessage(failed.map(chapter =>
+      `"${chapter.title.slice(0, 80)}" (${clock(segments[chapter.first]?.startMs ?? 0)} to ${clock(segments[chapter.last]?.endMs ?? 0)})`)) }] : [],
+  };
+}
+
+function failedChaptersMessage(chapters: string[]): string {
+  const prefix = chapters.length === 1 ? 'The chapter ' : `${chapters.length} chapters could not be read: `;
+  const suffix = chapters.length === 1 ? ' could not be read. That part of the video is not covered.' : '. Those parts of the video are not covered.';
+  const listed: string[] = [];
+  for (const [index, chapter] of chapters.entries()) {
+    const more = chapters.length - index - 1;
+    const candidate = [...listed, chapter].join('; ') + (more ? `; and ${more} more` : '');
+    if ((prefix + candidate + suffix).length > 1_000) break;
+    listed.push(chapter);
+  }
+  const rest = chapters.length - listed.length;
+  return prefix + listed.join('; ') + (rest ? `${listed.length ? '; and ' : ''}${rest} more` : '') + suffix;
+}
+
+function clock(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const rest = String(seconds % 60).padStart(2, '0');
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
 }
 
 function chunkText(value: string, maximum: number): string[] {

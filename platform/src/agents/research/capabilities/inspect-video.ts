@@ -20,6 +20,9 @@ export const INSPECT_VIDEO_TOOL_NAMES = [
   'finalize_answer',
 ] as const;
 
+/** Added only when indexed transcript retrieval is active for the run. */
+export const INDEXED_TRANSCRIPT_GUIDANCE = 'Transcript retrieval may answer from a prepared index instead of the whole transcript. When get_video_transcript returns a youtube_transcript_retrieval artifact, its excerpts are already the complete passages relevant to this request, or, for a whole-video request, the key points of every chapter with the captions they cite. Do not try to read the whole transcript, page it, or call get_video_transcript again for this video in this run. Use those excerpt identifiers as evidence and state any gap they leave. Without that artifact, the instructions above for the complete transcript apply.';
+
 export const inspectVideoInstructions = (completion: ResearchCompletionTool) => `
 You are the single-video inspection capability of a YouTube research agent.
 

@@ -12,6 +12,9 @@ export const numberedItemCountSchema = z.number().int().min(1).max(100).optional
 export const visualEvidenceSchema = z.enum(['none', 'helpful', 'required']);
 export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
 export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(8);
+/** How much of one inspected video a question needs. Absent or invalid means topic. */
+export const transcriptScopeSchema = z.enum(['one_part', 'topic', 'whole_video']);
+export type TranscriptScope = z.infer<typeof transcriptScopeSchema>;
 
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
@@ -34,6 +37,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     route: z.literal('inspect_video'),
     researchVideoCount: z.literal(1).optional(),
     videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+    transcriptScope: transcriptScopeSchema.optional(),
     useStoryboard: z.boolean().optional(),
     visualEvidence: visualEvidenceSchema.optional(),
     visualRequirements: visualRequirementsSchema.optional(),

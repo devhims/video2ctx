@@ -5,7 +5,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['test/**/*.test.ts', 'test/**/*.test.mjs'],
-    exclude: ['test/landing-samples.integration.test.ts', 'test/session-catalog.integration.test.ts', 'test/session-owners.integration.test.ts', 'test/video-catalog.integration.test.ts', 'test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts',
+    exclude: ['test/landing-samples.integration.test.ts', 'test/session-catalog.integration.test.ts', 'test/session-owners.integration.test.ts', 'test/video-catalog.integration.test.ts', 'test/video-index.integration.test.ts', 'test/session-evidence.integration.test.ts', 'test/admission-queue.integration.test.ts',
       'test/auth-worker.integration.test.ts',
       'test/account-record-deletion.integration.test.ts',
       'test/admin-user-deletion.integration.test.ts',

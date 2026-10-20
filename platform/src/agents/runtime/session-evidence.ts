@@ -7,6 +7,7 @@ import type { Transcript } from 'all-things-youtube';
 import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video-transcript';
 import { sha256 } from '../../lib/http';
 import type { CachedResult } from '../../lib/youtube';
+import type { VideoAssetReference } from '../../lib/video-catalog';
 import { memoryUpdateSchema, evidencePacketSchema, type EvidencePacket } from '../contracts';
 import type { SessionCatalog, SessionCatalogReference } from './session-catalog';
 import { canonicalSessionPayload } from './session-catalog';
@@ -64,6 +65,8 @@ export interface SessionAccess {
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
   transcriptOverLimit?(version: string): VideoTooLongError | undefined;
+  /** The shared catalog version a saved transcript points to. Read-only. */
+  transcriptCatalogReference?(version: string): VideoAssetReference | undefined;
   readEvidence(
     version: string,
     offset?: number,
@@ -321,6 +324,18 @@ export class SessionEvidenceStore implements SessionAccess {
       .map((row) => row.version);
   }
   /** The same check for whatever version a reuse key currently points to. */
+  /**
+   * Derived indexes are keyed by this shared reference and never recorded in session tables,
+   * so session and account deletion cannot reach them.
+   */
+  transcriptCatalogReference(version: string): VideoAssetReference | undefined {
+    const row = this.sql.exec<{ reference_json: string }>(
+      `SELECT r.reference_json FROM session_asset_catalog_refs r JOIN session_assets a ON a.version=r.version
+       WHERE r.version=? AND a.kind='transcript'`, version).toArray()[0];
+    if (!row) return undefined;
+    const asset = (JSON.parse(row.reference_json) as SessionCatalogReference).asset;
+    return asset?.kind === 'transcript' ? asset : undefined;
+  }
   transcriptOverLimitForKey(key: string): VideoTooLongError | undefined {
     const row = this.sql.exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key).toArray()[0];
     return row ? this.transcriptOverLimit(row.version) : undefined;

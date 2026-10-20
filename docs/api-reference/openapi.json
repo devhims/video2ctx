@@ -7508,6 +7508,14 @@
                             "type": "string",
                             "pattern": "^[A-Za-z0-9_-]{11}$"
                           },
+                          "transcriptScope": {
+                            "type": "string",
+                            "enum": [
+                              "one_part",
+                              "topic",
+                              "whole_video"
+                            ]
+                          },
                           "useStoryboard": {
                             "type": "boolean"
                           },
@@ -9087,6 +9095,14 @@
                       "videoId": {
                         "type": "string",
                         "pattern": "^[A-Za-z0-9_-]{11}$"
+                      },
+                      "transcriptScope": {
+                        "type": "string",
+                        "enum": [
+                          "one_part",
+                          "topic",
+                          "whole_video"
+                        ]
                       },
                       "useStoryboard": {
                         "type": "boolean"

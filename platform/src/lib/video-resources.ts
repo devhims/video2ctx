@@ -97,6 +97,26 @@ export async function sheetKey(board: Storyboard, index: number): Promise<VideoA
 export function frameKey(op: FrameOperation, time: number): VideoAssetKey {
   return { videoId: op.id, kind: 'frame', variant: `v1:${op.maxWidth}:${time}` };
 }
+
+/** Derived from one exact transcript version. Shared, unowned and never exposed by a route. */
+export const TRANSCRIPT_INDEX_KIND = 'transcript_index';
+export const TRANSCRIPT_CHAPTERS_KIND = 'transcript_chapters';
+/** The transcript content hash is part of the variant, so an index is only read for that version. */
+export function transcriptIndexKey(videoId: string, variant: {
+  transcriptHash: string; language: string; passageVersion: number; embeddingModel: string;
+}): VideoAssetKey {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || !/^[a-f0-9]{64}$/.test(variant.transcriptHash)) throw new Error('Invalid transcript index key.');
+  return { videoId, kind: TRANSCRIPT_INDEX_KIND, variant: JSON.stringify({ transcriptHash: variant.transcriptHash,
+    language: variant.language, passageVersion: variant.passageVersion, embeddingModel: variant.embeddingModel }) };
+}
+export function transcriptChaptersKey(videoId: string, variant: {
+  transcriptHash: string; language: string; chapterVersion: number; model: string; embeddingModel: string; chapterMinutes: number;
+}): VideoAssetKey {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || !/^[a-f0-9]{64}$/.test(variant.transcriptHash)) throw new Error('Invalid transcript chapters key.');
+  return { videoId, kind: TRANSCRIPT_CHAPTERS_KIND, variant: JSON.stringify({ transcriptHash: variant.transcriptHash,
+    language: variant.language, chapterVersion: variant.chapterVersion, model: variant.model,
+    embeddingModel: variant.embeddingModel, chapterMinutes: variant.chapterMinutes }) };
+}
 /** Visual selections share a coordinator lookup; metadata reads keep their fast path. */
 export function isVisualSelection(op: VideoResourceOperation): op is FrameOperation | Extract<YouTubeOperation, { kind: 'storyboard' }> {
   return op.kind === 'frames' || (op.kind === 'storyboard' && !op.metadataOnly);

@@ -53,19 +53,21 @@ function configuredAgentModel(
   backup = false,
 ): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
+  // Transcript index roles were measured only with DeepSeek V4.1 Flash, reasoning disabled.
+  const isChapterRole = ['chapter_builder', 'chapter_extractor'].includes(String(metadata?.model_role));
   const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
-  const provider: string | undefined = backup ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
+  const provider: string | undefined = backup || isChapterRole ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
   const useFireworks = provider === 'fireworks';
   if (provider && !['workers-ai', 'fireworks'].includes(provider)) {
     throw new Error(`Unsupported agent ${isFinalizer ? 'finalizer' : useTextProfile ? 'text' : 'GLM'} provider.`);
   }
   if (useFireworks && !env.FIREWORKS_API_KEY?.trim()) throw new Error('Fireworks secret is not configured.');
-  const profile = useFireworks && (backup || isFinalizer || useTextProfile)
-    ? fireworksFinalizerProfile(backup ? CLASSIFIER_FALLBACK_TEXT_MODEL : isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
+  const profile = useFireworks && (backup || isChapterRole || isFinalizer || useTextProfile)
+    ? fireworksFinalizerProfile(backup || isChapterRole ? CLASSIFIER_FALLBACK_TEXT_MODEL : isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
   const finalizerEffort = isFinalizer && !backup ? env.AGENT_FINALIZER_REASONING_EFFORT?.trim() : undefined;
   if (finalizerEffort && !['low', 'medium'].includes(finalizerEffort)) {
     throw new Error('Unsupported finalizer reasoning effort.');

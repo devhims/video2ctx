@@ -18,6 +18,8 @@ import type { TranscriptDiagnosticSink } from '../runtime/transcript-diagnostics
 import { researchVideoTarget } from './research-plan';
 import { markUnitMismatches, transcriptSourceContext, unverifiedAnswerFigures, unverifiedFiguresWarning } from '../runtime/transcript-grounding';
 import { executeGetVideo } from '../providers/youtube/tools/get-video';
+import { answerCitationIds } from '../markdown-citations';
+import { INDEXED_TRANSCRIPT_GUIDANCE } from './capabilities/inspect-video';
 import { answerOutputTokenLimit, finalizationOutputTokenLimit } from './answer-budget';
 import { withFinalizationAttempt } from './finalization-attempt';
 import { fireworksModelPricing } from '../fireworks-finalizer';
@@ -54,6 +56,9 @@ import {
 import { createCapabilityToolSet } from '../providers/youtube/tool-library';
 import type { YouTubeAgentToolName } from '../providers/youtube/tool-names';
 import { createTranscriptAnalyst } from '../providers/youtube/transcript-analyst';
+import { createChapterExtractor } from '../providers/youtube/chapter-extractor';
+import { createTranscriptRetrieval, preloadVideoChapters, type TranscriptRetrievalEvent } from '../runtime/transcript-retrieval';
+import { chapterExtractionConcurrency, chapterMinutes, indexEvidenceTokens, transcriptRetrievalMode, transcriptRouter } from '../../lib/video-index/config';
 import {
   conversationModelMessages,
   type ConversationTurn,
@@ -63,8 +68,10 @@ import {
   type AgentModelCostBudget,
 } from '../runtime/model-budget';
 import {
+  chapterPointCoverage,
   evidencePacketForModel,
   finalizationEvidenceForModel,
+  isIndexedTranscriptPacket,
 } from '../runtime/model-evidence';
 import { COMPLETE_RESEARCH_TOOL_NAME, FINALIZE_ANSWER_TOOL_NAME } from '../runtime/loop-control';
 import type { AgentDraft } from '../runtime/run-progress';
@@ -88,6 +95,9 @@ const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
 // about 7 seconds at that size, inside the 10-second failover limit. Longer transcripts
 // exceed it, are reported as cut, and keep the stored-context pass.
 const INSPECTION_FINALIZER_EVIDENCE_CHARACTERS = 250_000;
+// Indexed transcript evidence is already bounded: about 2,000 tokens of passages, or the points
+// of every chapter with their captions. This leaves room for metadata and comments.
+const INDEXED_INSPECTION_FINALIZER_EVIDENCE_CHARACTERS = 60_000;
 export { MAX_TOPIC_RESEARCH_TRANSCRIPT_ANALYSES, researchVideoTarget } from './research-plan';
 
 export interface EvidenceToolFailure {
@@ -139,6 +149,7 @@ export async function executeResearchRun(options: {
   modelCallPrefix: string;
   onClassificationDiagnostic?: (event: ClassificationDiagnostic) => void;
   onTranscriptDiagnostic?: TranscriptDiagnosticSink;
+  onTranscriptRetrievalEvent?: TranscriptRetrievalEvent;
   onExtractionDiagnostic?: AgentToolContext['onExtractionDiagnostic'];
   persistedRoute?: CapabilityRouteDecision;
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
@@ -160,6 +171,14 @@ export async function executeResearchRun(options: {
   const classificationDeadlineAt = options.classificationDeadlineAt ?? Date.now() + AGENT_CLASSIFICATION_TIMEOUT_MS;
   modelFailover.deadlineAt = classificationDeadlineAt;
   if (!options.persistedRoute) await options.onClassifying?.(classificationDeadlineAt);
+  const retrievalMode = transcriptRetrievalMode(options.env);
+  // A follow-up about an indexed video gives the classifier its chapter titles.
+  const messageVideoIds = extractYouTubeVideoIds(options.message);
+  const sessionVideoIds = [...new Set(options.session?.brief().assets.filter(asset => asset.kind === 'transcript').map(asset => asset.videoId) ?? [])];
+  const chapterPreload = retrievalMode !== 'full' && !options.persistedRoute
+    ? await preloadVideoChapters({ env: options.env, session: options.session, chapterMinutes: chapterMinutes(options.env),
+      videoIds: messageVideoIds.length ? messageVideoIds : sessionVideoIds, signal: options.signal })
+    : undefined;
   const decision = await resolveCapabilityRoute({
     persisted: options.persistedRoute,
     classify: () => withRunDeadline(classificationDeadlineAt, options.signal, signal => classifyCapabilityWithModel({
@@ -181,6 +200,8 @@ export async function executeResearchRun(options: {
       deadlineAt: classificationDeadlineAt,
       onDiagnostic: options.onClassificationDiagnostic,
       traceToolCall: options.traceToolCall,
+      requestTranscriptScope: retrievalMode !== 'full',
+      videoChapters: chapterPreload?.videoChapters,
     }), 'Classification phase timeout.'),
     persist: options.persistRoute,
   });
@@ -286,7 +307,17 @@ export async function executeResearchRun(options: {
       runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
-    transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : {
+    transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript',
+      ...(retrievalMode !== 'full' ? { retrieval: createTranscriptRetrieval({
+        env: options.env, mode: retrievalMode, runId: options.runId, question: options.message,
+        scope: decision.transcriptScope, router: transcriptRouter(options.env),
+        evidenceTokens: indexEvidenceTokens(options.env), chapterMinutes: chapterMinutes(options.env),
+        extractionConcurrency: chapterExtractionConcurrency(options.env),
+        extractChapters: createChapterExtractor(
+          runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'chapter_extractor', capability: decision.route }),
+          options.modelBudget, `${options.modelCallPrefix}:chapter-extractor`),
+        onEvent: options.onTranscriptRetrievalEvent, preloaded: chapterPreload?.preloaded,
+      }) } : {}) } : {
       mode: 'contextual_analysis',
       researchQuestion: options.message,
       analyze: transcriptAnalyst,
@@ -558,11 +589,14 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         warnings.push({ code: 'CHANNEL_INSPECTION_INCOMPLETE',
           message: 'The requested channel catalog could not be inspected. Do not treat this response as complete channel research.' });
       }
+      logUncitedChapters(options.context.runId, input.answer, [...evidence.values()]);
       const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings, artifacts }, currentDurationNotice()));
       finalized = true;
       return result;
     },
-    transcriptPolicy: options.decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : options.context.transcriptPolicy.mode === 'contextual_analysis'
+    transcriptPolicy: options.decision.route === 'inspect_video'
+      ? options.context.transcriptPolicy.mode === 'complete_transcript' ? options.context.transcriptPolicy : { mode: 'complete_transcript' }
+      : options.context.transcriptPolicy.mode === 'contextual_analysis'
       ? { ...options.context.transcriptPolicy, budget: transcriptBudget,
         analyze: (input) => {
           const queuedAt = Date.now();
@@ -705,6 +739,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             '',
             `Activated capability: ${capability.id}`,
             capability.instructions(completionTool),
+            ...(phaseContext.transcriptPolicy.mode === 'complete_transcript' && phaseContext.transcriptPolicy.retrieval?.mode === 'index'
+              ? [INDEXED_TRANSCRIPT_GUIDANCE] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
@@ -833,6 +869,18 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   }
 }
 
+/** Whole-video extraction must reach the answer: every chapter with points should be cited. */
+function logUncitedChapters(runId: string, answer: string, evidence: readonly EvidencePacket[]): void {
+  const chapters = chapterPointCoverage(evidence);
+  if (!chapters.length) return;
+  const cited = new Set(answerCitationIds(answer));
+  const citedStarts = evidence.flatMap(packet => packet.kind === 'youtube_transcript'
+    ? packet.excerpts.filter(excerpt => cited.has(excerpt.id) && excerpt.startMs !== undefined).map(excerpt => excerpt.startMs!) : []);
+  const uncited = chapters.filter(chapter => !citedStarts.some(start => start >= chapter.startMs && start <= chapter.endMs));
+  if (uncited.length) console.warn(JSON.stringify({ event: 'chapters_uncited', runId, chapters: chapters.length,
+    uncited: uncited.map(chapter => chapter.index) }));
+}
+
 function transcriptAnalysisKeys(recoveredEvidence: readonly EvidencePacket[]): string[] {
   return recoveredEvidence.flatMap((packet) => {
     if (packet.kind !== 'youtube_transcript') return [];
@@ -890,8 +938,12 @@ async function runUnifiedFinalizer(options: {
   const currentDurationNotice = () => options.decision.route === 'inspect_video' || options.decision.route === 'topic_research'
     ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
       ? [options.decision.videoId] : comparisonVideoIds) : '';
+  const transcriptPackets = options.evidence.filter(packet => packet.kind === 'youtube_transcript' && packet.excerpts.length);
+  const indexedOnly = transcriptPackets.length > 0 && transcriptPackets.every(isIndexedTranscriptPacket);
   const evidenceBudget = comparisonVideoIds.length ? 160_000
-    : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
+    : options.decision.route === 'inspect_video'
+      ? indexedOnly ? INDEXED_INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : INSPECTION_FINALIZER_EVIDENCE_CHARACTERS
+      : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepared = finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds);
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
