@@ -6742,6 +6742,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",
@@ -8002,6 +8003,7 @@
                                 "enum": [
                                   "catalog_lookup",
                                   "catalog_write",
+                                  "catalog_write_wait",
                                   "player",
                                   "player_response",
                                   "download",
@@ -9582,6 +9584,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",
@@ -10549,6 +10552,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",
