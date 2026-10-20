@@ -4,6 +4,29 @@ The existing conversation-scoped AgentRuntimeDO owns source availability and der
 
 Descriptions are retained as separate citable excerpts of at most 2,000 characters, without the generic 800-character model projection cut. Historical metadata retains descriptions within a combined 48,000-character snapshot budget. Model-facing transcript analyses retain title, channel, caption provenance and supported entity quotes, but omit the repeated full description. The original description stays in saved evidence and its separate citable metadata packet. This keeps publisher prose from displacing completed findings. Finalization still applies its overall evidence budget and reports omitted context. Existing saved answers and analyses are not rewritten. Older metadata without a retained description can be loaded again before new analysis.
 
+## Analysis availability and read timing
+
+Frame, storyboard and transcript analysis load their saved inputs once. Before loading,
+they capture the session's SQLite deletion generation. After loading and again after
+inference, they synchronously check that the generation is unchanged and every selected
+asset row still exists. The post-inference check does not read D1 or R2. Deleting and
+retrieving the same version during inference cannot restore that in-flight analysis.
+Any generation change fences the analysis, including deletion of unrelated evidence or
+memory. Normal retrieval and refresh do not advance the generation.
+
+The initial read still verifies the shared catalog payload. The final check establishes
+session availability only; it does not detect a shared catalog version or R2 object
+removed during inference. Shared sources currently have no deletion or retention policy.
+A future shared-source deletion feature must revisit this boundary.
+
+`agent_operation` logs with `stage=analysis_asset_read` measure the wall-clock time to
+load and validate the selected input batch, including session checks, catalog lookups,
+R2 downloads and payload hydration. Each event carries `runId`, `toolCallId`, asset kind,
+count and outcome, with `elapsedMs` on completion. Concurrent reads contribute their
+batch duration, not the sum of individual read durations. These logs contain no source
+payloads. They are separate from inference timing. This change adds no run-scoped cache;
+analysis still performs its initial saved-payload read even after same-run retrieval.
+
 ## Flow
 
 1. Before classification, original user messages and completed answers are indexed into the SDK Session history. Existing run records remain authoritative for execution and dashboard restoration. Failed-run user messages are included; answers whose evidence was deleted are excluded. Backfill reads changed runs incrementally, and subsequent updates only rewrite changed text. The classifier receives eight completed conversation turns, a compact inventory with coverage and collection times, the indexed message count, and bounded derived memory. It never receives raw transcripts or images through the inventory.

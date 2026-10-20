@@ -192,6 +192,12 @@ describe('retrieval and saved-asset analysis boundary', () => {
     expect(analyst(context, kind)).toHaveBeenCalledTimes(2);
     for (const fetch of Object.values(provider)) expect(fetch).not.toHaveBeenCalled();
   });
+  it.each(kinds)('reads %s payloads only before inference', async (kind) => {
+    const { context, versions } = setup();
+    const read = vi.spyOn(context.session!, 'readAsset');
+    await analyze(kind, versions[kind], context);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
   it.each(kinds)('rejects missing, wrong-kind, and out-of-scope %s assets before inference', async (kind) => {
     const { context, provider, versions } = setup();
     await expect(analyze(kind, 'f'.repeat(64), context)).rejects.toThrow('unavailable or deleted');
@@ -207,11 +213,77 @@ describe('retrieval and saved-asset analysis boundary', () => {
     const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
     const implementation = fn.getMockImplementation()!;
     fn.mockImplementationOnce(async (input: unknown) => {
-      store.saved.delete(versions[kind]);
+      store.remove(versions[kind]);
       return implementation(input);
     });
     await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
     expect(packets).toEqual([]);
+  });
+  it.each(kinds)('fences %s analysis after deletion even if its version is restored', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      const saved = store.saved.get(versions[kind])!;
+      store.remove(versions[kind]);
+      store.saved.set(versions[kind], saved);
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('fences %s analysis after an unrelated session deletion', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      store.remove(kind === 'frame' ? versions.transcript : versions.frame);
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('rejects %s deleted while inputs load before inference', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const read = context.session!.readAsset!;
+    vi.spyOn(context.session!, 'readAsset').mockImplementationOnce(async version => {
+      const loaded = await read(version);
+      store.remove(version);
+      return loaded;
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(analyst(context, kind)).not.toHaveBeenCalled();
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('rejects %s canceled during inference without another payload read', async (kind) => {
+    const { context, versions, packets } = setup();
+    const controller = new AbortController();
+    context.signal = controller.signal;
+    const read = vi.spyOn(context.session!, 'readAsset');
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      controller.abort(new Error('Canceled analysis'));
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('Canceled analysis');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('records %s input read timing without source payloads', async kind => {
+    const { context, versions } = setup();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await analyze(kind, versions[kind], context);
+      const timings = log.mock.calls.map(([line]) => JSON.parse(line as string))
+        .filter(event => event.stage === 'analysis_asset_read');
+      expect(timings).toEqual([
+        { event: 'agent_operation', runId: 'test-run', toolCallId: 'Describe the chart.',
+          stage: 'analysis_asset_read', kind, assetCount: 1, outcome: 'started' },
+        { event: 'agent_operation', runId: 'test-run', toolCallId: 'Describe the chart.',
+          stage: 'analysis_asset_read', kind, assetCount: 1, outcome: 'succeeded', elapsedMs: expect.any(Number) },
+      ]);
+    } finally { log.mockRestore(); }
   });
   it.each(kinds)('requires explicit retrieval in a refresh run before analyzing %s', async (kind) => {
     const { context, versions, packets } = setup();

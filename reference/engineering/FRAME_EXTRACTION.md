@@ -26,6 +26,17 @@ are now stored separately. Old
 split-image records remain readable; storyboards retain separate deduplicated JPEGs. Frame storage, session attachment, and preview writes admit
 six images together; storyboard I/O remains bounded to four.
 
+The catalog-phase extraction diagnostic records `catalog_write` as the elapsed window
+from the first progressive write to the final drain. This window can include decoding
+and gaps between writes; it is not the sum of storage service time. `catalog_write_wait`
+records the publication tail after extraction settles, including remaining writes and
+the final drain before returning. It is a subset of the write window, not another cost
+to add. A fully overlapped write has zero remaining wait. On extraction failure, it
+records the time spent draining already-started writes before propagating the error.
+The existing per-write visual spans and D1/R2 counters retain the individual operations.
+These measurements support a later decision about response/write overlap; persistence
+still completes before retrieval returns.
+
 After the private coordinator confirms successful publication, the agent provider
 creates request-local frame receipts tied to the bucket, immutable catalog reference,
 and exact frame payload. Session attachment can consume a matching receipt without

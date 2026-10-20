@@ -33,7 +33,7 @@ export function executeAnalyzeVideoFrames(
     semanticKey: `frame-analysis:${JSON.stringify({ assetVersions: versions, focus: parsed.focus })}`,
     execute: async () => {
       if (!context.analyzeFrames) throw new Error('Frame analysis is unavailable.');
-      const assets = await readAnalysisAssets(context, versions, 'frame');
+      const { assets, assertAvailable } = await readAnalysisAssets(context, versions, 'frame', toolCallId);
       const values = assets.map(({ asset, value }) => {
         const frames = framesSchema.parse(value);
         if (frames.videoId !== asset.videoId || frames.frames.length !== 1)
@@ -62,7 +62,7 @@ export function executeAnalyzeVideoFrames(
       });
       context.signal.throwIfAborted();
       // Recheck availability after inference so deletion cannot recreate derived evidence.
-      await readAnalysisAssets(context, versions, 'frame');
+      assertAvailable();
       const sourceId = `youtube:${videoId}:frames`;
       return evidencePacketSchema.parse({
         packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,

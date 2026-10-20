@@ -59,6 +59,9 @@ export interface SessionBrief {
 }
 export interface SessionAccess {
   brief(): SessionBrief;
+  /** Synchronous SQLite checks for deletion while analysis is in flight. */
+  generation?(): number;
+  has?(version: string): boolean;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(version?: string): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;

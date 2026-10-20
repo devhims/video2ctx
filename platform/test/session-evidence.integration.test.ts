@@ -1065,3 +1065,54 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
       }
     }
   }));
+
+// Real SQLite availability/generation checks, with R2 used only to load analyst inputs.
+test.each(['transcript', 'frame', 'storyboard_sheet'] as const)(
+  'saved %s analysis reads once and fences deletion, clearing, and same-version restoration', async kind => {
+    for (const mutation of ['none', 'delete', 'clear', 'restore'] as const) {
+      await within(`analysis-recheck-${kind}-${mutation}`, async store => {
+        const value = kind === 'transcript' ? transcript() : kind === 'frame' ? oneFrame(id) : oneSheet(id);
+        const retrieve = () => store.retrieve(`recheck:${kind}`, kind, id, false,
+          async () => ({ value, cacheStatus: 'miss' as const }),
+          () => kind === 'storyboard_sheet' ? { sheetIndex: 0, manifestVersion: 'manifest' } : {});
+        const version = (await retrieve()).assetVersions![0]!;
+        const ctx = context(store, provider());
+        const duringInference = async () => {
+          if (mutation === 'none') return;
+          await store.delete(mutation === 'clear' ? undefined : version);
+          if (mutation === 'restore') expect((await retrieve()).assetVersions).toEqual([version]);
+        };
+        ctx.analyzeFrames = async () => {
+          await duringInference();
+          return { findings: [{ observation: 'A chart.', timestampsMs: [1000] }], warnings: [] };
+        };
+        ctx.analyzeStoryboard = async () => {
+          await duringInference();
+          return { findings: [{ observation: 'A chart.', frameIndexes: [0] }], warnings: [] };
+        };
+        ctx.transcriptPolicy = { mode: 'contextual_analysis', researchQuestion: 'Describe the opening.',
+          analyze: async () => {
+            await duringInference();
+            return { summary: 'A clear opening sentence.',
+              findings: [{ claim: 'A clear opening sentence.', excerptIds: ['opening'] }],
+              excerpts: [{ id: 'opening', text: 'A clear opening sentence.', startMs: 0, endMs: 5600 }],
+              coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 5600 }, warnings: [] };
+          } };
+        const read = vi.spyOn(store, 'read');
+        const pending = kind === 'transcript'
+          ? executeAnalyzeVideoTranscript({ assetVersion: version, focus: 'Describe the opening.' }, ctx, 'analysis')
+          : kind === 'frame'
+            ? executeAnalyzeVideoFrames({ assetVersions: [version], focus: 'Describe the chart.' }, ctx, 'analysis')
+            : executeAnalyzeVideoStoryboard({ assetVersions: [version], focus: 'Describe the chart.' }, ctx, 'analysis');
+        if (mutation === 'none') {
+          await expect(pending).resolves.toMatchObject({ assetVersions: [version] });
+          expect(store.evidence()).toHaveLength(1);
+        } else {
+          await expect(pending).rejects.toThrow('unavailable or deleted');
+          expect(store.evidence()).toEqual([]);
+        }
+        expect(read).toHaveBeenCalledExactlyOnceWith(version);
+      });
+    }
+  },
+);

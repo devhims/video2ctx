@@ -6,6 +6,7 @@ import type { SessionAsset } from '../../src/agents/runtime/session-evidence';
 export function attachTestAssetStore(context: AgentToolContext) {
   const saved = new Map<string, { asset: SessionAsset; value: unknown }>();
   let ordinal = 0;
+  let generation = 0;
   const put = (
     kind: SessionAsset['kind'],
     videoId: string,
@@ -17,6 +18,8 @@ export function attachTestAssetStore(context: AgentToolContext) {
     return version;
   };
   context.session = {
+    generation: () => generation,
+    has: version => saved.has(version),
     brief: () => ({ assets: [...saved.values()].map(({ asset }) => asset), memories: [] }),
     readAsset: async (version) => saved.get(version) ?? null,
     evidence: () => [],
@@ -80,5 +83,9 @@ export function attachTestAssetStore(context: AgentToolContext) {
         }
       : {}),
   };
-  return { saved, put };
+  const remove = (version?: string) => {
+    generation++;
+    if (version) saved.delete(version); else saved.clear();
+  };
+  return { saved, put, remove };
 }

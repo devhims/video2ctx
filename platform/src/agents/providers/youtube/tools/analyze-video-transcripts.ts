@@ -76,7 +76,8 @@ export async function executeAnalyzeVideoTranscript(
       operation: 'transcript',
       semanticKey,
       execute: async () => {
-        const { asset, value } = (await readAnalysisAssets(context, [parsed.assetVersion], 'transcript'))[0]!;
+        const { assets, assertAvailable } = await readAnalysisAssets(context, [parsed.assetVersion], 'transcript', toolCallId);
+        const { asset, value } = assets[0]!;
         const transcript = value as Transcript;
         if (
           transcript.videoId !== asset.videoId ||
@@ -107,7 +108,7 @@ export async function executeAnalyzeVideoTranscript(
               },
             ),
         );
-        await readAnalysisAssets(context, [parsed.assetVersion], 'transcript');
+        assertAvailable();
         return evidencePacketSchema.parse({
           packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
           kind: 'youtube_transcript',

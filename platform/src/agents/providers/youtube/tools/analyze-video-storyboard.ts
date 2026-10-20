@@ -35,7 +35,7 @@ export function executeAnalyzeVideoStoryboard(
       if (!canAnalyzeStoryboard(context.researchDeadlineAt))
         throw new Error('Not enough research time to analyze storyboards. Finish with the evidence available and report missing visual evidence.');
       if (!context.analyzeStoryboard) throw new Error('Storyboard analysis is unavailable.');
-      const assets = await readAnalysisAssets(context, versions, 'storyboard_sheet');
+      const { assets, assertAvailable } = await readAnalysisAssets(context, versions, 'storyboard_sheet', toolCallId);
       const values = assets.map(({ asset, value }) => {
         const parsed = storyboardSchema.parse(value);
         if (parsed.videoId !== asset.videoId || parsed.sheets.length !== 1)
@@ -77,7 +77,7 @@ export function executeAnalyzeVideoStoryboard(
         modelCallId: `visual-analyst:${context.runId}:${toolCallId}`,
       }, context.researchDeadlineAt);
       context.signal.throwIfAborted();
-      await readAnalysisAssets(context, versions, 'storyboard_sheet');
+      assertAvailable();
       const videoId = storyboard.videoId;
       const sourceId = `youtube:${videoId}:storyboard`;
       return evidencePacketSchema.parse({

@@ -1,3 +1,4 @@
+import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { captureVisualWork } from '../src/lib/visual-diagnostics';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
@@ -1153,4 +1154,47 @@ test('stores a Media frame atomically with one R2 write and no separate image ob
   const restored=await f.store.readVersion(versions[0]!,true);
   expect(restored?.value).toEqual(value);
   expect(restored?.verifiedImages?.[0]?.previewReference()).toEqual({sharedFrameKey:vi.mocked(f.bucket.put).mock.calls[0]![0]});
+});
+
+test.each([false, true])('reports only the remaining frame publication wait, overlap=%s', async overlap => {
+  const f = fixture();
+  f.env.YOUTUBE_FRAMES_BACKEND = 'media';
+  let now = 1000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let writeFinished!: () => void;
+  const finished = new Promise<void>(resolve => { writeFinished = resolve; });
+  let extractionFinished!: () => void;
+  const extracted = new Promise<void>(resolve => { extractionFinished = resolve; });
+  const save = vi.spyOn(VideoCatalog.prototype, 'saveMany').mockImplementation(async () => {
+    await gate;
+    writeFinished();
+    return [];
+  });
+  vi.mocked(getVideoFrames).mockImplementation(async (_env, _request, _signal, _limits, diagnostic, ready) => {
+    ready!(frame(1000));
+    if (overlap) {
+      now = 1050;
+      release();
+      await finished;
+    }
+    now = 1100;
+    diagnostic!({ ...extractionFixture, kind: 'frames', backend: 'media', elapsedMs: 100 });
+    extractionFinished();
+    return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
+  });
+  const diagnostic = vi.fn();
+  try {
+    const pending = loadVideoResource(f.env,
+      { kind: 'frames', id, timestampsMs: [1000], maxWidth: 640, extractionTimeoutMs: 5000 }, diagnostic);
+    await extracted;
+    // Let the caller enter its post-extraction publication wait.
+    await Promise.resolve();
+    if (!overlap) { now = 1400; release(); }
+    await pending;
+    const catalog = diagnostic.mock.calls.map(([event]) => event).find(event => event.phase === 'catalog');
+    expect(catalog.events).toContainEqual({ stage: 'catalog_write_wait', elapsedMs: overlap ? 0 : 300 });
+    expect(catalog.events).toContainEqual({ stage: 'catalog_write', elapsedMs: overlap ? 100 : 400 });
+  } finally { release(); save.mockRestore(); clock.mockRestore(); }
 });
