@@ -11,8 +11,8 @@ export function isInspectionPacket(packet: EvidencePacket): boolean {
 /**
  * Structural inspection history for the current turn and the earlier turns on its
  * conversation branch, available even on history-only routes. Records carry image
- * positions and coverage, never image observations or caption text. Selection reasons are
- * notes the agent wrote in those same turns, like its earlier answers in conversation history.
+ * positions, coverage and selection basis categories with their excerpt IDs, never image
+ * observations, caption text or free-text reasons, so they need no evidence admission.
  * Packets are taken newest first, deduplicated, and bounded once.
  */
 export function inspectionRecordsForModel(packets: readonly EvidencePacket[], records?: ReadonlyMap<string, EvidenceRunRecord>) {
@@ -54,4 +54,4 @@ function inspectionRecord(packet: EvidencePacket, record?: EvidenceRunRecord) {
 }
 
 /** Interpret structural records only when explaining recorded inspection activity. */
-export const INSPECTION_RECORD_GUIDANCE = 'For inspection history, frameCoverage lists requested positions and returned frames, and visualCoverage describes storyboard samples. selections are recorded agent explanations, not visual observations. delivery describes this turn only. inputTimestampsMs are image inputs, while observationTimes only index the findings the analyst reported. Both 3:20 and 3:30 can be analyzed even if only 3:20 appears in a finding. Spread mode selects sheets, not individual tiles within those sheets. Use these records over assistant history or memory. Without recorded selection reasons, say the reasons were not recorded. A missing operation record cannot prove an operation never happened. A user-suggested timestamp is not a captured frame.';
+export const INSPECTION_RECORD_GUIDANCE = 'For inspection history, frameCoverage lists requested positions and returned frames, and visualCoverage describes storyboard samples. selections give the basis category of each requested position and the excerpt IDs it rests on, never what those excerpts say. delivery describes this turn only. inputTimestampsMs are image inputs, while observationTimes only index the findings the analyst reported. Both 3:20 and 3:30 can be analyzed even if only 3:20 appears in a finding. Spread mode selects sheets, not individual tiles within those sheets. Use these records over assistant history or memory. Explain a choice by its basis; quote or describe a cited excerpt only when it is supplied in evidence. Without a recorded basis, say the reason was not recorded. A missing operation record cannot prove an operation never happened. A user-suggested timestamp is not a captured frame.';

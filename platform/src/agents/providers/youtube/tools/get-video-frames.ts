@@ -42,7 +42,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   if (parsed.selections) {
     const times = parsed.selections.map(selection => selection.timestampMs);
     if (new Set(times).size !== request.timestampsMs.length || times.length !== request.timestampsMs.length
-      || times.some(time => !request.timestampsMs.includes(time))) throw new Error('Supply one selection reason per requested timestamp.');
+      || times.some(time => !request.timestampsMs.includes(time))) throw new Error('Supply one selection per requested timestamp.');
     const ids = new Set(context.getEvidence?.().flatMap(packet => packet.excerpts.filter(excerpt => packet.sources.some(source =>
       source.id === excerpt.sourceId && source.videoId === parsed.videoId)).map(excerpt => excerpt.id)) ?? []);
     if (parsed.selections.some(selection => selection.evidenceIds.some(id => !ids.has(id))))

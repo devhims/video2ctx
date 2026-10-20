@@ -60,19 +60,24 @@ it('answers a workflow follow-up using older history without a second model', as
 });
 
 
-it('gives workflow follow-ups the inspection records of this conversation branch only', async () => {
-  const finalizer = new MockLanguageModelV4({ doGenerate: async () => response(answer('The recorded reason was the presenter introduction.')) });
+it('gives workflow follow-ups the selection bases of this conversation branch only, never free-text reasons', async () => {
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => response(answer('The recorded basis was a spoken introduction.')) });
   const options = runtime(finalizer);
-  const withReason = (packetId: string, reason: string): EvidencePacket => ({ ...frame, packetId, artifacts: [{ type: 'youtube_frame_retrieval',
-    data: { ...frame.artifacts[0]!.data, selections: [{ timestampMs: 200000, reason, evidenceIds: [] }] } }] });
+  const withSelections = (packetId: string, selections: unknown[]): EvidencePacket => ({ ...frame, packetId, artifacts: [{ type: 'youtube_frame_retrieval',
+    data: { ...frame.artifacts[0]!.data, selections } }] });
   options.message = 'Why did you pick 3:20 in abcdefghijk?';
   options.conversationHistory = [{ userMessageId: 'u1', agentMessageId: 'a1', user: 'What is she holding?', assistant: 'A microphone.',
-    resourceIds: ['abcdefghijk'], inspection: [withReason('branch-frames', 'Presenter introduced at 3:20')] }];
-  // Another conversation's saved inspection of the same video must not be offered as this branch's reason.
-  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [withReason('other-conversation', 'Foreign reason')],
+    resourceIds: ['abcdefghijk'], inspection: [
+      withSelections('branch-frames', [{ timestampMs: 200000, basis: 'spoken_introduction', evidenceIds: ['cue-1'] }]),
+      // Saved before bases existed: its free text restates a transcript claim never admitted to this turn.
+      withSelections('legacy-frames', [{ timestampMs: 200000, reason: 'Captions say revenue doubled to 40 million here', evidenceIds: [] }]),
+    ] }];
+  // Another conversation's saved inspection of the same video must not be offered as this branch's record.
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [withSelections('other-conversation', [{ timestampMs: 200000, basis: 'exploratory', evidenceIds: [] }])],
     readEvidence: vi.fn() } as unknown as NonNullable<typeof options.session>;
   await executeResearchRun(options);
   const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
-  expect(prompt).toContain('Presenter introduced at 3:20');
-  expect(prompt).not.toContain('Foreign reason');
+  for (const value of ['branch-frames', 'spoken_introduction', 'cue-1', 'legacy-frames']) expect(prompt).toContain(value);
+  expect(prompt).not.toContain('revenue doubled');
+  expect(prompt).not.toContain('other-conversation');
 });
