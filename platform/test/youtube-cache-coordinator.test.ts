@@ -162,3 +162,43 @@ test('an expired follower stops waiting without cancelling or removing the share
     expect(loader).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); }
 });
+
+test('notifies each coalesced caller before publication finishes and isolates callback failures', async () => {
+  let publish!: () => void;
+  const saved = new Promise<void>(resolve => { publish = resolve; });
+  const value = { videoId: 'abcdefghijk', frames: [] };
+  const loader = vi.fn(async (_env, _operation, _diagnostic, _refresh, _versions, _lookup, ready) => {
+    ready?.(value);
+    await saved;
+    return value;
+  });
+  const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }), loader);
+  const input = { ...request, operation: { kind: 'frames' as const, id: 'abcdefghijk', timestampsMs: [1000], maxWidth: 1920, extractionTimeoutMs: 45_000 } };
+  const firstReady = vi.fn(async () => { throw new Error('Caller disconnected'); });
+  const first = core.getOrLoad(input, firstReady);
+  await vi.waitFor(() => expect(firstReady).toHaveBeenCalledOnce());
+  const secondReady = vi.fn(async () => undefined);
+  const second = core.getOrLoad(input, secondReady);
+  await vi.waitFor(() => expect(secondReady).toHaveBeenCalledWith(value));
+  let done = false;
+  void second.then(() => { done = true; });
+  expect(done).toBe(false);
+  publish();
+  await expect(first).resolves.toMatchObject({ ok: true, cacheStatus: 'miss' });
+  await expect(second).resolves.toMatchObject({ ok: true, cacheStatus: 'coalesced' });
+  expect(loader).toHaveBeenCalledOnce();
+});
+
+test('does not send late extracted content to a waiter whose deadline expired', async () => {
+  let available!: (value: unknown) => void;
+  let finish!: (value: unknown) => void;
+  const core = new YouTubeCacheCoordinatorCore(environment({ get: vi.fn(async () => null), put: vi.fn() }),
+    async (_e, _o, _d, _r, _v, _l, ready) => { available = ready!; return new Promise(resolve => { finish = resolve; }); });
+  const ready = vi.fn(async () => undefined);
+  const result = await core.getOrLoad({ ...request, operation: { kind: 'transcript', id: 'abcdefghijk', granularity: 'word', deadlineAt: Date.now() + 20 } }, ready);
+  expect(result.ok).toBe(false);
+  available({ text: 'too late' });
+  finish({ text: 'too late' });
+  await Promise.resolve();
+  expect(ready).not.toHaveBeenCalled();
+});

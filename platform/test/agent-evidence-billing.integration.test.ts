@@ -739,3 +739,37 @@ test.each(mixedDeliveryModes)('mixed frames respect the last available credit: %
     expect(ledger.available('run')).toBe(0);
   });
 });
+
+test('combined frame analysis uses one held retrieval charge and later saved analysis is free', async () => {
+  const { executeGetVideoFrames } = await import('../src/agents/providers/youtube/tools/get-video-frames');
+  const { runtime, runIds: [runId] } = await seedRuns('combined-analysis');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    const before = internals.evidenceLedger.available(runId!);
+    let saved = false;
+    const value = { videoId: VIDEO, frames: [{ timestampMs: 1000, width: 640, height: 360, mimeType: 'image/jpeg' as const, imageBase64: '/9j/2Q==' }], failures: [], meta: { partial: false, warnings: [] } };
+    let started!: () => void;
+    const analyzing = new Promise<void>(resolve => { started = resolve; });
+    const unexpected = async (): Promise<never> => { throw new Error('Unexpected provider call'); };
+    const ctx: AgentToolContext = {
+      runId: runId!, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { search: unexpected, browse: unexpected, trends: unexpected, video: unexpected, tracks: unexpected, transcript: unexpected, comments: unexpected, endscreen: unexpected, channel: unexpected, channelVideos: unexpected, channelPlaylists: unexpected, playlist: unexpected, frames: async (_r, _s, _l, _d, ready) => {
+        ready?.(value); await analyzing; saved = true;
+        return { value, cacheStatus: 'miss', assetVersions: [v(11)] };
+      } },
+      analyzeFrames: async () => {
+        expect(saved).toBe(false);
+        expect(internals.evidenceLedger.available(runId!)).toBe(before - 2);
+        started();
+        return { findings: [{ observation: 'A chart is visible.', timestampsMs: [1000] }], warnings: [] };
+      },
+      executeEvidenceTool: execution => internals.performEvidenceTool(runId!, execution),
+      finalize: unexpected,
+    };
+    const packet = await executeGetVideoFrames({ videoId: VIDEO, timestampsMs: [1000], analysis: 'Read chart' }, ctx, 'combined');
+    expect(packet.usage).toHaveLength(1);
+    expect(packet.usage[0]?.credits).toBe(2);
+    internals.deliverSavedAssets(runId!, [v(11)]);
+    expect(internals.evidenceLedger.receipts(runId!).reduce((sum, row) => sum + row.credits, 0)).toBe(2);
+  });
+});

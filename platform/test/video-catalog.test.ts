@@ -1099,13 +1099,15 @@ test.each([false, true])('publishes ready Media frames during decoding and drain
     return { videoId: id, frames: [frame(1000)], failures: [], meta: { partial: false, warnings: [] } };
   });
   let settled = false;
-  const pending = loadVideoResource(f.env, {kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000})
+  const ready = vi.fn();
+  const pending = loadVideoResource(f.env, {kind:'frames',id,timestampsMs:[1000],maxWidth:640,extractionTimeoutMs:5000}, undefined, false, undefined, undefined, ready)
     .finally(() => { settled = true; });
   const outcome = fail ? expect(pending).rejects.toThrow('storage unavailable') : expect(pending).resolves.toMatchObject({frames:[frame(1000)]});
   try {
     await vi.waitFor(() => expect(entered).toBe(true));
     expect(settled).toBe(false);
     expect(finished).toBe(false);
+    expect(ready).toHaveBeenCalledWith(expect.objectContaining({ frames: [frame(1000)] }));
   } finally { release(); }
   await outcome;
   expect(finished).toBe(true);

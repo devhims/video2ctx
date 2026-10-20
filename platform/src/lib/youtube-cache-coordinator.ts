@@ -45,7 +45,7 @@ export interface YouTubeCacheResponse {
   };
 }
 
-type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean, onVersions?: (references: VideoAssetReference[]) => void, visualLookup?: VisualLookup) => Promise<unknown>;
+type OperationLoader = (env: Env, operation: VideoResourceOperation, onDiagnostic?: ExtractionDiagnosticSink, refresh?: boolean, onVersions?: (references: VideoAssetReference[]) => void, visualLookup?: VisualLookup, onReady?: (value: unknown) => void) => Promise<unknown>;
 
 const CACHE_READ_TTL_SECONDS = 60;
 const MINIMUM_CACHE_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -56,6 +56,7 @@ interface RecentResult {
 }
 
 interface ExtractionFlight {
+  ready: Promise<unknown>;
   deadlineAt?: number;
   effectiveDeadlineAt: number;
   promise: Promise<YouTubeCacheResponse>;
@@ -83,7 +84,7 @@ export class YouTubeCacheCoordinatorCore {
     private readonly loadOperation: OperationLoader = loadVideoResource,
   ) {}
 
-  async getOrLoad(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
+  async getOrLoad(request: YouTubeCacheRequest, onReady?: (value: unknown) => Promise<void>): Promise<YouTubeCacheResponse> {
     const deadlineAt = 'deadlineAt' in request.operation ? request.operation.deadlineAt : undefined;
     const effectiveDeadlineAt = deadlineAt ?? (request.operation.kind === 'frames' ? Infinity
       : Date.now() + youtubeOperationTimeoutMs(this.env, request.operation));
@@ -95,7 +96,7 @@ export class YouTubeCacheCoordinatorCore {
       && ((deadlineAt === undefined && flight.deadlineAt === undefined)
         || flight.effectiveDeadlineAt >= effectiveDeadlineAt));
     if (active) {
-      const shared = await waitForExtraction(active.promise, deadlineAt
+      const shared = await this.wait(active, onReady, deadlineAt
         ?? (active.deadlineAt === undefined ? undefined : effectiveDeadlineAt));
       return shared.ok && shared.cacheStatus === 'miss'
         ? { ...shared, cacheStatus: 'coalesced' }
@@ -109,8 +110,12 @@ export class YouTubeCacheCoordinatorCore {
       return successFromEntry(recent.entry, 'hit');
     }
 
-    const promise = this.loadAndRemember(request);
-    const flight = { deadlineAt, effectiveDeadlineAt, promise };
+    let ready!: (value: unknown) => void;
+    const available = new Promise<unknown>(resolve => { ready = resolve; });
+    const promise = this.loadAndRemember(request, ready);
+    // Failures and cache hits must also settle the availability notification.
+    void promise.then(result => ready(result.ok ? result.value : undefined), () => ready(undefined));
+    const flight = { deadlineAt, effectiveDeadlineAt, promise, ready: available };
     const group = flights ?? new Set<ExtractionFlight>();
     group.add(flight);
     this.inFlight.set(flightKey, group);
@@ -119,11 +124,27 @@ export class YouTubeCacheCoordinatorCore {
       if (!group.size && this.inFlight.get(flightKey) === group) this.inFlight.delete(flightKey);
     };
     void promise.then(remove, remove);
-    return waitForExtraction(promise, deadlineAt);
+    return this.wait(flight, onReady, deadlineAt);
   }
 
-  private async loadAndRemember(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
-    const response = await this.loadDiagnosed(request);
+  private async wait(flight: ExtractionFlight, onReady?: (value: unknown) => Promise<void>, deadlineAt?: number) {
+    if (!onReady) return waitForExtraction(flight.promise, deadlineAt);
+    let listening = true;
+    // Each waiter owns its callback. A disconnected caller cannot fail shared extraction.
+    const notified = flight.ready.then(value => {
+      if (listening && value !== undefined && (deadlineAt === undefined || deadlineAt > Date.now()))
+        return onReady(value);
+    }).catch(() => undefined);
+    try {
+      return await waitForExtraction(flight.promise.then(async result => {
+        if (result.ok) await notified;
+        return result;
+      }), deadlineAt);
+    } finally { listening = false; }
+  }
+
+  private async loadAndRemember(request: YouTubeCacheRequest, onReady: (value: unknown) => void): Promise<YouTubeCacheResponse> {
+    const response = await this.loadDiagnosed(request, onReady);
     if (
       !videoCatalog(this.env)
       && response.ok
@@ -145,13 +166,13 @@ export class YouTubeCacheCoordinatorCore {
     return response;
   }
 
-  private async loadDiagnosed(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
+  private async loadDiagnosed(request: YouTubeCacheRequest, onReady: (value: unknown) => void): Promise<YouTubeCacheResponse> {
     const kind = request.operation.kind;
-    if (kind !== 'frames' && kind !== 'storyboard') return this.load(request);
+    if (kind !== 'frames' && kind !== 'storyboard') return this.load(request, onReady);
     const failure: VisualFailureCapture = {};
     try {
       const { value, diagnostics } = await withVisualFailureCapture(failure,
-        () => captureVisualWork('coordinator', kind, () => this.load(request)));
+        () => captureVisualWork('coordinator', kind, () => this.load(request, onReady)));
       if (!value.ok) diagnostics.outcome = 'error';
       return { ...value, visualDiagnostics: diagnostics };
     } catch (error) {
@@ -159,7 +180,7 @@ export class YouTubeCacheCoordinatorCore {
     }
   }
 
-  private async load(request: YouTubeCacheRequest): Promise<YouTubeCacheResponse> {
+  private async load(request: YouTubeCacheRequest, onReady: (value: unknown) => void): Promise<YouTubeCacheResponse> {
     const catalog = videoCatalog(this.env);
     const resource = videoResourceKey(request.operation);
     const selection = catalog && isVisualSelection(request.operation)
@@ -192,7 +213,8 @@ export class YouTubeCacheCoordinatorCore {
       diagnostics.length ? { ...response, diagnostics } : response;
     try {
       let catalogVersions: VideoAssetReference[] | undefined;
-      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh, versions=>{catalogVersions=versions;}, lookup);
+      const value = await this.loadOperation(this.env, request.operation, onDiagnostic, request.refresh, versions=>{catalogVersions=versions;}, lookup, onReady);
+      if (request.operation.kind === 'transcript') onReady(value);
       // Defense in depth: a resolved provider response can still be a failed
       // lookup. Preserve the last good value instead of overwriting it.
       if (request.operation.kind === 'video' && isVideoMetadataBotChallenge(value)) {

@@ -1,3 +1,5 @@
+import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
+import { analyzeStoryboardEvidence } from './analyze-video-storyboard';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { withRunDeadline } from '../../../runtime/deadline';
@@ -14,6 +16,7 @@ import { safeIdPart, videoIdSchema, youtubeVideoUrl, meteredCredits } from './pr
 const DEFAULT_STORYBOARD_SHEETS = 3;
 
 const retrievalInput = z.object({
+  analysis: retrievalAnalysisSchema,
   videoId: videoIdSchema,
   focus: z.string().trim().min(1).max(1_000).optional(),
   maxSheets: z.number().int().min(1).max(MAX_STORYBOARD_SHEETS).optional()
@@ -30,12 +33,12 @@ function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementC
 export const getVideoStoryboardInputSchema = retrievalInput.superRefine(validateInput);
 export function createGetVideoStoryboardTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve storyboard images and their metadata together, without analysis. With videoId alone, retrieve up to 3 sheets spread across the video. Use maxSheets, sheetIndexes or timestampsMs to select other coverage. No preliminary metadata call is needed. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Pass storyboard_sheet versions to analyze_video_storyboard with a question, or analyze versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
+    description: 'Retrieve storyboard images and metadata. Supply analysis with a visual question to analyze immediately while saving; omit it for retrieval only. With videoId alone, retrieve up to 3 sheets spread across the video. Use maxSheets, sheetIndexes or timestampsMs to select other coverage. No preliminary metadata call is needed. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Use analyze_video_storyboard for questions about versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
     inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
+        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -50,6 +53,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
     ? getVideoStoryboardInputSchema.parse({ ...requested, maxSheets: DEFAULT_STORYBOARD_SHEETS })
     : requested;
   return context.executeEvidenceTool({
+    includesAnalysis: !!parsed.analysis,
     input: parsed,
     toolCallId, toolName: 'get_video_storyboard', operation: 'storyboard',
     semanticKey: `storyboard:${JSON.stringify({ ...parsed, focus: undefined })}`,
@@ -59,6 +63,7 @@ export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboa
       if (budget < STORYBOARD_RETRIEVAL_MIN_MS)
         throw new Error('Not enough research time to retrieve storyboards and leave time for analysis. Analyze saved images or finish with the evidence available.');
       const deadlineAt = Date.now() + budget;
+      if (parsed.analysis) return retrieveVideoStoryboard(parsed, context, toolCallId, deadlineAt);
       return withRunDeadline(deadlineAt, context.signal,
         signal => retrieveVideoStoryboard(parsed, { ...context, signal }, toolCallId, deadlineAt),
         'Storyboard retrieval exceeded its budget. Time remains reserved for visual analysis or finalization.');
@@ -73,16 +78,28 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   const evidence = context.getEvidence?.() ?? [];
   if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
-  const response = await timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
-    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false, signal: context.signal, deadlineAt,
-  }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })), { runId: context.runId, toolCallId });
+  const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
+    videoId: parsed.videoId,
+    content: value => {
+      const board = storyboardSchema.parse(value);
+      if (board.videoId !== parsed.videoId || !board.sheets.length) throw new Error('Invalid storyboard analysis input.');
+      const indexes = storyboardSheetIndexes(board, parsed);
+      if (!board.manifest || board.sheets.some(sheet => !indexes.includes(sheet.firstFrameIndex / board.manifest!.framesPerSheet)))
+        throw new Error('Unexpected storyboard sheet.');
+      return { videoId: board.videoId, manifest: board.manifest, intervalMs: board.intervalMs, frameCount: board.frameCount, sheets: board.sheets };
+    },
+    analyze: (value, analysisContext) => analyzeStoryboardEvidence(storyboardSchema.parse(value), parsed.analysis!, analysisContext, toolCallId),
+  } : undefined, onReady => withRunDeadline(deadlineAt, context.signal, signal => timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
+    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false, signal, deadlineAt,
+  }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : [])), { runId: context.runId, toolCallId }),
+    'Storyboard retrieval exceeded its budget.'));
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);
   if (storyboard.manifest) countVisualWork('requestedImages', storyboardSheetIndexes(storyboard, parsed).length);
   countVisualWork('returnedImages', storyboard.sheets.length);
   if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
   if (storyboard.selection?.mode === 'metadata') throw new Error('Storyboard response does not match the requested operation.');
-  const timingsMs = { retrieval: Date.now() - startedAt, previews: 0, total: 0 };
+  const timingsMs = { retrieval: retrievalMs, previews: 0, total: 0 };
   const sourceId = `youtube:${parsed.videoId}:storyboard`;
   const packet = evidencePacketSchema.parse({
     packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
@@ -118,7 +135,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   context.signal.throwIfAborted();
   timingsMs.total = Date.now() - startedAt;
   packet.artifacts[0]!.data.timingsMs = timingsMs;
-  return packet;
+  return finish(packet);
 }
 
 /** Validate against persisted metadata before waking the image provider or vision model. */

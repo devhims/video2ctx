@@ -1,3 +1,5 @@
+import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
+import { analyzeFrameEvidence } from './analyze-video-frames';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { diagnoseVisualTool, visualSpan, countVisualWork } from '../../../../lib/visual-diagnostics';
 import { tool } from 'ai';
@@ -11,17 +13,18 @@ import type { AgentToolContext } from '../tool-context';
 import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence';
 
 export const getVideoFramesInputSchema = frameRequestSchema.extend({
+  analysis: retrievalAnalysisSchema,
   focus: z.string().trim().min(1).max(1000).optional(),
 });
 
 export function createGetVideoFramesTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve or reuse up to six video frames at millisecond timestamps. This performs no visual analysis. Returns saved assetVersions, dimensions, previews and failures, without image bytes. Use analyze_video_frames with those versions and a question. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
+    description: 'Retrieve or reuse up to six video frames at millisecond timestamps. Supply analysis with your question to analyze immediately while images are saved. Omit analysis for retrieval only. Returns saved assetVersions, dimensions, previews and failures, without image bytes. Use analyze_video_frames for questions about versions already saved. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
     inputSchema: getVideoFramesInputSchema.omit({ focus: true }),
     outputSchema: evidencePacketSchema,
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { visualDiagnostics: _visualDiagnostics, timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
+        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -34,9 +37,10 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
   return context.executeEvidenceTool({
+    includesAnalysis: !!parsed.analysis,
     input: parsed,
     toolCallId, toolName: 'get_video_frames', operation: 'frames',
-    semanticKey: `frames:${JSON.stringify(request)}`,
+    semanticKey: `frames:${JSON.stringify({ ...request, ...(parsed.analysis ? { analysis: parsed.analysis } : {}) })}`,
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
@@ -47,14 +51,22 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       countVisualWork('requestedImages', request.timestampsMs.length);
       const startedAt = Date.now();
       const extractionDiagnostics: ExtractionAttempt[] = [];
-      const response = await visualSpan('retrieval', () => context.provider.frames!(request, context.signal, { extractionTimeoutMs },
-        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }));
+      const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
+        videoId: parsed.videoId,
+        content: value => {
+          const frames = validateFrameResponse(request, value);
+          if (!frames.frames.length) throw new Error('No frames are available for analysis.');
+          return { videoId: frames.videoId, frames: frames.frames };
+        },
+        analyze: (value, analysisContext) => analyzeFrameEvidence(validateFrameResponse(request, value), parsed.analysis!, analysisContext, toolCallId),
+      } : undefined, onReady => visualSpan('retrieval', () => context.provider.frames!(request, context.signal, { extractionTimeoutMs },
+        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }, ...(onReady ? [onReady] : []))));
       context.signal.throwIfAborted();
-      const providerMs = Date.now() - startedAt;
+      const providerMs = retrievalMs;
       const frames = validateFrameResponse(request, response.value);
       countVisualWork('returnedImages', frames.frames.length);
       console.log(JSON.stringify({ event: 'agent_frame_timings', runId: context.runId, toolCallId,
-        extractionMs: Date.now() - startedAt, extractionTimeoutMs,
+        extractionMs: retrievalMs, extractionTimeoutMs,
         sessionReused: response.sessionReused === true, frameCount: frames.frames.length, unavailableCount: frames.failures.length }));
       const sourceId = `youtube:${parsed.videoId}:frames`;
       const packet = evidencePacketSchema.parse({
@@ -90,7 +102,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       packet.artifacts[0]!.data.timingsMs = timingsMs;
       console.info(JSON.stringify({ event: 'frame_stage_timing', runId: context.runId, toolCallId, videoId: parsed.videoId, timingsMs }));
       context.signal.throwIfAborted();
-      return packet;
+      return finish(packet);
     }, { runId: context.runId, toolCallId }),
   });
 }

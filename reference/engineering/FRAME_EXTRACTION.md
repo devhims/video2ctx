@@ -612,3 +612,15 @@ work lifetime and concurrent admission under slowdown. Before moving release off
 the critical path, track its completion and verify that subsequent acquisitions
 do not wait on finished work. Neither change is a prerequisite for the corrected
 preview and recovery paths, but sustained-load validation remains outstanding.
+
+
+## Optional analysis during persistence
+
+Agent frame and storyboard retrieval accept an optional `analysis` question. The
+private coordinator signals when the full requested selection is available, while
+catalog writes may still be pending. The tool analyzes these bytes and returns
+findings only after persistence and session attachment succeed. Retrieval-only and
+public API responses retain their existing persistence guarantee. A save failure
+rejects the combined result; an analyst failure returns saved handles with an
+explicit retry warning. See [session evidence](SESSION_EVIDENCE.md#retrieval-and-analysis-in-one-call)
+for deletion fencing, billing, coalesced callers and test coverage.

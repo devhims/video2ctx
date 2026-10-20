@@ -306,6 +306,7 @@ export async function loadVideoResource(
   refresh = false,
   onVersions?: (references: VideoAssetReference[]) => void,
   visualLookup?: VisualLookup,
+  onReady?: (value: unknown) => void,
 ): Promise<unknown> {
   const store = videoCatalog(env);
   if (op.kind === 'frames') {
@@ -353,6 +354,12 @@ export async function loadVideoResource(
             ...(store && env.YOUTUBE_FRAMES_BACKEND === 'media' ? [ready] : []),
           )
         : undefined;
+      onReady?.(framesSchema.parse({
+        videoId: op.id,
+        frames: [...hits.flatMap(asset => asset.value.frames), ...(fetched?.frames ?? [])].sort((a, b) => a.timestampMs - b.timestampMs),
+        failures: fetched?.failures ?? [],
+        meta: { partial: !!fetched?.failures.length, warnings: fetched?.meta.warnings ?? [] },
+      }));
       const writeStarted = Date.now();
       writeWaitStarted = writeStarted;
       let versions: VideoAssetReference[] = [];
@@ -425,6 +432,7 @@ export async function loadVideoResource(
     }
     if (fetched.videoId !== op.id) throw new Error('Storyboard video mismatch.');
     countVisualWork('catalogMisses', storyboardSheetIndexes(fetched, op).length);
+    onReady?.(fetched);
     const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
     // Independent assets share no publication dependency. Drain both on failure.
     const versions = await mapInBatches([
@@ -457,6 +465,7 @@ export async function loadVideoResource(
     fetched.frameCount !== metadata.value.frameCount
   )
     throw new Error('Storyboard changed during retrieval. Refresh its manifest.');
+  onReady?.(boardWithSheets(metadata.value, op, [...hits.map(asset => asset.value), fetched]));
   onVersions?.([
     ...versions,
     ...(await saveVideoResource(env, op, fetched, fetchedAt, VIDEO_MAX_AGE.storyboard)),

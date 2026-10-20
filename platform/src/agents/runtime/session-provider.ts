@@ -48,7 +48,7 @@ export function sessionProvider(
   const transcriptKey = (id: string, language?: string) => `transcript:${id}:${language?.toLowerCase() ?? 'default'}`;
   return {
     ...provider,
-    transcript: async (id, language, options, diagnostic) => {
+    transcript: async (id, language, options, diagnostic, onReady) => {
       const generation = store.generation();
       const key = transcriptKey(id, language);
       // A saved over-limit transcript is rejected from its stored metadata, before any blob read.
@@ -62,7 +62,13 @@ export function sessionProvider(
         id,
         fresh,
         async () => {
-          const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic);
+          const ready = onReady ? (value: import('all-things-youtube').Transcript) => {
+            if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
+            if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, value, store.maxVideoSeconds);
+            onReady(value);
+          } : undefined;
+          const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic, ...(ready ? [ready] : []));
+          ready?.(fetched.value);
           // Reject before saving, so an over-limit transcript never becomes a session asset.
           if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, fetched.value, store.maxVideoSeconds);
           const claim = crypto.randomUUID();
@@ -132,7 +138,7 @@ export function sessionProvider(
       return claimed(result, [key]);
     },
     storyboard: provider.storyboard
-      ? (id, timestamps, options = {}, diagnostic) =>
+      ? (id, timestamps, options = {}, diagnostic, onReady) =>
           visual('storyboard', id, options.signal, async () => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
@@ -148,7 +154,8 @@ export function sessionProvider(
                 if (options.metadataOnly) return provider.storyboard!(id, undefined,
                   { metadataOnly: true, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
                 prefetched = await provider.storyboard!(id, timestamps,
-                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic, ...(onReady ? [onReady] : []));
+                onReady?.(prefetched.value);
                 return { ...prefetched, value: storyboardMetadata(prefetched.value),
                   catalogVersions: prefetched.catalogVersions?.filter(asset => asset.kind === 'storyboard_manifest') };
               },
@@ -190,7 +197,13 @@ export function sessionProvider(
                 undefined,
                 { sheetIndexes: missing, maxSheets: missing.length, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
+                onReady ? value => onReady(storyboardSchema.parse({ ...value,
+                  sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
+                })) : undefined,
               );
+              onReady?.(storyboardSchema.parse({ ...fetched.value,
+                sheets: [...results.flatMap(result => result.value.sheets), ...fetched.value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
+              }));
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const saved = await timeStoryboardStage(id, 'session_pin', () => mapInBatches(fetched.value.sheets, async (sheet) => {
                 options.signal?.throwIfAborted();
@@ -261,7 +274,7 @@ export function sessionProvider(
           })
       : undefined,
     frames: provider.frames
-      ? (request, signal, limits, diagnostic) =>
+      ? (request, signal, limits, diagnostic, onReady) =>
           visual('frames', request.videoId, signal, async () => {
             signal?.throwIfAborted();
             const generation = store.generation();
@@ -287,7 +300,13 @@ export function sessionProvider(
               // Batch misses once; successful images survive even if other timestamps fail.
               const retrievalStarted = Date.now();
               fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
-                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic);
+                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic,
+                ...(onReady ? [(value: VideoFrames) => onReady(framesSchema.parse({ ...value,
+                  frames: [...hits.flatMap(result => result.value.frames), ...value.frames].sort((a, b) => a.timestampMs - b.timestampMs),
+                }))] : []));
+              onReady?.(framesSchema.parse({ ...fetched.value,
+                frames: [...hits.flatMap(result => result.value.frames), ...fetched.value.frames].sort((a, b) => a.timestampMs - b.timestampMs),
+              }));
               frameTimingsMs.retrieval = Date.now() - retrievalStarted;
               signal?.throwIfAborted();
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');

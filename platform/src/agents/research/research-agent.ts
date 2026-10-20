@@ -294,13 +294,14 @@ async function executeResearchRunWithAssets(options: {
       runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
+    analyzeTranscript: transcriptAnalyst,
     transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : {
       mode: 'contextual_analysis',
       researchQuestion: options.message,
       analyze: transcriptAnalyst,
     },
     signal: options.signal,
-    executeEvidenceTool: (execution) => (execution.toolName.startsWith('analyze_') ? analysisLimiter : limiter).run(() => {
+    executeEvidenceTool: (execution) => (execution.includesAnalysis || execution.toolName.startsWith('analyze_') ? analysisLimiter : limiter).run(() => {
       options.signal.throwIfAborted();
       return options.executeEvidenceTool({ ...execution, execute: async () => {
         options.signal.throwIfAborted();
@@ -585,6 +586,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       }
       : options.context.transcriptPolicy,
+    analyzeTranscript: options.context.analyzeTranscript ? input => analystLimiter.run(async () => {
+      input.signal.throwIfAborted();
+      return options.context.analyzeTranscript!({ ...input, conversationHistory: options.conversationHistory,
+        sourceContext: { ...input.sourceContext, ...await analysisSourceContext(input.videoId, input.signal) } });
+    }) : undefined,
     analyzeFrames: options.context.analyzeFrames ? (input) => analystLimiter.run(async () => {
       input.signal.throwIfAborted();
       return options.context.analyzeFrames!({ ...input, conversationHistory: options.conversationHistory,

@@ -1,7 +1,9 @@
+import { retrieveWithAnalysis, retrievalAnalysisSchema } from './retrieval-analysis';
+import { analyzeTranscriptEvidence } from './analyze-video-transcripts';
 import { retrievalUsage } from '../../../runtime/evidence-billing';
 import { observeAgentOperation } from '../../../runtime/diagnostics';
 import { assertTranscriptWithinLimit, videoTooLong } from '../../../runtime/video-duration-limit';
-import type { TranscriptSegment } from 'all-things-youtube';
+import type { Transcript, TranscriptSegment } from 'all-things-youtube';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { dataOperationCost } from '../../../../lib/metering';
@@ -11,6 +13,7 @@ import type { AgentToolContext } from '../tool-context';
 import { regionRestricted, captionsUnavailable, youtubeUnavailable, TranscriptToolStageError } from './transcript-tool-errors';
 
 export const getVideoTranscriptInputSchema = z.object({
+  analysis: retrievalAnalysisSchema,
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   focus: z.string().trim().min(1).max(500).optional(),
   language: z.string().trim().min(2).max(20).optional(),
@@ -29,7 +32,7 @@ export type GetVideoTranscriptInput = z.infer<typeof getVideoTranscriptInputSche
 
 export function createGetVideoTranscriptTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve or reuse a complete transcript without running an analyst. Single-video inspection returns timed captions, with paging instructions for long transcripts. Research returns the saved asset version and coverage; pass that version to analyze_video_transcripts for focused analysis. Incomplete or empty transcripts are not saved as reusable assets.',
+    description: 'Retrieve or reuse a complete transcript. Supply analysis with a focused question to analyze immediately while saving; omit it for retrieval only. Single-video inspection returns timed captions, with paging instructions for long transcripts. Research retrieval alone returns the saved version and coverage. Use analyze_video_transcripts for questions about saved versions. Incomplete or empty transcripts are not saved as reusable assets.',
     inputSchema: getVideoTranscriptInputSchema.omit({ focus: true }),
     execute: (input, { toolCallId }) => executeGetVideoTranscriptForModel(input, context, toolCallId),
   });
@@ -37,6 +40,7 @@ export function createGetVideoTranscriptTool(context: AgentToolContext) {
 
 export async function executeGetVideoTranscriptForModel(input: GetVideoTranscriptInput, context: AgentToolContext, toolCallId: string) {
   const packet = await executeGetVideoTranscript(input, context, toolCallId);
+  if (packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')) return packet;
   if (context.transcriptPolicy.mode === 'complete_transcript' || !packet.assetVersions?.length) return packet;
   // The main research model receives handles, not every selected video's raw captions.
   return { ...packet, excerpts: [] };
@@ -49,9 +53,10 @@ export function executeGetVideoTranscript(
 ): Promise<EvidencePacket> {
   const requested = getVideoTranscriptInputSchema.parse(input);
   const parsed = { ...requested, offset: pageStart(requested.offset) || undefined };
-  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}) })}`;
+  const semanticKey = `transcript-retrieval:${JSON.stringify({ videoId: parsed.videoId, language: parsed.language, ...(parsed.offset ? { offset: parsed.offset } : {}), ...(parsed.analysis ? { analysis: parsed.analysis } : {}) })}`;
 
   return context.executeEvidenceTool({
+    includesAnalysis: !!parsed.analysis,
     input: requested,
     toolCallId,
     toolName: 'get_video_transcript',
@@ -84,8 +89,25 @@ export function executeGetVideoTranscript(
       }
       selection?.attempted.add(parsed.videoId);
       let response;
+      let finish: (packet: EvidencePacket) => EvidencePacket = packet => packet;
       try {
-        response = await observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal, () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId })));
+        const combined = await retrieveWithAnalysis<Transcript>(context, parsed.analysis ? {
+          videoId: parsed.videoId, budgetKey: semanticKey,
+          content: value => {
+            if (value.videoId !== parsed.videoId || value.meta.partial || !value.segments.some(segment => segment.text.trim()))
+              throw new Error('Analysis requires a complete nonempty transcript.');
+            if (context.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(parsed.videoId, value, context.maxVideoSeconds);
+            return { videoId: value.videoId, track: value.track, translatedTo: value.translatedTo, segments: value.segments };
+          },
+          analyze: (value, analysisContext) => analyzeTranscriptEvidence(value, parsed.analysis!,
+            analysisContext.transcriptPolicy.mode === 'contextual_analysis' ? analysisContext : {
+              ...analysisContext, transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: context.researchQuestion ?? parsed.analysis!,
+                analyze: context.analyzeTranscript ?? (() => { throw new Error('Transcript analysis is unavailable.'); }) },
+            }, toolCallId, semanticKey),
+        } : undefined, onReady => observeAgentOperation({ runId: context.runId, toolCallId, videoId: parsed.videoId, stage: 'transcript_fetch' }, context.signal,
+          () => context.provider.transcript(parsed.videoId, parsed.language, undefined, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : []))));
+        response = combined.response;
+        finish = combined.finish;
       } catch (error) {
         if (context.signal.aborted) throw error;
         if (videoTooLong(error)) {
@@ -119,7 +141,7 @@ export function executeGetVideoTranscript(
       const paged = offset > 0 || nextOffset !== undefined;
       context.signal.throwIfAborted();
 
-      return evidencePacketSchema.parse({
+      return finish(evidencePacketSchema.parse({
         packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
         kind: 'youtube_transcript',
         sources: [{
@@ -161,7 +183,7 @@ export function executeGetVideoTranscript(
         assetVersions: response.assetVersions,
         continuation: nextOffset !== undefined ? JSON.stringify({ videoId: parsed.videoId, language: parsed.language, offset: nextOffset }) : undefined,
         usage: [retrievalUsage('transcript', response, status => dataOperationCost('transcript', status))],
-      });
+      }));
     },
   });
 }

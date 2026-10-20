@@ -24,6 +24,8 @@ export interface EvidenceToolExecution {
   /** Supplemental lookups leave this many provider slots for required retrieval.
    * Trusted runtime policy only, never a model-supplied tool argument. */
   reserveProviderCalls?: number;
+  /** Combined tools may request metadata from inside inference; do not hold a provider queue slot. */
+  includesAnalysis?: boolean;
   execute: () => Promise<EvidencePacket>;
 }
 
@@ -57,6 +59,7 @@ export interface AgentToolContext {
   deliverEvidence?: import('../../runtime/prior-evidence').DeliverEvidence;
   /** Admit saved assets handed to an analyst. Throws when the run reserve cannot cover them. */
   deliverSavedAssets?(versions: readonly string[]): void;
+  analyzeTranscript?: TranscriptAnalyst;
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;

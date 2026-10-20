@@ -24,15 +24,15 @@ export function createCapabilityProvider(
   };
 
   return {
-    frames: async (request, signal, limits, onDiagnostic) => {
+    frames: async (request, signal, limits, onDiagnostic, onReady) => {
       requirePinnedVideo(request.videoId);
       if (!provider.frames) throw new Error('Frame provider is unavailable.');
-      return provider.frames(request, signal, limits, onDiagnostic);
+      return provider.frames(request, signal, limits, onDiagnostic, ...(onReady ? [onReady] : []));
     },
-    storyboard: async (videoId, timestampsMs, options, onDiagnostic) => {
+    storyboard: async (videoId, timestampsMs, options, onDiagnostic, onReady) => {
       requirePinnedVideo(videoId);
       if (!provider.storyboard) throw new Error('Storyboard provider is unavailable.');
-      return provider.storyboard(videoId, timestampsMs, options, onDiagnostic);
+      return provider.storyboard(videoId, timestampsMs, options, onDiagnostic, ...(onReady ? [onReady] : []));
     },
     search: (query, filters) => provider.search(query, filters),
     browse: (options) => provider.browse(options),
@@ -45,9 +45,11 @@ export function createCapabilityProvider(
       requirePinnedVideo(videoId);
       return await provider.tracks(videoId);
     },
-    transcript: async (videoId, language, options) => {
+    transcript: async (videoId, language, options, onDiagnostic, onReady) => {
       requirePinnedVideo(videoId);
-      return await provider.transcript(videoId, language, options);
+      if (onReady) return provider.transcript(videoId, language, options, onDiagnostic, onReady);
+      if (onDiagnostic) return provider.transcript(videoId, language, options, onDiagnostic);
+      return provider.transcript(videoId, language, options);
     },
     comments: async (videoId, options) => {
       requirePinnedVideo(videoId);

@@ -70,83 +70,92 @@ export function executeAnalyzeVideoStoryboard(
       // billed once per run per unit, immediately before inference. A later analyst
       // failure keeps the charge; a rejected selection above never reaches this line.
       context.deliverSavedAssets?.(versions);
-      const analysis = await analyzeStoryboardBatches(context.analyzeStoryboard, {
-        storyboard,
-        focus: parsed.focus,
-        signal: context.signal,
-        modelCallId: `visual-analyst:${context.runId}:${toolCallId}`,
-      }, context.researchDeadlineAt);
-      context.signal.throwIfAborted();
+      const packet = await analyzeStoryboardEvidence(storyboard, parsed.focus, context, toolCallId);
       assertAvailable();
-      const videoId = storyboard.videoId;
-      const sourceId = `youtube:${videoId}:storyboard`;
-      return evidencePacketSchema.parse({
-        packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
-        kind: 'youtube_storyboard',
-        sources: [
-          { id: sourceId, provider: 'youtube', kind: 'storyboard', videoId, url: youtubeVideoUrl(videoId) },
-        ],
-        excerpts: analysis.findings.flatMap((finding, index) =>
-          [...new Set(finding.frameIndexes)].map((frame) => {
-            if (
-              !storyboard.sheets.some(
-                (sheet) => frame >= sheet.firstFrameIndex && frame < sheet.firstFrameIndex + sheet.frameCount,
-              )
-            )
-              throw new Error(`Visual analyst referenced unavailable frame ${frame}.`);
-            const time = frame * storyboard.intervalMs;
-            return {
-              id: `storyboard:${videoId}:${safeIdPart(toolCallId)}:${index}:${frame}`,
-              sourceId,
-              text: `Visual observation from sampled frame: ${finding.observation}`,
-              startMs: time,
-              endMs: time,
-            };
-          }),
-        ),
-        artifacts: [
-          {
-            type: 'youtube_storyboard_analysis',
-            title: `Saved storyboard analysis for ${videoId}`,
-            data: {
-              videoId,
-              focus: parsed.focus,
-              sessionReused: true,
-              selection: storyboard.selection,
-              manifest: storyboard.manifest,
-              analysisBatchCount: analysis.batchCount,
-              requestedSheetCount: storyboard.sheets.length,
-              analyzedSheetCount: analysis.analyzedSheets.length,
-              sampledRanges: analysis.analyzedSheets.map((sheet) => ({
-                startMs: sheet.firstFrameIndex * sheet.intervalMs,
-                endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
-              })),
-              totalFrames: storyboard.frameCount,
-              sampledFrames: analysis.analyzedSheets.reduce((sum, sheet) => sum + sheet.frameCount, 0),
-              intervalMs: storyboard.intervalMs,
-            },
-          },
-        ],
-        warnings: [
-          {
-            code: 'SAMPLED_VISUAL_EVIDENCE',
-            message:
-              'Observations cover sampled storyboard frames only. Brief events and small text may be missed.',
-          },
-          ...values
-            .flatMap((value) => value.meta.warnings)
-            .map((message) => ({ code: 'PARTIAL_STORYBOARD', message })),
-          ...analysis.warnings.map((message) => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
-          ...assets
-            .filter(({ asset }) => !asset.current)
-            .map(() => ({
-              code: 'SUPERSEDED_SESSION_EVIDENCE',
-              message: 'Analysis uses an older stored storyboard version.',
-            })),
-        ].filter((warning, index, all) => all.findIndex(other => other.code === warning.code && other.message === warning.message) === index).slice(0, 50),
-        assetVersions: versions,
-        usage: [],
+      packet.assetVersions = versions;
+      packet.artifacts[0]!.data.sessionReused = true;
+      if (assets.some(({ asset }) => !asset.current)) packet.warnings.push({
+        code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored storyboard version.',
       });
+      return packet;
     },
+  });
+}
+
+export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof storyboardSchema>, focus: string, context: AgentToolContext, toolCallId: string) {
+  context.signal.throwIfAborted();
+  if (!context.analyzeStoryboard) throw new Error('Storyboard analysis is unavailable.');
+  if (!canAnalyzeStoryboard(context.researchDeadlineAt)) throw new Error('Not enough research time to analyze storyboards.');
+  if (!storyboard.sheets.length) throw new Error('No storyboard images are available for analysis.');
+  if (storyboard.sheets.reduce((sum, sheet) => sum + sheet.imageBase64.length, 0) > 11_184_816)
+    throw new Error('Storyboard selection exceeds the image budget.');
+  const analysis = await analyzeStoryboardBatches(context.analyzeStoryboard!, {
+    storyboard,
+    focus,
+    signal: context.signal,
+    modelCallId: `visual-analyst:${context.runId}:${toolCallId}`,
+  }, context.researchDeadlineAt);
+  context.signal.throwIfAborted();
+  const videoId = storyboard.videoId;
+  const sourceId = `youtube:${videoId}:storyboard`;
+  return evidencePacketSchema.parse({
+    packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
+    kind: 'youtube_storyboard',
+    sources: [
+      { id: sourceId, provider: 'youtube', kind: 'storyboard', videoId, url: youtubeVideoUrl(videoId) },
+    ],
+    excerpts: analysis.findings.flatMap((finding, index) =>
+      [...new Set(finding.frameIndexes)].map((frame) => {
+        if (
+          !storyboard.sheets.some(
+            (sheet) => frame >= sheet.firstFrameIndex && frame < sheet.firstFrameIndex + sheet.frameCount,
+          )
+        )
+          throw new Error(`Visual analyst referenced unavailable frame ${frame}.`);
+        const time = frame * storyboard.intervalMs;
+        return {
+          id: `storyboard:${videoId}:${safeIdPart(toolCallId)}:${index}:${frame}`,
+          sourceId,
+          text: `Visual observation from sampled frame: ${finding.observation}`,
+          startMs: time,
+          endMs: time,
+        };
+      }),
+    ),
+    artifacts: [
+      {
+        type: 'youtube_storyboard_analysis',
+        title: `Storyboard analysis for ${videoId}`,
+        data: {
+          videoId,
+          focus,
+          sessionReused: false,
+          selection: storyboard.selection,
+          manifest: storyboard.manifest,
+          analysisBatchCount: analysis.batchCount,
+          requestedSheetCount: storyboard.sheets.length,
+          analyzedSheetCount: analysis.analyzedSheets.length,
+          sampledRanges: analysis.analyzedSheets.map((sheet) => ({
+            startMs: sheet.firstFrameIndex * sheet.intervalMs,
+            endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs,
+          })),
+          totalFrames: storyboard.frameCount,
+          sampledFrames: analysis.analyzedSheets.reduce((sum, sheet) => sum + sheet.frameCount, 0),
+          intervalMs: storyboard.intervalMs,
+        },
+      },
+    ],
+    warnings: [
+      {
+        code: 'SAMPLED_VISUAL_EVIDENCE',
+        message:
+          'Observations cover sampled storyboard frames only. Brief events and small text may be missed.',
+      },
+      ...storyboard.meta.warnings
+        .map((message) => ({ code: 'PARTIAL_STORYBOARD', message })),
+      ...analysis.warnings.map((message) => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
+    ].filter((warning, index, all) => all.findIndex(other => other.code === warning.code && other.message === warning.message) === index).slice(0, 50),
+    assetVersions: [],
+    usage: [],
   });
 }

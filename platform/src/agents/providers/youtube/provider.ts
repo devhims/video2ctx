@@ -37,14 +37,14 @@ export type AgentVideo = Video & { signals?: VideoSignals & { freshness?: Record
 
 export interface YouTubeAgentProvider {
   frames?(request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-    limits?: { extractionTimeoutMs: number; refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<VideoFrames>>;
-  storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<Storyboard>>;
+    limits?: { extractionTimeoutMs: number; refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink, onReady?: (value: VideoFrames) => void): Promise<CachedResult<VideoFrames>>;
+  storyboard?(videoId: string, timestampsMs?: number[], options?: StoryboardSelectionOptions, onDiagnostic?: ExtractionDiagnosticSink, onReady?: (value: Storyboard) => void): Promise<CachedResult<Storyboard>>;
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
   video(videoId: string, options?: { refresh?: boolean; includeSignals?: boolean }): Promise<CachedResult<AgentVideo>>;
   tracks(videoId: string): Promise<CachedResult<CaptionTrackList>>;
-  transcript(videoId: string, language?: string, options?: { refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink): Promise<CachedResult<Transcript>>;
+  transcript(videoId: string, language?: string, options?: { refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink, onReady?: (value: Transcript) => void): Promise<CachedResult<Transcript>>;
   comments(
     videoId: string,
     options?: { continuation?: string; all?: boolean; refresh?: boolean },
@@ -70,12 +70,13 @@ export function createYouTubeAgentProvider(
   researchDeadlineAt?: number,
 ): YouTubeAgentProvider {
   return {
-    frames: async (request, signal, limits, onDiagnostic) => {
+    frames: async (request, signal, limits, onDiagnostic, onReady) => {
       if (!videoCatalog(env)) return { value:await getVideoFrames(env,request,signal,limits,onDiagnostic),cacheStatus:'miss' };
       signal?.throwIfAborted();
       const result = await abortable(getVideoResource(env,{kind:'frames',id:request.videoId,
         timestampsMs:request.timestampsMs,maxWidth:request.maxWidth??1920,extractionTimeoutMs:limits?.extractionTimeoutMs??45_000},
-      limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}),signal);
+      limits?.refresh,event=>{if(!signal?.aborted) onDiagnostic?.(event);}, false,
+        onReady ? value => { if (!signal?.aborted) onReady(validateFrameResponse({ ...request, maxWidth: request.maxWidth ?? 1920 }, value)); } : undefined),signal);
       // The private coordinator responds only after publishing every returned
       // frame. Carry that receipt locally instead of downloading the batch again.
       // Cache/stale results and missing references retain independent verification.
@@ -96,7 +97,7 @@ export function createYouTubeAgentProvider(
       signal?.throwIfAborted();
       return { ...result, verifiedImages, verifiedFrames: verifiedFrames.filter((value): value is VerifiedFrame => !!value) };
     },
-    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic) => {
+    storyboard: async (videoId, timestampsMs, options = {}, onDiagnostic, onReady) => {
       const { signal, deadlineAt: requestedDeadlineAt, ...selection } = options;
       const deadlineAt = requestedDeadlineAt === undefined ? researchDeadlineAt
         : Math.min(requestedDeadlineAt, researchDeadlineAt ?? Infinity);
@@ -106,7 +107,9 @@ export function createYouTubeAgentProvider(
       const diagnostic: ExtractionDiagnosticSink = event => { if (!signal?.aborted) onDiagnostic?.(event); };
       const sharedCatalog = videoCatalog(env);
       const result: CachedResult<Storyboard & { freshness?: Record<string, unknown> }> = await abortable(sharedCatalog
-        ? getVideoResource(env, operation, selection.refresh, diagnostic)
+        ? getVideoResource(env, operation, selection.refresh, diagnostic, false, onReady ? value => {
+          if (!signal?.aborted) onReady(storyboardSchema.parse(value));
+        } : undefined)
         : runYouTubeOperation(env, operation, diagnostic)
           .then(value => ({value:storyboardSchema.parse(value), cacheStatus:'miss' as const})), signal);
       if (!sharedCatalog) return result;
@@ -150,8 +153,8 @@ export function createYouTubeAgentProvider(
       value: await provider.getTracks(env, videoId),
       cacheStatus: 'miss',
     }),
-    transcript: async (videoId, language, options, onDiagnostic) => researchDeadlineAt !== undefined
-      ? getTranscriptWithCache(env, videoId, language, onDiagnostic, options?.refresh, researchDeadlineAt, true)
+    transcript: async (videoId, language, options, onDiagnostic, onReady) => researchDeadlineAt !== undefined || onReady !== undefined
+      ? getTranscriptWithCache(env, videoId, language, onDiagnostic, options?.refresh, researchDeadlineAt, true, onReady)
       : options?.refresh && videoCatalog(env)
       ? getVideoResource(env,{kind:'transcript',id:videoId,lang:language,granularity:'word'},true,onDiagnostic,true)
       : options?.refresh

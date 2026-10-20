@@ -132,6 +132,7 @@ async function cached<T extends VideoResourceOperation>(
   onDiagnostic?: ExtractionDiagnosticSink,
   refresh = false,
   sessionReceipt = false,
+  onReady?: (value: ResourceResult<T>) => void,
 ): Promise<CachedResult<ResourceResult<T> & { freshness?: Record<string, unknown> }>> {
   const legacyCacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
   const catalog = videoCatalog(env);
@@ -157,7 +158,7 @@ async function cached<T extends VideoResourceOperation>(
         maxAgeMs,
         operation,
         refresh,
-      }));
+      }), ...(onReady ? [async (valueJson: string) => { onReady(JSON.parse(valueJson)); }] : []));
       const parsed = parseCoordinatorResponse(wireResponse);
       linkVisualWork(parsed.visualDiagnostics, parsed.cacheStatus);
       return parsed;
@@ -383,10 +384,10 @@ export async function getTranscript(env: Env, id: string, lang?: string): Promis
   return (await getTranscriptWithCache(env, id, lang)).value;
 }
 
-export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false, deadlineAt?: number, sessionReceipt = false) {
+export function getTranscriptWithCache(env: Env, id: string, lang?: string, onDiagnostic?: ExtractionDiagnosticSink, refresh = false, deadlineAt?: number, sessionReceipt = false, onReady?: (value: Transcript) => void) {
   return cached(env, 'transcript-v5', `${id}:${lang ?? 'original'}`, 7 * 24 * 60 * 60_000, {
     kind: 'transcript', id, lang, granularity: 'word', ...(deadlineAt === undefined ? {} : { deadlineAt }),
-  }, onDiagnostic, refresh, sessionReceipt);
+  }, onDiagnostic, refresh, sessionReceipt, onReady);
 }
 
 export async function getCaptionTracks(env: Env, id: string) {
@@ -401,11 +402,11 @@ export function getEndscreen(env: Env, id: string) {
 
 /** Shared DB-first retrieval for uncached visual resources and explicit refreshes. */
 export async function getVideoResource<T extends VideoResourceOperation>(env: Env, operation: T,
-  refresh = false, onDiagnostic?: ExtractionDiagnosticSink, sessionReceipt = false): Promise<CachedResult<ResourceResult<T>>> {
+  refresh = false, onDiagnostic?: ExtractionDiagnosticSink, sessionReceipt = false, onReady?: (value: ResourceResult<T>) => void): Promise<CachedResult<ResourceResult<T>>> {
   const key = videoResourceKey(operation);
   if (!key) throw new Error('Expected a video-specific resource.');
   return cached(env,`video-resource-v1:${key.kind}`,`${key.videoId}:${key.variant}`,
-    VIDEO_MAX_AGE[operation.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh,sessionReceipt);
+    VIDEO_MAX_AGE[operation.kind as keyof typeof VIDEO_MAX_AGE],operation,onDiagnostic,refresh,sessionReceipt,onReady);
 }
 
 async function hash(value: string): Promise<string> {

@@ -1523,3 +1523,55 @@ test('cached transcripts still enforce the stored duration limit before returnin
     });
   });
 });
+
+test('private coordinator RPC starts transcript analysis while the real catalog write is blocked', async () => {
+  const { YouTubeCacheCoordinatorCore } = await import('../src/lib/youtube-cache-coordinator');
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { executeGetVideoTranscriptForModel } = await import('../src/agents/providers/youtube/tools/get-video-transcript');
+  const { sha256 } = await import('../src/lib/http');
+  const id = videoId();
+  const raw = transcript(id);
+  const operation = { kind: 'transcript' as const, id, granularity: 'word' as const };
+  const cacheKey = `video-resource:v1:${await sha256(JSON.stringify(videoResourceKey(operation)))}`;
+  const coordinator = env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey);
+  await runInDurableObject(coordinator, instance => {
+    Object.assign(instance, { coordinator: new YouTubeCacheCoordinatorCore(env, async () => raw) });
+  });
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const original = VideoCatalog.prototype.save;
+  const saving = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+    if (args[0].videoId === id) await blocked;
+    return original.apply(this, args);
+  });
+  try {
+    await within(`parallel-rpc-${id}`, async ({ store, backend }) => {
+      const reads = vi.spyOn(backend, 'read');
+      let startedResolve!: () => void;
+      const started = { promise: new Promise<void>(resolve => { startedResolve = resolve; }), resolve: () => startedResolve() };
+      const ctx: AgentToolContext = {
+        runId: 'parallel-rpc', signal: new AbortController().signal, session: store,
+        provider: sessionProvider(createYouTubeAgentProvider(env), store),
+        transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Explain the text', analyze: async input => {
+          expect(input.segments).toEqual(raw.segments);
+          expect(store.brief().assets).toHaveLength(0);
+          started.resolve();
+          return { summary: 'Original public transcript', findings: [], excerpts: [], warnings: [],
+            coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 } };
+        } },
+        executeEvidenceTool: execution => execution.execute(), finalize: vi.fn(),
+      };
+      let returned = false;
+      const work = executeGetVideoTranscriptForModel({ videoId: id, analysis: 'Explain the text' }, ctx, 'parallel');
+      void work.then(() => { returned = true; });
+      await started.promise;
+      expect(returned).toBe(false);
+      release();
+      const packet = await work;
+      expect(packet.artifacts[0]?.type).toBe('youtube_transcript_analysis');
+      expect(packet.assetVersions).toHaveLength(1);
+      expect(store.has(packet.assetVersions![0]!)).toBe(true);
+      expect(reads).not.toHaveBeenCalled();
+    });
+  } finally { release(); saving.mockRestore(); }
+});

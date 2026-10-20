@@ -10,7 +10,7 @@ import { assetVersionSchema } from './stored-analysis';
 
 export const researchVideoTranscriptsInputSchema = z.object({
   sources: z.array(z.union([
-    getVideoTranscriptInputSchema.omit({ focus: true }).strict(),
+    getVideoTranscriptInputSchema.omit({ focus: true, analysis: true }).strict(),
     z.object({ assetVersion: assetVersionSchema }).strict(),
   ])).min(1).max(8).refine(sources => new Set(sources.map(source =>
     'videoId' in source ? `video:${source.videoId}` : `asset:${source.assetVersion}`,
@@ -68,8 +68,13 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
                 throw rejection;
               }
             }
-            assetVersion = 'assetVersion' in current ? current.assetVersion
-              : (await executeGetVideoTranscript(current, context, `${childId}:retrieve`)).assetVersions?.[0];
+            if ('videoId' in current) {
+              const packet = await executeGetVideoTranscript({ ...current, analysis: focus }, context, `${childId}:retrieve`);
+              if (!packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis'))
+                throw new Error('Transcript analysis failed. The retrieved content remains available when saved.');
+              return packet;
+            }
+            assetVersion = current.assetVersion;
           } catch (error) {
             context.signal.throwIfAborted();
             if ((!captionsUnavailable(error) && !regionRestricted(error) && !videoTooLong(error)) || !currentVideoId) throw error;
