@@ -295,6 +295,7 @@ import type { AgentTurnResult, FinalizeAnswerInput } from '../src/agents/contrac
 
 type RuntimeInternals = {
   performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+  executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
   deliverEvidence(runId: string, source: string, packets: EvidencePacket[]): { admitted: EvidencePacket[]; withheld: EvidencePacket[] };
   deliverSavedAssets(runId: string, versions: string[]): void;
   finalizeRun(runId: string, toolId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
@@ -410,11 +411,13 @@ test('concurrent tools and saved reads never exceed the reserve; paid content st
     expect(blocked.admitted.map(p => p.packetId)).toEqual(['paid-again']);
     expect(() => runtimeInternals.deliverSavedAssets(runId!, [v(4)])).toThrow(expect.objectContaining({ code: 'AGENT_CREDIT_BUDGET_EXHAUSTED' }));
     const parallel = vi.fn(async () => packet('never', [v(4)], providerMiss(4)));
-    await expect(runtimeInternals.performEvidenceTool(runId!, execution('parallel', providerMiss(4), parallel)))
-      .rejects.toThrow(expect.objectContaining({ code: 'AGENT_CREDIT_BUDGET_EXHAUSTED' }));
+    const queued = runtimeInternals.performEvidenceTool(runId!, execution('parallel', providerMiss(4), parallel));
+    const rejected = expect(queued).rejects.toThrow(expect.objectContaining({ code: 'AGENT_CREDIT_BUDGET_EXHAUSTED' }));
     expect(parallel).not.toHaveBeenCalled();
     finish(packet('packet:slow', [v(2)], providerMiss(2)));
     expect((await running).usage[0]!.credits).toBe(1);
+    await rejected;
+    expect(parallel).not.toHaveBeenCalled();
     // At the cap, analysis of already paid input holds nothing and charges nothing.
     runtimeInternals.deliverSavedAssets(runId!, [v(1)]);
     const analysis = await runtimeInternals.performEvidenceTool(runId!, execution('analysis', { assetVersions: [v(1)], usage: [] },
@@ -771,5 +774,89 @@ test('combined frame analysis uses one held retrieval charge and later saved ana
     expect(packet.usage[0]?.credits).toBe(2);
     internals.deliverSavedAssets(runId!, [v(11)]);
     expect(internals.evidenceLedger.receipts(runId!).reduce((sum, row) => sum + row.credits, 0)).toBe(2);
+  });
+});
+
+
+test.each(['reused', 'fresh', 'provider-failure', 'cancelled', 'metadata', 'quota', 'deleted', 'deleted-one'] as const)(
+  'low-credit fan-out handles %s without reserving credits or provider slots for waiting work', async scenario => {
+  const { scheduleEvidenceTools } = await import('../src/agents/runtime/evidence-scheduler');
+  const { runtime, runIds: [runId] } = await seedRuns(`credit-admission-${scenario}`);
+  await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as RuntimeInternals;
+    const versions = Array.from({ length: 26 }, (_, i) => v(100 + i));
+    const ids = versions.map((_, i) => `abcdefgh${i.toString().padStart(3, '0')}`);
+    for (let i = 0; i < versions.length; i++) instance.sql`INSERT INTO session_assets
+      VALUES (${versions[i]!}, ${`credit-key:${i}`}, 'transcript', ${ids[i]!}, '', ${JSON.stringify({ language: 'en', complete: true })}, 0)`;
+    internal.deliverSavedAssets(runId!, scenario === 'fresh' ? versions.slice(8) : versions.slice(0, 18));
+    expect(internal.evidenceLedger.available(runId!)).toBe(4);
+    if (scenario === 'quota') for (let i = 0; i < 7; i++) instance.sql`INSERT INTO agent_tool_calls
+      (run_id,tool_call_id,semantic_key,tool_name,operation,status,credits,created_at,updated_at)
+      VALUES (${runId!},${`earlier-${i}`},${`earlier-${i}`},'get_video','video','completed',0,0,0)`;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fetched = 0, metadataAttempts = 0;
+    const unexpected = async (): Promise<never> => { throw new Error('Unexpected provider call'); };
+    const controller = new AbortController();
+    const ctx: AgentToolContext = {
+      runId: runId!, signal: controller.signal, session: internal.sessionStore,
+      provider: { search: unexpected, browse: unexpected, trends: unexpected, video: unexpected, tracks: unexpected,
+        comments: unexpected, endscreen: unexpected, channel: unexpected, channelVideos: unexpected,
+        channelPlaylists: unexpected, playlist: unexpected,
+        transcript: async videoId => {
+          const ordinal = ++fetched;
+          await gate;
+          if (scenario === 'provider-failure' && ordinal <= 4) throw new Error('Injected extraction failure.');
+          return { cacheStatus: scenario === 'fresh' ? 'miss' : 'hit', sessionReused: scenario !== 'fresh',
+            assetVersions: [versions[ids.indexOf(videoId)]!], value: {
+              videoId, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: false, isDefault: true },
+              segments: [{ text: 'Revenue grew.', startMs: 0, endMs: 1000, durationMs: 1000 }], text: 'Revenue grew.',
+              meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+            } };
+        },
+      },
+      transcriptPolicy: { mode: 'complete_transcript' },
+      analyzeTranscript: async input => {
+        if (scenario === 'metadata') {
+          metadataAttempts++;
+          // The optional child must reject promptly instead of waiting on its own parent's hold.
+          await expect(ctx.executeEvidenceTool({ toolCallId: `metadata:${input.videoId}`, toolName: 'get_video',
+            semanticKey: `metadata:${input.videoId}`, operation: 'video', input: {}, reserveProviderCalls: 0,
+            execute: unexpected })).rejects.toThrow();
+        }
+        return { summary: 'Revenue grew.', findings: [], excerpts: [], warnings: [],
+          coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 } };
+      },
+      executeEvidenceTool: execution => internal.executeEvidenceTool(runId!, execution), finalize: unexpected,
+    };
+    Object.assign(ctx, scheduleEvidenceTools(ctx.provider, ctx.executeEvidenceTool, ctx.signal));
+    const calls = ids.slice(0, 8).map((videoId, index) => executeGetVideoTranscript({ videoId, analysis: 'Revenue?' }, ctx, `source:${index}`));
+    const settled = Promise.allSettled(calls);
+    try {
+      await vi.waitFor(() => expect(fetched).toBe(4));
+      expect(internal.evidenceLedger.available(runId!)).toBe(0);
+      expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id = ${runId!} AND tool_name = 'get_video_transcript'`).toHaveLength(4);
+      if (scenario === 'cancelled') controller.abort(new Error('Research phase timeout.'));
+      if (scenario === 'deleted') await internal.sessionStore.delete();
+      if (scenario === 'deleted-one') await internal.sessionStore.delete(versions[7]);
+    } finally { release(); }
+    const results = await settled;
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (scenario === 'reused' || scenario === 'metadata') {
+      expect(failures).toEqual([]);
+      expect(fetched).toBe(8);
+      if (scenario === 'metadata') expect(metadataAttempts).toBe(8);
+    } else if (scenario === 'cancelled' || scenario === 'deleted' || scenario === 'deleted-one') {
+      expect(failures).toHaveLength(8);
+      expect(fetched).toBe(4);
+    } else {
+      expect(failures).toHaveLength(4);
+      if (scenario === 'fresh') expect(failures.every(error => error.code === 'AGENT_CREDIT_BUDGET_EXHAUSTED')).toBe(true);
+      if (scenario === 'quota') expect(failures.every(error => error.code === 'AGENT_TOOL_BUDGET_EXCEEDED')).toBe(true);
+      if (scenario === 'provider-failure') expect(failures.every(error => error.message.includes('Injected extraction failure'))).toBe(true);
+      expect(fetched).toBe(scenario === 'provider-failure' ? 8 : 4);
+    }
+    expect(internal.evidenceLedger.available(runId!)).toBe(scenario === 'fresh' ? 0 : 4);
+    expect(internal.evidenceLedger.committed(runId!)).toBe(scenario === 'fresh' ? 22 : 18);
   });
 });

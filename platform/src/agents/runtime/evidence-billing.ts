@@ -157,6 +157,7 @@ type Transaction = <T>(work: () => T) => T;
 
 export class RunEvidenceLedger {
   readonly #holds = new Map<string, Map<string, number>>();
+  readonly #releaseWaiters = new Map<string, Set<() => void>>();
 
   constructor(
     private readonly sql: SqlStorage,
@@ -222,10 +223,41 @@ export class RunEvidenceLedger {
     this.#holds.set(runId, holds);
   }
 
+  /** Required tools wait for temporary reservations, outside provider and model slots.
+   * Optional nested lookups use hold() instead so they cannot wait on their parent. */
+  holdWhenAvailable(runId: string, holdId: string, credits: number, signal?: AbortSignal): void | Promise<void> {
+    signal?.throwIfAborted();
+    // Preserve synchronous admission when affordable. A request that cannot fit
+    // even after every hold clears has a real budget failure and also fails now.
+    if (credits <= this.available(runId, holdId) || credits > this.reserve - this.committed(runId)) {
+      this.hold(runId, holdId, credits);
+      return;
+    }
+    return this.waitForRelease(runId, signal).then(() => this.holdWhenAvailable(runId, holdId, credits, signal));
+  }
+
+  private waitForRelease(runId: string, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const waiters = this.#releaseWaiters.get(runId) ?? new Set<() => void>();
+      const cleanup = () => {
+        waiters.delete(wake);
+        if (!waiters.size) this.#releaseWaiters.delete(runId);
+        signal?.removeEventListener('abort', abort);
+      };
+      const wake = () => { cleanup(); resolve(); };
+      const abort = () => { cleanup(); reject(signal?.reason); };
+      waiters.add(wake);
+      this.#releaseWaiters.set(runId, waiters);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+  }
+
   release(runId: string, holdId: string): void {
     const holds = this.#holds.get(runId);
     holds?.delete(holdId);
     if (holds && !holds.size) this.#holds.delete(runId);
+    for (const wake of [...(this.#releaseWaiters.get(runId) ?? [])]) wake();
   }
 
   /** Register inside the asset publication, before searches or analysts can read it. */

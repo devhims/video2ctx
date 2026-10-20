@@ -79,6 +79,8 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   const evidence = context.getEvidence?.() ?? [];
   if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
+  let previews: z.infer<typeof storyboardPreviewsSchema> | undefined;
+  let previewFailed = false, previewMs = 0;
   const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
     videoId: parsed.videoId, toolCallId,
     content: value => {
@@ -93,14 +95,27 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   } : undefined, onReady => withRunDeadline(deadlineAt, context.signal, signal => timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
     maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false, signal, deadlineAt,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : [])), { runId: context.runId, toolCallId }),
-    'Storyboard retrieval exceeded its budget.'));
+    'Storyboard retrieval exceeded its budget.'), async (response, signal) => {
+    const storyboard = storyboardSchema.parse(response.value);
+    if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
+    if (storyboard.selection?.mode === 'metadata') throw new Error('Storyboard response does not match the requested operation.');
+    if (!context.saveStoryboardPreviews) return;
+    const started = Date.now();
+    try {
+      previews = storyboardPreviewsSchema.parse(await timeStoryboardStage(parsed.videoId, 'previews',
+        () => context.saveStoryboardPreviews!(storyboard, signal, response.verifiedImages), { runId: context.runId, toolCallId }));
+    } catch {
+      signal.throwIfAborted();
+      previewFailed = true;
+    } finally { previewMs = Date.now() - started; }
+  });
   context.signal.throwIfAborted();
   const storyboard = storyboardSchema.parse(response.value);
   if (storyboard.manifest) countVisualWork('requestedImages', storyboardSheetIndexes(storyboard, parsed).length);
   countVisualWork('returnedImages', storyboard.sheets.length);
   if (storyboard.videoId !== parsed.videoId) throw new Error('Storyboard video ID mismatch.');
   if (storyboard.selection?.mode === 'metadata') throw new Error('Storyboard response does not match the requested operation.');
-  const timingsMs = { retrieval: retrievalMs, previews: 0, total: 0 };
+  const timingsMs = { retrieval: retrievalMs, previews: previewMs, total: 0 };
   const sourceId = `youtube:${parsed.videoId}:storyboard`;
   const packet = evidencePacketSchema.parse({
     packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`, kind: 'youtube_storyboard',
@@ -119,20 +134,9 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     assetVersions: [...new Set(response.assetVersions ?? [])],
     usage: [retrievalUsage('storyboard', response, meteredCredits('storyboard'))],
   });
-  if (context.saveStoryboardPreviews) {
-    const previewStartedAt = Date.now();
-    try {
-      packet.artifacts[0]!.data.previews = storyboardPreviewsSchema.parse(
-        await timeStoryboardStage(parsed.videoId, 'previews', () => context.saveStoryboardPreviews!(storyboard, context.signal, response.verifiedImages), { runId: context.runId, toolCallId }),
-      );
-    } catch {
-      context.signal.throwIfAborted();
-      packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
-        message: 'The storyboard was retrieved, but its image previews could not be saved.' });
-    } finally {
-      timingsMs.previews = Date.now() - previewStartedAt;
-    }
-  }
+  if (previews) packet.artifacts[0]!.data.previews = previews;
+  if (previewFailed) packet.warnings.push({ code: 'STORYBOARD_PREVIEW_UNAVAILABLE',
+    message: 'The storyboard was retrieved, but its image previews could not be saved.' });
   context.signal.throwIfAborted();
   timingsMs.total = Date.now() - startedAt;
   packet.artifacts[0]!.data.timingsMs = timingsMs;

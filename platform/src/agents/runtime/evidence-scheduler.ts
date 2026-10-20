@@ -29,7 +29,7 @@ export function scheduleEvidenceTools(
         signal.throwIfAborted();
         const current = execution.signal ?? signal;
         current.throwIfAborted();
-        return callerSignal.run(current, () => execute({ ...execution, execute: async () => {
+        return callerSignal.run(current, () => execute({ ...execution, signal: current, execute: async () => {
           signal.throwIfAborted();
           current.throwIfAborted();
           const packet = await execution.execute();

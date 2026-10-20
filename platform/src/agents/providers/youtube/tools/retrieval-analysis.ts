@@ -23,11 +23,16 @@ export async function retrieveWithAnalysis<T>(
   context: AgentToolContext,
   analysis: Analysis<T> | undefined,
   retrieve: (onReady?: (value: T) => void) => Promise<CachedResult<T>>,
+  /** Prepare previews from saved inputs while inference finishes. Never runs on a failed save. */
+  afterSaved?: (response: CachedResult<T>, signal: AbortSignal) => Promise<void>,
 ) {
   const startedAt = Date.now();
   if (!analysis) {
     const response = await retrieve();
-    return { response, retrievalMs: Date.now() - startedAt, finish: (packet: EvidencePacket) => packet };
+    const retrievalMs = Date.now() - startedAt;
+    context.signal.throwIfAborted();
+    await afterSaved?.(response, context.signal);
+    return { response, retrievalMs, finish: (packet: EvidencePacket) => packet };
   }
   if (context.pinnedVideoId && context.pinnedVideoId !== analysis.videoId)
     throw new Error(`inspect_video is pinned to video ${context.pinnedVideoId}.`);
@@ -71,7 +76,7 @@ export async function retrieveWithAnalysis<T>(
     if (context.session && (!response.assetVersions?.length || response.assetVersions.some(version => !context.session!.has?.(version))))
       throw new Error('Retrieved assets were not saved in this session.');
     ready(response.value); // Session hits and older providers have no early notification.
-    const outcome = await pending!;
+    const [outcome] = await Promise.all([pending!, afterSaved?.(response, signal)]);
     assertAvailable();
     if (response.assetVersions?.some(version => context.session && !context.session.has?.(version)))
       throw new Error('Saved asset is unavailable or deleted.');

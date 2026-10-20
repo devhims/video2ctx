@@ -89,6 +89,10 @@ reused on subsequent retries. Deletion and cancellation still reject unavailable
 inputs. Failed analysis records allowlisted error classification, request ID when
 available, run ID and tool-call ID; raw provider errors are not added to the packet.
 
+Preview saving starts after source persistence and runs alongside any unfinished
+inference. The tool waits for both before returning. Preview failure preserves
+successful findings with a warning; cancellation still drains inference.
+
 The retrieval’s existing maximum-price credit hold covers the combined operation.
 Its single returned usage entry settles through the existing ledger; no nested
 saved-analysis delivery adds another charge. Model usage is still recorded by the
@@ -98,7 +102,11 @@ calls and metadata lookups. The slot ends when the provider returns, before the
 tool waits for inference. Ready inputs enter the existing inference limiter, while
 saved-analysis tools separately bound payload reads. Slow extraction cannot occupy
 analysis slots, and metadata never waits on an enclosing tool that holds a retrieval
-slot until analysis completes.
+slot until analysis completes. When temporary holds leave too few credits, required
+tools wait without holding credits or provider slots. They recheck cancellation,
+deletion and the durable tool quota before starting. A request that cannot fit even
+after other holds clear fails immediately. Optional nested metadata lookups remain
+nonwaiting so they cannot wait on their own parent’s hold.
 
 `combinedTimingsMs` records retrieval completion, inference duration, their overlap,
 and total tool work. The early private RPC notification transports the input once
@@ -164,7 +172,7 @@ This changes the earlier rule that reusing session evidence was free. A run now 
 - Provider-loaded assets publish their retrieval claim in `agent_evidence_asset_claims` before they become searchable. Saved searches, reads and analyst inputs join that claim, including across a restart, so a read during retrieval cannot add a second charge. A retry can replace an unconsumed claim; an explicit refresh never absorbs a charge for content the run already received. Account deletion clears these claims with the other billing tables.
 - Empty saved text pages do not charge or mark their asset delivered. A later nonempty read still pays once. Visual retrievals may return saved image handles without text excerpts and retain their operation price. Fresh provider work keeps its existing price.
 - Tool pricing, delivery marks, the saved packet and the completed tool record commit in one SQLite transaction. A failed save leaves the tool failed and uncharged. Saved-analysis inputs are admitted after every preflight check and immediately before inference; a later analyst failure keeps that charge.
-- Provider tools hold their highest table price while they run, and saved analysis holds nothing. Synchronous admission of saved reads counts committed charges and active holds, so concurrent tools, reads, repairs and recovery stay within the 22-credit reserve. A new unit that does not fit is withheld and the model is told so. Content the run already paid for is still delivered at the cap. Settlement sums completed tool credits and ledger charges, and `billing.charges` lists the receipts.
+- Provider tools hold their highest table price while they run, and saved analysis holds nothing. Required tools wait for temporary holds to clear before reserving credits when necessary. Permanent credit exhaustion still rejects admission. Synchronous admission of saved reads counts committed charges and active holds, so concurrent tools, reads, repairs and recovery stay within the 22-credit reserve. A new unit that does not fit is withheld and the model is told so. Content the run already paid for is still delivered at the cap. Settlement sums completed tool credits and ledger charges, and `billing.charges` lists the receipts.
 - Earlier-turn source content is delivered only for videos the route names as answer subjects (`inspect_video` and `comparisonVideoIds`), and for packets the run already received before a restart. Other cited packets and recorded metadata become `priorEvidence` pointers with ids, titles and observation times. The model loads them with `read_prior_evidence`, which is billed like any saved read. Conversation text stays plain and unchanged. Routing and research see recorded metadata by reference only. Runs without a session store, which have no read path, keep the earlier automatic delivery.
 - `contextScope: history` routes receive prepared conversation text and a bounded history page, without source content or source charges. Finalization performs no evidence search, saved reads, or comparison preloads. Mixed/video routes may receive explicitly selected prior evidence during input preparation; any further gathering belongs to research.
 - Context quality limit: a vague follow-up routed directly to finalization cannot lazily load earlier sources. Routing must select research or inspection when a saved source needs reading. Otherwise the answer must state the gap. Recovery uses evidence already delivered to the run and does not gather missing context.

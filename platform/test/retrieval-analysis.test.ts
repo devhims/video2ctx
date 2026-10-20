@@ -192,3 +192,78 @@ describe('parallel analysis failure boundaries', () => {
     expect(budget.release).toHaveBeenCalledWith('key');
   });
 });
+
+
+describe('previews overlap inference after persistence', () => {
+  test.each(['frames', 'storyboard'] as const)('%s prepares previews before inference finishes and awaits both', async kind => {
+    const { ctx } = context();
+    const saved = deferred(), inferred = deferred(), previewDone = deferred();
+    const analysisStarted = deferred(), previewStarted = deferred();
+    const preview = { assetId: 'b'.repeat(64), collectionId: 'c'.repeat(64), timestampMs: 1000, width: 200, height: 100 };
+    ctx.provider.frames = async (_r, _s, _l, _d, ready) => { ready?.(frames); await saved.promise; return { value: frames, cacheStatus: 'miss', assetVersions: [version] }; };
+    ctx.provider.storyboard = async (_id, _t, _o, _d, ready) => { ready?.(storyboard); await saved.promise; return { value: storyboard, cacheStatus: 'miss', assetVersions: [version] }; };
+    ctx.analyzeFrames = async () => { analysisStarted.resolve(); await inferred.promise; return { findings: [], warnings: [] }; };
+    ctx.analyzeStoryboard = async () => { analysisStarted.resolve(); await inferred.promise; return { findings: [], warnings: [] }; };
+    ctx.saveFramePreviews = vi.fn(async () => { previewStarted.resolve(); await previewDone.promise; return [preview]; });
+    ctx.saveStoryboardPreviews = vi.fn(async () => { previewStarted.resolve(); await previewDone.promise; return [{ ...preview, timestampMs: 0, endTimestampMs: 1000, frameCount: 2, columns: 2, rows: 1, intervalMs: 1000 }]; });
+    const work = kind === 'frames' ? executeGetVideoFrames({ videoId, timestampsMs: [1000], analysis: 'Read chart' }, ctx, 'overlap')
+      : executeGetVideoStoryboard({ videoId, analysis: 'Read chart' }, ctx, 'overlap');
+    let completed = false;
+    void work.then(() => { completed = true; });
+    await analysisStarted.promise;
+    expect(ctx.saveFramePreviews).not.toHaveBeenCalled();
+    expect(ctx.saveStoryboardPreviews).not.toHaveBeenCalled();
+    saved.resolve();
+    await previewStarted.promise; // Inference is still held at this point.
+    expect(completed).toBe(false);
+    inferred.resolve();
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    previewDone.resolve();
+    const result = await work;
+    expect(kind === 'frames' ? packetFramePreviews(result) : packetStoryboardPreviews(result).sheets).toHaveLength(1);
+  });
+
+  test.each(['frames', 'storyboard'] as const)('%s preview failure retains analysis with a warning', async kind => {
+    const { ctx } = context();
+    ctx.provider.frames = async () => ({ value: frames, cacheStatus: 'hit', assetVersions: [version] });
+    ctx.provider.storyboard = async () => ({ value: storyboard, cacheStatus: 'hit', assetVersions: [version] });
+    ctx.analyzeFrames = async () => ({ findings: [{ observation: 'Chart', timestampsMs: [1000] }], warnings: [] });
+    ctx.analyzeStoryboard = async () => ({ findings: [{ observation: 'Chart', frameIndexes: [0] }], warnings: [] });
+    ctx.saveFramePreviews = ctx.saveStoryboardPreviews = async () => { throw new Error('Preview save failed'); };
+    const result = kind === 'frames' ? await executeGetVideoFrames({ videoId, timestampsMs: [1000], analysis: 'Read chart' }, ctx, 'preview-failure')
+      : await executeGetVideoStoryboard({ videoId, analysis: 'Read chart' }, ctx, 'preview-failure');
+    expect(result.excerpts).toHaveLength(1);
+    expect(result.warnings.some(warning => warning.code.endsWith('PREVIEW_UNAVAILABLE'))).toBe(true);
+  });
+
+  test('a failed source save never starts preview preparation', async () => {
+    const { ctx } = context();
+    const prepare = vi.fn();
+    await expect(retrieveWithAnalysis(ctx, { videoId, toolCallId: 'save-failure', content: value => value,
+      analyze: async () => emptyPacket }, async ready => { ready?.('bytes'); throw new Error('Source save failed'); }, prepare))
+      .rejects.toThrow('Source save failed');
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  test('cancelling preview preparation aborts and drains in-flight analysis', async () => {
+    const { ctx, controller } = context();
+    const previewStarted = deferred(), analysisStarted = deferred();
+    let analysisDrained = false;
+    const work = retrieveWithAnalysis(ctx, { videoId, toolCallId: 'preview-cancel', content: value => value,
+      analyze: async (_value, inner) => {
+        analysisStarted.resolve();
+        await new Promise<void>(resolve => { if (inner.signal.aborted) resolve(); else inner.signal.addEventListener('abort', () => resolve(), { once: true }); });
+        analysisDrained = true; return emptyPacket;
+      },
+    }, async ready => { ready?.('bytes'); return { value: 'bytes', cacheStatus: 'hit' }; }, async (_response, signal) => {
+      previewStarted.resolve();
+      await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    });
+    const rejected = expect(work).rejects.toThrow('cancelled');
+    await Promise.all([previewStarted.promise, analysisStarted.promise]);
+    controller.abort(new Error('cancelled'));
+    await rejected;
+    expect(analysisDrained).toBe(true);
+  });
+});

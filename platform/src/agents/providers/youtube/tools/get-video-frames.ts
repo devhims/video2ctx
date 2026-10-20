@@ -52,6 +52,8 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       countVisualWork('requestedImages', request.timestampsMs.length);
       const startedAt = Date.now();
       const extractionDiagnostics: ExtractionAttempt[] = [];
+      let previews: z.infer<typeof framePreviewSchema>[] | undefined;
+      let previewFailed = false, previewMs = 0;
       const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
         videoId: parsed.videoId, toolCallId,
         content: value => {
@@ -61,7 +63,18 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         },
         analyze: (value, analysisContext) => analyzeFrameEvidence(validateFrameResponse(request, value), parsed.analysis!, analysisContext, toolCallId),
       } : undefined, onReady => visualSpan('retrieval', () => context.provider.frames!(request, context.signal, { extractionTimeoutMs },
-        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }, ...(onReady ? [onReady] : []))));
+        event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }, ...(onReady ? [onReady] : []))), async (response, signal) => {
+        const frames = validateFrameResponse(request, response.value);
+        if (!context.saveFramePreviews) return;
+        const started = Date.now();
+        try {
+          previews = z.array(framePreviewSchema).max(6).parse(
+            await visualSpan('previews', () => context.saveFramePreviews!(frames, signal, response.verifiedImages)));
+        } catch {
+          signal.throwIfAborted();
+          previewFailed = true;
+        } finally { previewMs = Date.now() - started; }
+      });
       context.signal.throwIfAborted();
       const providerMs = retrievalMs;
       const frames = validateFrameResponse(request, response.value);
@@ -85,21 +98,11 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         assetVersions: response.assetVersions,
         usage: [retrievalUsage('frames', response, meteredCredits('frames'))],
       });
-      const previewStarted = Date.now();
-      if (context.saveFramePreviews) {
-        try {
-          const previews = z.array(framePreviewSchema).max(6).parse(
-            await visualSpan('previews', () => context.saveFramePreviews!(frames, context.signal, response.verifiedImages)),
-          );
-          packet.artifacts[0]!.data.previews = previews;
-        } catch {
-          context.signal.throwIfAborted();
-          packet.warnings.push({ code: 'FRAME_PREVIEW_UNAVAILABLE',
-            message: 'The frames were retrieved, but their image previews could not be saved.' });
-        }
-      }
+      if (previews) packet.artifacts[0]!.data.previews = previews;
+      if (previewFailed) packet.warnings.push({ code: 'FRAME_PREVIEW_UNAVAILABLE',
+        message: 'The frames were retrieved, but their image previews could not be saved.' });
       const timingsMs = { ...response.frameTimingsMs, provider: providerMs,
-        previews: Date.now() - previewStarted, toolWork: Date.now() - startedAt };
+        previews: previewMs, toolWork: Date.now() - startedAt };
       packet.artifacts[0]!.data.timingsMs = timingsMs;
       console.info(JSON.stringify({ event: 'frame_stage_timing', runId: context.runId, toolCallId, videoId: parsed.videoId, timingsMs }));
       context.signal.throwIfAborted();
