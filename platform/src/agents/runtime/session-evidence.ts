@@ -1,3 +1,4 @@
+import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -63,7 +64,10 @@ export interface SessionBrief {
 }
 export interface SessionAccess {
   brief(): SessionBrief;
-  readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
+  /** Synchronous SQLite checks for deletion while analysis is in flight. */
+  generation?(): number;
+  has?(version: string): boolean;
+  readAsset?(version: string, cache?: RunAssetCache): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(version?: string): EvidencePacket[];
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
@@ -335,13 +339,18 @@ export class SessionEvidenceStore implements SessionAccess {
     const row = this.sql.exec<{ version: string }>('SELECT version FROM session_asset_keys WHERE resource_key=?', key).toArray()[0];
     return row ? this.transcriptOverLimit(row.version) : undefined;
   }
-  async readAsset(version: string) {
+  async readAsset(version: string, cache?: RunAssetCache) {
+    const generation = this.generation();
     const asset = this.brief().assets.find((asset) => asset.version === version);
     if (!asset) return null;
     const tooLong = this.overLimit(asset);
     if (tooLong) throw tooLong;
+    const cached = cache?.get(this, version, generation);
+    if (cached !== undefined) return { asset, value: cached };
     const value = await this.read(version);
-    return value === null ? null : { asset, value };
+    if (value === null || generation !== this.generation() || !this.has(version)) return null;
+    cache?.remember(this, version, generation, value);
+    return { asset, value };
   }
   async read(version: string): Promise<unknown | null> {
     const key = `${this.generation()}:${version}`;
@@ -570,15 +579,22 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   /**
    * One saved comment for a search hit, shown around the span search reported as `rawMatch`.
-   * A hit whose page was deleted or could not be read returns no packet; deleting any other
-   * asset or memory does not affect it.
+   * A hit whose own page was deleted or is unreadable returns no packet. A read interrupted
+   * by deleting another asset or memory is retried, so that deletion never drops this hit;
+   * if the session keeps changing, the search fails with a retry message instead.
    */
   async readSavedComment(version: string, position: number, rawMatch: MatchSpan | undefined, cache?: CommentPageCache) {
-    const loaded = cache?.pages.get(version) ?? this.loadCommentPage(version);
-    cache?.pages.set(version, loaded);
-    const page = await loaded;
-    // A read interrupted by a deletion elsewhere returns nothing; let a later hit retry it.
-    if (!page) cache?.pages.delete(version);
+    const load = () => {
+      const loading = this.loadCommentPage(version);
+      cache?.pages.set(version, loading);
+      return loading;
+    };
+    let page = await (cache?.pages.get(version) ?? load());
+    for (let attempt = 1; page === 'interrupted' && attempt < COMMENT_PAGE_READ_ATTEMPTS; attempt += 1) page = await load();
+    if (page === 'interrupted') {
+      cache?.pages.delete(version);
+      throw new Error('Session evidence changed during the search. Retry the search.');
+    }
     // Never serve a page from memory after its own version is deleted.
     if (!page || !this.has(version)) return { packets: [] };
     const comment = page.comments[position];
@@ -587,11 +603,17 @@ export class SessionEvidenceStore implements SessionAccess {
     this.savePacket(packet);
     return { packets: [packet] };
   }
-  private async loadCommentPage(version: string): Promise<CommentPage | undefined> {
+  /**
+   * The parsed page, undefined when it is not a readable comment page, or 'interrupted' when
+   * another deletion fenced the read while this version still exists.
+   */
+  private async loadCommentPage(version: string): Promise<CommentPage | 'interrupted' | undefined> {
     const asset = this.brief().assets.find((item) => item.version === version);
     if (asset?.kind !== 'comments') return undefined;
+    const generation = this.generation();
     const value = await this.read(version);
-    const comments = value === null ? undefined : savedComments(value);
+    if (value === null) return generation !== this.generation() && this.has(version) ? 'interrupted' : undefined;
+    const comments = savedComments(value);
     return comments && { asset, comments, current: this.currentVersions().has(version) };
   }
   private async savedCommentPage(asset: SessionAsset): Promise<Comment[]> {
@@ -959,8 +981,10 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
 interface CommentPage { asset: SessionAsset; comments: Comment[]; current: boolean }
 /** Saved comment pages loaded during one search, by version. */
 export interface CommentPageCache {
-  pages: Map<string, Promise<CommentPage | undefined>>;
+  pages: Map<string, Promise<CommentPage | 'interrupted' | undefined>>;
 }
+/** Reads of one comment page per hit, so a burst of unrelated deletions cannot drop it silently. */
+const COMMENT_PAGE_READ_ATTEMPTS = 3;
 
 /** Comments of a saved provider page, or undefined for an unexpected payload. */
 function savedComments(value: unknown): Comment[] | undefined {

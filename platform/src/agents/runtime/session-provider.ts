@@ -1,3 +1,4 @@
+import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
 import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
@@ -15,8 +16,16 @@ export function sessionProvider(
   store: SessionEvidenceStore,
   refresh = false,
   onRetrieved?: (claim: string, version: string) => void,
+  assetCache?: RunAssetCache,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
+  const remember = (result: CachedResult<unknown>, generation: number) => {
+    const version = result.assetVersions?.[0];
+    // Only the exact single-asset payload returned by successful persistence or
+    // a verified session read may seed analysis. Never cache an uncommitted result.
+    if (version && result.assetVersions!.length === 1 && generation === store.generation() && store.has(version))
+      assetCache?.remember(store, version, generation, result.value);
+  };
   // Resource keys this run retrieved from the provider, with the claim of that paid
   // retrieval. A later hit or join served only by such keys names their claims; the run
   // ledger prices it against them, never against "fetched earlier" alone.
@@ -39,7 +48,8 @@ export function sessionProvider(
   const transcriptKey = (id: string, language?: string) => `transcript:${id}:${language?.toLowerCase() ?? 'default'}`;
   return {
     ...provider,
-    transcript: async (id, language, options, diagnostic) => {
+    transcript: async (id, language, options, diagnostic, onReady) => {
+      const generation = store.generation();
       const key = transcriptKey(id, language);
       // A saved over-limit transcript is rejected from its stored metadata, before any blob read.
       const saved = store.transcriptOverLimitForKey(key);
@@ -52,7 +62,13 @@ export function sessionProvider(
         id,
         fresh,
         async () => {
-          const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic);
+          const ready = onReady ? (value: import('all-things-youtube').Transcript) => {
+            if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
+            if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, value, store.maxVideoSeconds);
+            onReady(value);
+          } : undefined;
+          const fetched = await provider.transcript(id, language, { refresh: fresh }, diagnostic, ...(ready ? [ready] : []));
+          ready?.(fetched.value);
           // Reject before saving, so an over-limit transcript never becomes a session asset.
           if (store.maxVideoSeconds !== undefined) assertTranscriptWithinLimit(id, fetched.value, store.maxVideoSeconds);
           const claim = crypto.randomUUID();
@@ -95,6 +111,7 @@ export function sessionProvider(
           );
         refreshed.add(resolvedKey);
       }
+      remember(result, generation);
       return claimed(result, [key]);
     },
     comments: async (id, options = {}) => {
@@ -128,7 +145,7 @@ export function sessionProvider(
       return claimed(result, [key]);
     },
     storyboard: provider.storyboard
-      ? (id, timestamps, options = {}, diagnostic) =>
+      ? (id, timestamps, options = {}, diagnostic, onReady) =>
           visual('storyboard', id, options.signal, async () => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
@@ -144,7 +161,8 @@ export function sessionProvider(
                 if (options.metadataOnly) return provider.storyboard!(id, undefined,
                   { metadataOnly: true, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
                 prefetched = await provider.storyboard!(id, timestamps,
-                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic, ...(onReady ? [onReady] : []));
+                onReady?.(prefetched.value);
                 return { ...prefetched, value: storyboardMetadata(prefetched.value),
                   catalogVersions: prefetched.catalogVersions?.filter(asset => asset.kind === 'storyboard_manifest') };
               },
@@ -186,7 +204,13 @@ export function sessionProvider(
                 undefined,
                 { sheetIndexes: missing, maxSheets: missing.length, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
+                onReady ? value => onReady(storyboardSchema.parse({ ...value,
+                  sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
+                })) : undefined,
               );
+              onReady?.(storyboardSchema.parse({ ...fetched.value,
+                sheets: [...results.flatMap(result => result.value.sheets), ...fetched.value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
+              }));
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const saved = await timeStoryboardStage(id, 'session_pin', () => mapInBatches(fetched.value.sheets, async (sheet) => {
                 options.signal?.throwIfAborted();
@@ -230,6 +254,7 @@ export function sessionProvider(
             }
             if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
             options.signal?.throwIfAborted();
+            for (const result of results) remember(result, generation);
             const partial = results.length < indexes.length || results.some((r) => r.value.meta.partial);
             const claim = claimed({ value: null, cacheStatus: 'hit', sessionReused: missing.length === 0, providerClaim: storyboardClaim },
               indexes.map(index => `storyboard:${id}:${manifestVersion}:${index}`));
@@ -256,7 +281,7 @@ export function sessionProvider(
           })
       : undefined,
     frames: provider.frames
-      ? (request, signal, limits, diagnostic) =>
+      ? (request, signal, limits, diagnostic, onReady) =>
           visual('frames', request.videoId, signal, async () => {
             signal?.throwIfAborted();
             const generation = store.generation();
@@ -282,7 +307,13 @@ export function sessionProvider(
               // Batch misses once; successful images survive even if other timestamps fail.
               const retrievalStarted = Date.now();
               fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
-                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic);
+                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic,
+                ...(onReady ? [(value: VideoFrames) => onReady(framesSchema.parse({ ...value,
+                  frames: [...hits.flatMap(result => result.value.frames), ...value.frames].sort((a, b) => a.timestampMs - b.timestampMs),
+                }))] : []));
+              onReady?.(framesSchema.parse({ ...fetched.value,
+                frames: [...hits.flatMap(result => result.value.frames), ...fetched.value.frames].sort((a, b) => a.timestampMs - b.timestampMs),
+              }));
               frameTimingsMs.retrieval = Date.now() - retrievalStarted;
               signal?.throwIfAborted();
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
@@ -331,6 +362,7 @@ export function sessionProvider(
               frameTimingsMs.sessionPin = Date.now() - pinStarted;
             }
             signal?.throwIfAborted();
+            for (const result of hits) remember(result, generation);
             return {
               verifiedImages: hits.flatMap(result => result.verifiedImages ?? []),
               frameTimingsMs,

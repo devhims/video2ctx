@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
-import type { EvidencePacket } from '../src/agents/contracts';
+import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
 import { createCapabilityToolSet } from '../src/agents/providers/youtube/tool-library';
 import { executeGetVideoTranscriptForModel } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
@@ -192,6 +192,12 @@ describe('retrieval and saved-asset analysis boundary', () => {
     expect(analyst(context, kind)).toHaveBeenCalledTimes(2);
     for (const fetch of Object.values(provider)) expect(fetch).not.toHaveBeenCalled();
   });
+  it.each(kinds)('reads %s payloads only before inference', async (kind) => {
+    const { context, versions } = setup();
+    const read = vi.spyOn(context.session!, 'readAsset');
+    await analyze(kind, versions[kind], context);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
   it.each(kinds)('rejects missing, wrong-kind, and out-of-scope %s assets before inference', async (kind) => {
     const { context, provider, versions } = setup();
     await expect(analyze(kind, 'f'.repeat(64), context)).rejects.toThrow('unavailable or deleted');
@@ -207,11 +213,77 @@ describe('retrieval and saved-asset analysis boundary', () => {
     const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
     const implementation = fn.getMockImplementation()!;
     fn.mockImplementationOnce(async (input: unknown) => {
-      store.saved.delete(versions[kind]);
+      store.remove(versions[kind]);
       return implementation(input);
     });
     await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
     expect(packets).toEqual([]);
+  });
+  it.each(kinds)('fences %s analysis after deletion even if its version is restored', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      const saved = store.saved.get(versions[kind])!;
+      store.remove(versions[kind]);
+      store.saved.set(versions[kind], saved);
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('fences %s analysis after an unrelated session deletion', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      store.remove(kind === 'frame' ? versions.transcript : versions.frame);
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('rejects %s deleted while inputs load before inference', async (kind) => {
+    const { context, store, versions, packets } = setup();
+    const read = context.session!.readAsset!;
+    vi.spyOn(context.session!, 'readAsset').mockImplementationOnce(async version => {
+      const loaded = await read(version);
+      store.remove(version);
+      return loaded;
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('unavailable or deleted');
+    expect(analyst(context, kind)).not.toHaveBeenCalled();
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('rejects %s canceled during inference without another payload read', async (kind) => {
+    const { context, versions, packets } = setup();
+    const controller = new AbortController();
+    context.signal = controller.signal;
+    const read = vi.spyOn(context.session!, 'readAsset');
+    const fn = vi.mocked(analyst(context, kind) as (...args: unknown[]) => Promise<unknown>);
+    const implementation = fn.getMockImplementation()!;
+    fn.mockImplementationOnce(async (input: unknown) => {
+      controller.abort(new Error('Canceled analysis'));
+      return implementation(input);
+    });
+    await expect(analyze(kind, versions[kind], context)).rejects.toThrow('Canceled analysis');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(packets).toEqual([]);
+  });
+  it.each(kinds)('records %s input read timing without source payloads', async kind => {
+    const { context, versions } = setup();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await analyze(kind, versions[kind], context);
+      const timings = log.mock.calls.map(([line]) => JSON.parse(line as string))
+        .filter(event => event.stage === 'analysis_asset_read');
+      expect(timings).toEqual([
+        { event: 'agent_operation', runId: 'test-run', toolCallId: 'Describe the chart.',
+          stage: 'analysis_asset_read', kind, assetCount: 1, outcome: 'started' },
+        { event: 'agent_operation', runId: 'test-run', toolCallId: 'Describe the chart.',
+          stage: 'analysis_asset_read', kind, assetCount: 1, outcome: 'succeeded', elapsedMs: expect.any(Number) },
+      ]);
+    } finally { log.mockRestore(); }
   });
   it.each(kinds)('requires explicit retrieval in a refresh run before analyzing %s', async (kind) => {
     const { context, versions, packets } = setup();
@@ -318,4 +390,76 @@ describe('saved-analysis input billing', () => {
     expect(deliverSavedAssets).not.toHaveBeenCalled();
     expect(analyst(context, 'transcript')).not.toHaveBeenCalled();
   });
+});
+
+ it('keeps warnings from every selected saved storyboard sheet and deduplicates them', async () => {
+  const { context, store, storyboard } = setup();
+  const versions = [0, 1].map(index => store.put('storyboard_sheet', videoId, {
+    ...storyboard, frameCount: 4,
+    manifest: { ...storyboard.manifest, totalSheets: 2, lastSampleMs: 3000 },
+    sheets: [{ ...storyboard.sheets[0], firstFrameIndex: index * 2 }],
+    meta: { partial: true, warnings: [`Sheet ${index} is blurred.`, 'Shared warning.'] },
+  }, { sheetIndex: index, manifestVersion: 'two-sheets' }));
+  const packet = await executeAnalyzeVideoStoryboard({ assetVersions: versions, focus: 'Read chart' }, context, 'warnings');
+  expect(packet.warnings.filter(warning => warning.code === 'PARTIAL_STORYBOARD').map(warning => warning.message).sort())
+    .toEqual(['Shared warning.', 'Sheet 0 is blurred.', 'Sheet 1 is blurred.']);
+});
+
+it('caps the final saved-storyboard warnings after combining valid per-sheet inputs', async () => {
+  const { context, store, storyboard } = setup();
+  const versions = [0, 1, 2].map(index => store.put('storyboard_sheet', videoId, {
+    ...storyboard, frameCount: 6,
+    manifest: { ...storyboard.manifest, totalSheets: 3, lastSampleMs: 5000 },
+    sheets: [{ ...storyboard.sheets[0], firstFrameIndex: index * 2 }],
+    meta: { partial: true, warnings: Array.from({ length: 20 }, (_, n) => `Sheet ${index} warning ${n}`) },
+  }, { sheetIndex: index, manifestVersion: 'three-sheets' }));
+  store.saved.get(versions[0]!)!.asset.current = false;
+  const packet = await executeAnalyzeVideoStoryboard({ assetVersions: versions, focus: 'Read chart' }, context, 'warning-cap');
+  expect(packet.warnings).toHaveLength(50);
+  expect(packet.warnings[0]?.code).toBe('SUPERSEDED_SESSION_EVIDENCE');
+  expect(packet.warnings.some(warning => warning.message.startsWith('Sheet 2'))).toBe(true);
+});
+
+
+it.each(['frames', 'storyboard', 'inspection-transcript'] as const)('%s wires retries to saved analysis without retrieving again', async kind => {
+  const { context, provider } = setup();
+  const model = kind === 'frames' ? context.analyzeFrames! : kind === 'storyboard' ? context.analyzeStoryboard!
+    : context.transcriptPolicy.mode === 'contextual_analysis' ? context.transcriptPolicy.analyze : undefined!;
+  vi.mocked(model).mockRejectedValueOnce(new Error('temporary analysis failure'));
+  if (kind === 'inspection-transcript') {
+    context.analyzeTranscript = context.transcriptPolicy.mode === 'contextual_analysis' ? context.transcriptPolicy.analyze : undefined;
+    context.transcriptPolicy = { mode: 'complete_transcript' };
+  }
+  let retry: import('../src/agents/providers/youtube/tool-context').EvidenceToolExecution['retrySavedAnalysis'];
+  context.executeEvidenceTool = async execution => {
+    if (execution.retrySavedAnalysis) retry = execution.retrySavedAnalysis;
+    return execution.execute();
+  };
+  const packet = kind === 'frames' ? await executeGetVideoFrames({ videoId, timestampsMs: [0], analysis: 'Read chart' }, context, 'first')
+    : kind === 'storyboard' ? await executeGetVideoStoryboard({ videoId, analysis: 'Read chart' }, context, 'first')
+    : await executeGetVideoTranscriptForModel({ videoId, analysis: 'Read chart' }, context, 'first');
+  expect(packet.warnings.some(warning => warning.code === 'RETRIEVAL_ANALYSIS_FAILED')).toBe(true);
+  const recovered = await retry!(packet);
+  expect(recovered.warnings.some(warning => warning.code === 'RETRIEVAL_ANALYSIS_FAILED')).toBe(false);
+  expect(recovered.excerpts.length).toBeGreaterThan(0);
+  expect(model).toHaveBeenCalledTimes(2);
+  expect(kind === 'frames' ? provider.frames : kind === 'storyboard' ? provider.storyboard : provider.transcript).toHaveBeenCalledTimes(1);
+});
+
+
+it.each(['frame', 'transcript'] as const)('caps final saved %s warnings and retains the superseded warning', async kind => {
+  const { context, store, versions } = setup();
+  const version = versions[kind];
+  store.saved.get(version)!.asset.current = false;
+  // Boundary contract test: current production analysts emit fewer warnings.
+  const warnings = Array.from({ length: kind === 'frame' ? 49 : 50 }, (_, index) => `Warning ${index}`);
+  if (kind === 'frame') context.analyzeFrames = async () => ({ findings: [], warnings });
+  else if (context.transcriptPolicy.mode === 'contextual_analysis') {
+    const original = context.transcriptPolicy.analyze;
+    context.transcriptPolicy.analyze = async input => ({ ...await original(input), warnings });
+  }
+  const packet = await analyze(kind, version, context);
+  expect(packet.warnings).toHaveLength(50);
+  expect(packet.warnings[0]?.code).toBe('SUPERSEDED_SESSION_EVIDENCE');
+  expect(evidencePacketSchema.parse(JSON.parse(JSON.stringify(packet))).warnings).toHaveLength(50);
 });

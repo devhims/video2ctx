@@ -27,6 +27,18 @@ export function agentToolLabel(tool: AgentProgress['tools'][number]) {
   const display = AGENT_TOOL_LABELS[tool.name];
   const labels = (tool.name === 'get_video_frames' && tool.output?.sessionReused ? display?.reused : display)
     ?? { running: 'Running Tool', completed: 'Completed Tool', action: 'Tool' };
+  const subject = ({ get_video_transcript: 'Transcript', get_video_frames: 'Frames', get_video_storyboard: 'Previews' } as Record<string, string>)[tool.name];
+  if (subject) {
+    if (tool.status === 'running' && tool.activity === 'analyzing') return `Analyzing ${subject}`;
+    if (tool.status === 'running' && tool.activity === 'finishing') return `Finishing ${subject}`;
+    if (tool.status === 'completed' && tool.analysis === 'failed') return `${labels.completed} · Analysis Failed`;
+    if (tool.status === 'completed' && tool.analysis === 'completed')
+      return `Analyzed ${tool.output?.sessionReused ? 'Saved ' : ''}${subject}`;
+    if (tool.activity === 'analyzing' || tool.activity === 'finishing') {
+      if (tool.status === 'failed') return `${subject} Processing Failed`;
+      if (tool.status === 'interrupted') return `${subject} Processing Interrupted`;
+    }
+  }
   switch (tool.status) {
     case 'running': return labels.running;
     case 'completed': return labels.completed;

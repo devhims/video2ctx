@@ -4,11 +4,130 @@ The existing conversation-scoped AgentRuntimeDO owns source availability and der
 
 Descriptions are retained as separate citable excerpts of at most 2,000 characters, without the generic 800-character model projection cut. Historical metadata retains descriptions within a combined 48,000-character snapshot budget. Model-facing transcript analyses retain title, channel, caption provenance and supported entity quotes, but omit the repeated full description. The original description stays in saved evidence and its separate citable metadata packet. This keeps publisher prose from displacing completed findings. Finalization still applies its overall evidence budget and reports omitted context. Existing saved answers and analyses are not rewritten. Older metadata without a retained description can be loaded again before new analysis.
 
+## Analysis availability and read timing
+
+Frame, storyboard and transcript analysis obtain their saved inputs once. Before loading,
+they capture the session's SQLite deletion generation. After loading and again after
+inference, they synchronously check that the generation is unchanged and every selected
+asset row still exists. The post-inference check does not read D1 or R2. Deleting and
+retrieving the same version during inference cannot restore that in-flight analysis.
+Any generation change fences the analysis, including deletion of unrelated evidence or
+memory. Normal retrieval and refresh do not advance the generation.
+
+Storage reads still verify the shared catalog payload; cache hits reuse a snapshot
+verified earlier in the run. The final check establishes
+session availability only; it does not detect a shared catalog version or R2 object
+removed during inference. Shared sources currently have no deletion or retention policy.
+A future shared-source deletion feature must revisit this boundary.
+
+`agent_operation` logs with `stage=analysis_asset_read` measure the wall-clock time to
+load and validate the selected input batch, including session checks, catalog lookups,
+R2 downloads and payload hydration. Each event carries `runId`, `toolCallId`, asset kind,
+count and outcome, with `elapsedMs` on completion. Concurrent reads contribute their
+batch duration, not the sum of individual read durations. These logs contain no source
+payloads. They are separate from inference timing. A cache hit still appears in this
+stage because the session checks and snapshot decoding run before inference.
+
+## Run-scoped analysis cache
+
+Each execution of a research run owns a separate cache for transcripts, frames and
+storyboard sheets. Retrieval seeds it only after persistence or a verified session read
+returns a single immutable asset version. Analysis reuses that exact payload while
+checking current session metadata, ownership, duration limits and deletion generation.
+Explicit refresh still retrieves fresh evidence; older versions retain their own cache
+entries and current/superseded status comes from SQLite. Billing still passes through
+`deliverSavedAssets` and the existing per-run ledger.
+
+The cache retains at most 64 entries and a 16 MiB snapshot budget, using twice each JSON
+string's character count plus its version key and an entry allowance. This is a bound
+on retained snapshots, not the whole Worker heap or transient serialization/model memory.
+Oversized assets bypass it. Least-recently-used entries are evicted and fall back to the
+normal verified D1/R2 read. Snapshots are serialized once on admission and decoded on each
+hit so mutation by one caller cannot change another analysis's input. This trades local
+serialization work for fewer remote reads; production latency remains to be measured.
+
+The cache belongs to one session-store instance and one execution. Completion, failure
+and cancellation clear and close it, so late work cannot refill it. Concurrent runs do
+not share it. A resumed run starts empty. A deletion generation change invalidates all
+entries before reuse; missing session rows still fail. Cache hits trust the source
+verification performed earlier in the same run, so shared catalog/object removal or
+corruption during that run is not detected until the next storage read. The current
+shared catalog has no deletion policy.
+
+For three retained inline frames, retrieval followed by analysis makes zero additional
+analysis-side D1/R2 reads. A later run analyzing those saved frames loads each once and
+can reuse them for another internal analysis call while answering that same user message. A new user message starts a new run with an empty cache. Retrieval still waits for persistence;
+the cache alone does not defer writes or change preview ownership. Optional combined analysis uses the pending-input path described below.
+
+
+## Retrieval and analysis in one call
+
+`get_video_transcript`, `get_video_frames`, and `get_video_storyboard` accept an optional
+`analysis` question. It participates in the durable tool key, so different questions
+cannot reuse the wrong findings. `research_video_transcripts` uses this path for
+video IDs and keeps standalone analysis for supplied saved versions.
+
+The private request-coordinator RPC can notify each caller when the requested
+content is available, before its catalog writes finish. Callers sharing extraction
+receive their own notification. Callback failure does not fail another caller’s
+save. The session provider combines existing session hits with extracted misses
+before notifying the analyst. Public data responses still wait for persistence.
+
+The combined tool validates selection, video identity, transcript completeness,
+duration and image limits before inference. It captures the session deletion
+generation and compares a hash of the analyzed content with the final persisted
+response. Pending bytes never enter the saved-asset cache. Only successful session
+attachment makes references eligible for returned findings. Cancellation or a save
+failure aborts and observes outstanding inference; deletion or mismatched content
+rejects the result. If inference alone fails, the tool returns the saved retrieval
+with `RETRIEVAL_ANALYSIS_FAILED`, preserving its usage and saved asset versions.
+Batch research includes the saved transcript version in its failure response. A
+new call ID with the same question retries through the standalone saved-analysis
+tool, without calling the retrieval provider or charging the source again. A repeat
+of the original completed call ID remains idempotent. Successful saved analysis is
+reused on subsequent retries. Deletion and cancellation still reject unavailable
+inputs. Failed analysis records allowlisted error classification, request ID when
+available, run ID and tool-call ID; raw provider errors are not added to the packet.
+
+Preview saving starts after source persistence and runs alongside any unfinished
+inference. The tool waits for both before returning. Preview failure preserves
+successful findings with a warning; cancellation still drains inference. Each call
+tracks its newly written previews until the final evidence packet is published.
+If deletion, cancellation, changed content or publication failure rejects the call,
+cleanup drains outstanding preview writes and removes its unpublished private
+objects. Failed deletions remain in the session cleanup queue for retry on restart.
+Shared catalog images are retained. Saved analysis validates its final warning list
+after adding the superseded-version warning and keeps at most 50 warnings.
+
+The retrieval’s existing maximum-price credit hold covers the combined operation.
+Its single returned usage entry settles through the existing ledger; no nested
+saved-analysis delivery adds another charge. Model usage is still recorded by the
+analyst. A failed save can waste inference work and does not produce a successful
+evidence packet. All provider calls share four retrieval slots, including combined
+calls and metadata lookups. The slot ends when the provider returns, before the
+tool waits for inference. Ready inputs enter the existing inference limiter, while
+saved-analysis tools separately bound payload reads. Slow extraction cannot occupy
+analysis slots, and metadata never waits on an enclosing tool that holds a retrieval
+slot until analysis completes. When temporary holds leave too few credits, required
+tools wait without holding credits or provider slots. They recheck cancellation,
+deletion and the durable tool quota before starting. A request that cannot fit even
+after other holds clear fails immediately. Optional nested metadata lookups remain
+nonwaiting so they cannot wait on their own parent’s hold.
+
+`combinedTimingsMs` records retrieval completion, inference duration, their overlap,
+and total tool work. The early private RPC notification transports the input once
+before the final response, adding serialization and transport work. The run cache
+remains bounded; an active combined call owns its inputs until completion regardless
+of cache admission. Unit tests and a local Workers RPC test verify ordering, failure
+handling and saved-reference publication. Opt-in Fireworks tests use synthetic
+transcripts and chart images with a delayed simulated save. These establish working
+inference and overlap, not a production latency improvement.
+
 ## Flow
 
 1. Before classification, original user messages and completed answers are indexed into the SDK Session history. Existing run records remain authoritative for execution and dashboard restoration. Failed-run user messages are included; answers whose evidence was deleted are excluded. Backfill reads changed runs incrementally, and subsequent updates only rewrite changed text. The classifier receives eight completed conversation turns, a compact inventory with coverage and collection times, the indexed message count, and bounded derived memory. It never receives raw transcripts or images through the inventory.
 2. Classification chooses research, single-video inspection or direct finalization. Specific-video comparisons carry `comparisonVideoIds` independently of the retrieval route. With one missing transcript, inspection fetches that video and preserves every comparison subject; with several missing transcripts, research uses those subjects without discovery. A narrow guard repairs the previously failing "compare this video with a new one" form if the earlier subject is dropped. Other comparison phrasing is resolved by classification. Context answers carry a history/video/mixed scope; exact-first-message and all-user-message requests also carry an explicit history selection. Persisted older routes remain readable. Explicit requests to fetch again set `refreshEvidence` and require an executable route.
-3. Retrieval checks the session store before the provider. Complete nonempty transcripts are keyed by video and requested/resolved language; comments by video and continuation; frames by video, timestamp and width; storyboard sheets by video, manifest version and sheet index. Raw images and transcripts are persisted by retrieval tools that never invoke an analyst. For single-video inspection, the main model reads the returned timed captions directly. Research selects sources and a focus once using `research_video_transcripts`. Its application scheduler retrieves missing transcripts or reuses selected saved versions, then starts each analysis as soon as that transcript is saved. Retrieval and analysis have separate concurrency limits, so slow provider requests cannot occupy ready analysis slots. Each child retrieval and analysis persists independently; completed evidence remains available to finalization when a sibling fails or the research deadline cancels unfinished work. Saved-only follow-up analysis can use `analyze_video_transcripts`; visual interpretation uses `analyze_video_frames` or `analyze_video_storyboard` with saved frame or sheet versions and a focus. These analysis tools load exact session payloads and persist derived evidence separately. Before visual or transcript analysis, the runtime supplies the assigned video’s title, full fetched description (including uploader timestamps), channel and current question. Missing metadata uses the normal captured and metered `get_video` path, shared by concurrent analysts for the same video. Automatic metadata admission leaves provider slots for the research target's remaining distinct transcripts. The existing persisted quota counts successful and failed lookups; a lookup that would consume reserved capacity is skipped before provider work, row insertion or billing. Already completed same-run metadata can still be reused without a new slot. Metadata failure or skipped admission does not discard usable images or captions. Publisher metadata is evidence, never instructions, and does not establish that a name was visible or spoken. A new question can reuse the same raw assets without a retrieval tool call. A refresh advances compatible language aliases while preserving older versions for historical citations.
+3. Retrieval checks the session store before the provider. Complete nonempty transcripts are keyed by video and requested/resolved language; comments by video and continuation; frames by video, timestamp and width; storyboard sheets by video, manifest version and sheet index. Retrieval tools accept an optional `analysis` question. Without it, single-video inspection reads timed captions directly and visual retrieval returns saved handles. With it, the tool starts analysis from validated bytes while persistence completes, then returns one packet with findings and saved references. Research selects sources and a focus once using `research_video_transcripts`. Its application scheduler retrieves missing transcripts or reuses selected saved versions, and starts each missing transcript’s analysis while it is saved. Saved-version sources still use the standalone analysis tool. Retrieval and analysis have separate concurrency limits, so slow provider requests cannot occupy ready analysis slots. Each combined child or saved-only analysis persists independently; completed evidence remains available to finalization when a sibling fails or the research deadline cancels unfinished work. Saved-only follow-up analysis can use `analyze_video_transcripts`; visual interpretation uses `analyze_video_frames` or `analyze_video_storyboard` with saved frame or sheet versions and a focus. These analysis tools load exact session payloads and persist derived evidence separately. Before visual or transcript analysis, the runtime supplies the assigned video’s title, full fetched description (including uploader timestamps), channel and current question. Missing metadata uses the normal captured and metered `get_video` path, shared by concurrent analysts for the same video. Automatic metadata admission leaves provider slots for the research target's remaining distinct transcripts. The existing persisted quota counts successful and failed lookups; a lookup that would consume reserved capacity is skipped before provider work, row insertion or billing. Already completed same-run metadata can still be reused without a new slot. Metadata failure or skipped admission does not discard usable images or captions. Publisher metadata is evidence, never instructions, and does not establish that a name was visible or spoken. A new question can reuse the same raw assets without a retrieval tool call. A refresh advances compatible language aliases while preserving older versions for historical citations.
 4. Research and inspection own all model-driven gathering, including SDK `search_context`, chronological `read_session_history`, and reads of prior evidence. They must prepare needed saved source content before calling `complete_research`. Inventory and memory are hints, not proof. Classification chooses direct finalization only for prepared context; a stored asset reference alone is not enough. Before direct finalization, the runtime delivers relevant inherited packets through the existing billing path. Explicit subjects select matching packets; a vague follow-up uses the previous turn’s subjects. History-only requests never load paid source content. Before direct history finalization, the runtime supplies one bounded local history page. Additional history pages are not fetched during finalization.
 5. The unified finalizer is answer-only. It receives the conversation window, prepared evidence, and attributed history or memory results read during research, with no retrieval tools, context model loop, or comparison preloads. Topic research passes analyst findings; complete analyses supersede raw retrieval packets only for the same saved transcript version. Inspection passes transcript text, with a 250,000-character budget; comparisons divide 160,000 characters across subjects. Missing analysis, missing source pages, and prompt truncation are reported as input gaps rather than triggering reads. `agent_finalizer_context_plan` records `answer_only` and missing inputs. Normal research completion declares readiness; research timeouts may still produce a limited answer from collected evidence. Both fresh and resumed runs use supplied inputs. Research retains at most 20 history/memory tool results within a 24,000-character budget, preserving whole results and flagging omitted context. Each read checkpoints this handoff into the run’s SQLite row before returning, so answer-phase recovery retains it. Memory copies are reconciled with current records before persistence and handoff; deleting a memory also removes its checkpoint copies. Pagination gaps are computed from retained pages and role filters, separately from context-budget omissions, so a completed page chain clears its gap. The nullable column is added automatically on initialization; older runs have no saved handoff. Answer generation has 60 seconds plus a bounded 20-second retry allowance; recovery cannot extend the deadline. Streaming progress uses `thinking` and `writing`, with revision for repairs. A 15-second idle timer detects stalled streams. Citation validation and answer repair remain. Exact-first-message responses use the history page prepared before finalization and are replaced with its stored wording if needed.
 6. During answer generation, the finalizer schema permits answer fields only, ignores unexpected inspection requests, and restricts answer evidence IDs to supplied excerpt references (short aliases or full IDs). Inventory asset IDs and unrelated history citations are not accepted. Citation validation still resolves immutable excerpt IDs against persisted packets. Neither the first answer call nor its repair has a memory field; unsolicited memory output is stripped by the schema and the persistence contract has no memory input.
@@ -60,7 +179,7 @@ This changes the earlier rule that reusing session evidence was free. A run now 
 - Provider-loaded assets publish their retrieval claim in `agent_evidence_asset_claims` before they become searchable. Saved searches, reads and analyst inputs join that claim, including across a restart, so a read during retrieval cannot add a second charge. A retry can replace an unconsumed claim; an explicit refresh never absorbs a charge for content the run already received. Account deletion clears these claims with the other billing tables.
 - Empty saved text pages do not charge or mark their asset delivered. A later nonempty read still pays once. Visual retrievals may return saved image handles without text excerpts and retain their operation price. Fresh provider work keeps its existing price.
 - Tool pricing, delivery marks, the saved packet and the completed tool record commit in one SQLite transaction. A failed save leaves the tool failed and uncharged. Saved-analysis inputs are admitted after every preflight check and immediately before inference; a later analyst failure keeps that charge.
-- Provider tools hold their highest table price while they run, and saved analysis holds nothing. Synchronous admission of saved reads counts committed charges and active holds, so concurrent tools, reads, repairs and recovery stay within the 22-credit reserve. A new unit that does not fit is withheld and the model is told so. Content the run already paid for is still delivered at the cap. Settlement sums completed tool credits and ledger charges, and `billing.charges` lists the receipts.
+- Provider tools hold their highest table price while they run, and saved analysis holds nothing. Required tools wait for temporary holds to clear before reserving credits when necessary. Permanent credit exhaustion still rejects admission. Synchronous admission of saved reads counts committed charges and active holds, so concurrent tools, reads, repairs and recovery stay within the 22-credit reserve. A new unit that does not fit is withheld and the model is told so. Content the run already paid for is still delivered at the cap. Settlement sums completed tool credits and ledger charges, and `billing.charges` lists the receipts.
 - Earlier-turn source content is delivered only for videos the route names as answer subjects (`inspect_video` and `comparisonVideoIds`), and for packets the run already received before a restart. Other cited packets and recorded metadata become `priorEvidence` pointers with ids, titles and observation times. The model loads them with `read_prior_evidence`, which is billed like any saved read. Conversation text stays plain and unchanged. Routing and research see recorded metadata by reference only. Runs without a session store, which have no read path, keep the earlier automatic delivery.
 - `contextScope: history` routes receive prepared conversation text and a bounded history page, without source content or source charges. Finalization performs no evidence search, saved reads, or comparison preloads. Mixed/video routes may receive explicitly selected prior evidence during input preparation; any further gathering belongs to research.
 - Context quality limit: a vague follow-up routed directly to finalization cannot lazily load earlier sources. Routing must select research or inspection when a saved source needs reading. Otherwise the answer must state the gap. Recovery uses evidence already delivered to the run and does not gather missing context.

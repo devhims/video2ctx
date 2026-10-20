@@ -8,6 +8,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      { "name": "YOUTUBE_REQUEST_COORDINATOR", "class_name": "YouTubeRequestCoordinator" },
       {
         "name": "USER_ACCOUNT",
         "class_name": "UserAccountDO"
@@ -29,6 +30,7 @@
     {
       "tag": "v1",
       "new_sqlite_classes": [
+        "YouTubeRequestCoordinator",
         "UserAccountDO",
         "AgentRuntimeDO",
         "ProxyHealth",

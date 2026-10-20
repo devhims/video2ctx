@@ -1011,3 +1011,23 @@ test('tool activity uses readable labels and distinguishes failures from interru
   await expect(latest.locator('.agent-trace')).toHaveAttribute('open', '');
   await expect(latest.getByText('Searched YouTube', { exact: true })).toBeVisible();
 });
+
+
+for (const failed of [false, true]) test(`combined transcript shows separate live phases and ${failed ? 'analysis failure' : 'success'}`, async ({ page, context }, testInfo) => {
+  await login(context, 'allowed');
+  await page.goto('/dashboard/sessions');
+  await page.getByRole('textbox', { name: 'Start a new session' }).fill(`Show analysis phases${failed ? ' with failure' : ''}`);
+  await page.getByRole('button', { name: 'Start session', exact: true }).click();
+  const latest = page.locator('.agent-assistant-message').last();
+  await expect(latest.getByText('Loading Transcript', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Analyzing Transcript', { exact: true })).toBeVisible();
+  await expect(latest.getByText('Finishing Transcript', { exact: true })).toBeVisible();
+  await expect(page.getByText('The follow-up highlights three practical differences. [1]', { exact: true })).toBeVisible();
+  await page.reload();
+  await latest.getByText(/^Tool Activity \(\d+\)$/).click();
+  await expect(latest.getByText(failed ? 'Loaded Transcript · Analysis Failed' : 'Analyzed Transcript', { exact: true })).toBeVisible();
+  await expect(latest.locator(`.agent-tool-icon.status-${failed ? 'failed' : 'completed'}`)).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('analysis-phases-mobile.png'), fullPage: true });
+});

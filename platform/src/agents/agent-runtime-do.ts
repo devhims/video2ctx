@@ -11,7 +11,7 @@ import { sessionCatalog } from './runtime/session-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
-import { saveFramePreviews } from './runtime/frame-previews';
+import { framePreviewKey, saveFramePreviews } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -514,6 +514,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ...(row.error ? { error: row.error } : {}),
       route: this.readRoute(runId) ?? undefined,
     };
+    const activities = new Map<string, 'loading' | 'analyzing' | 'finishing'>();
+    for (const event of this.sql<{ payload_json: string }>`
+      SELECT payload_json FROM agent_events WHERE run_id = ${runId} AND type = 'tool.activity' ORDER BY id
+    `) {
+      const { toolCallId, activity } = JSON.parse(event.payload_json);
+      if (typeof toolCallId === 'string' && ['loading', 'analyzing', 'finishing'].includes(activity))
+        activities.set(toolCallId, activity);
+    }
     return agentRunProgressSchema.parse({
       run: compactAgentRun(run, []),
       phase: terminal ? row.status : row.status === 'pending' ? 'queued'
@@ -521,7 +529,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       ...(!terminal && row.phase === 'finalizing' && row.draft_json
         ? { draft: agentDraftSchema.parse(JSON.parse(row.draft_json)) } : {}),
       tools: this.sql<ToolCallRow>`SELECT * FROM agent_tool_calls WHERE run_id = ${runId} ORDER BY created_at, tool_call_id`
-        .map(tool => toolTrace(tool, terminal)),
+        .map(tool => toolTrace(tool, terminal, activities.get(tool.tool_call_id))),
     });
   }
 
@@ -709,6 +717,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           await this.updatePhase(runId, 'finalizing', deadlineAt);
         },
         onDraft: draft => this.updateDraft(runId, draft),
+        onToolActivity: (toolCallId, activity) => {
+          if (this.readRun(runId)?.status === 'running')
+            this.recordEvent(runId, 'tool.activity', { toolCallId, activity });
+        },
         executeEvidenceTool: (execution) => this.executeEvidenceTool(runId, execution),
         saveFramePreviews: (frames, signal, verifiedImages) => {
           this.assertRunActive(runId);
@@ -717,6 +729,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         saveStoryboardPreviews: (storyboard, signal, verifiedImages) => {
           this.assertRunActive(runId);
           return saveStoryboardPreviews(this.env.RESEARCH, row.user_id, storyboard, signal, this.env.VIDEO_ASSETS, verifiedImages);
+        },
+        discardPreviews: async previews => {
+          this.sessionStore.queueCleanup(previews.map(preview => framePreviewKey(preview.collectionId, preview.assetId)));
+          try { await this.sessionStore.cleanup(); }
+          catch (error) {
+            // Keep the durable queue for retry without replacing the tool's error.
+            console.error({ event: 'agent_preview_cleanup_failure', runId, ...safeErrorLog(error) });
+          }
         },
         finalize: (toolCallId, input) => this.finalizeRun(runId, toolCallId, input),
       });
@@ -775,7 +795,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       WHERE run_id = ${runId} AND semantic_key = ${execution.semanticKey} AND status = 'completed'
       LIMIT 1
     `[0];
-    if (completedByMeaning?.result_json) return Promise.resolve(evidencePacketSchema.parse(JSON.parse(completedByMeaning.result_json)));
+    if (completedByMeaning?.result_json) {
+      const packet = evidencePacketSchema.parse(JSON.parse(completedByMeaning.result_json));
+      if (execution.retrySavedAnalysis && packet.warnings.some(warning => warning.code === 'RETRIEVAL_ANALYSIS_FAILED')) {
+        this.assertRunActive(runId);
+        return execution.retrySavedAnalysis(packet);
+      }
+      return Promise.resolve(packet);
+    }
 
     // The provider already exhausted its bounded route retries. Repeating the
     // same retrieval in this run must not start another full extraction sequence.
@@ -808,27 +835,37 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   private async performEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket> {
     this.assertRunActive(runId);
     const generation = this.sessionStore.clearGeneration();
-    // Separate analysis records must not consume the provider credit reservation twice.
-    // Both classes remain bounded, including failed attempts and resumed runs.
-    const counts = this.sql<{ provider_count: number; analysis_count: number }>`
-      SELECT
-        SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 0 ELSE 1 END) AS provider_count,
-        SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 1 ELSE 0 END) AS analysis_count
-      FROM agent_tool_calls WHERE run_id = ${runId}
-    `[0];
+    const admissionGeneration = this.sessionStore.generation();
     const analysis = ['analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard'].includes(execution.toolName);
-    // Supplemental metadata may use only capacity beyond the remaining research
-    // target. Admission and the running row insert happen before provider I/O,
-    // so parallel lookups and failed attempts respect the same persisted quota.
-    const reserved = analysis ? 0 : execution.reserveProviderCalls ?? 0;
-    if ((analysis ? counts?.analysis_count ?? 0 : counts?.provider_count ?? 0) + reserved >= MAX_TOOL_CALLS - 1) {
-      throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted. Finalize with available evidence.');
-    }
-
-    // Hold the call's highest table price before any provider work, so concurrent
-    // tools and saved-evidence reads together never exceed the run's reserve.
-    this.evidenceLedger.hold(runId, execution.toolCallId, toolCreditHold(execution.operation, analysis));
+    const assertAdmission = () => {
+      this.assertRunActive(runId);
+      execution.signal?.throwIfAborted();
+      if (admissionGeneration !== this.sessionStore.generation()) throw new Error('Evidence was deleted while waiting for credits.');
+      const counts = this.sql<{ provider_count: number; analysis_count: number }>`
+        SELECT
+          SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 0 ELSE 1 END) AS provider_count,
+          SUM(CASE WHEN tool_name IN ('analyze_video_transcript', 'analyze_video_frames', 'analyze_video_storyboard') THEN 1 ELSE 0 END) AS analysis_count
+        FROM agent_tool_calls WHERE run_id = ${runId}
+      `[0];
+      const reserved = analysis ? 0 : execution.reserveProviderCalls ?? 0;
+      if ((analysis ? counts?.analysis_count ?? 0 : counts?.provider_count ?? 0) + reserved >= MAX_TOOL_CALLS - 1)
+        throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted. Finalize with available evidence.');
+    };
+    assertAdmission();
+    const hold = toolCreditHold(execution.operation, analysis);
     try {
+      // Waiting owns neither a credit hold nor a provider slot. Supplemental
+      // metadata cannot wait on the enclosing analyst's hold: its optional lookup
+      // fails promptly and the analyst continues with the available context.
+      if (analysis || execution.reserveProviderCalls !== undefined)
+        this.evidenceLedger.hold(runId, execution.toolCallId, hold);
+      else {
+        const waiting = this.evidenceLedger.holdWhenAvailable(runId, execution.toolCallId, hold, execution.signal);
+        if (waiting) await waiting;
+      }
+      // Other tools can finish or be admitted while this one waits. Recheck the
+      // durable quota and lifecycle immediately before inserting its running row.
+      assertAdmission();
       return await this.performHeldEvidenceTool(runId, execution, generation);
     } finally {
       this.evidenceLedger.release(runId, execution.toolCallId);

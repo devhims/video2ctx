@@ -10,7 +10,7 @@ import { assetVersionSchema } from './stored-analysis';
 
 export const researchVideoTranscriptsInputSchema = z.object({
   sources: z.array(z.union([
-    getVideoTranscriptInputSchema.omit({ focus: true }).strict(),
+    getVideoTranscriptInputSchema.omit({ focus: true, analysis: true }).strict(),
     z.object({ assetVersion: assetVersionSchema }).strict(),
   ])).min(1).max(8).refine(sources => new Set(sources.map(source =>
     'videoId' in source ? `video:${source.videoId}` : `asset:${source.assetVersion}`,
@@ -68,8 +68,11 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
                 throw rejection;
               }
             }
-            assetVersion = 'assetVersion' in current ? current.assetVersion
-              : (await executeGetVideoTranscript(current, context, `${childId}:retrieve`)).assetVersions?.[0];
+            if ('videoId' in current) {
+              const packet = await executeGetVideoTranscript({ ...current, analysis: focus }, context, `${childId}:retrieve`);
+              return packet;
+            }
+            assetVersion = current.assetVersion;
           } catch (error) {
             context.signal.throwIfAborted();
             if ((!captionsUnavailable(error) && !regionRestricted(error) && !videoTooLong(error)) || !currentVideoId) throw error;
@@ -92,10 +95,18 @@ export function createResearchVideoTranscriptsTool(context: AgentToolContext) {
       context.signal.throwIfAborted();
       return {
         skipped,
-        evidence: outcomes.flatMap(outcome => outcome.status === 'fulfilled' ? [evidencePacketForModel(outcome.value)] : []),
-        failures: outcomes.flatMap((outcome, index) => outcome.status === 'rejected'
-          ? [{ source: sources[index], error: outcome.reason instanceof Error ? outcome.reason.message : 'Transcript research failed.' }]
-          : []),
+        evidence: outcomes.flatMap(outcome => outcome.status === 'fulfilled'
+          && outcome.value.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')
+          ? [evidencePacketForModel(outcome.value)] : []),
+        failures: outcomes.flatMap((outcome, index) => {
+          if (outcome.status === 'rejected') return [{ source: sources[index],
+            ...('assetVersion' in sources[index]! ? { assetVersion: sources[index]!.assetVersion } : {}),
+            error: outcome.reason instanceof Error ? outcome.reason.message : 'Transcript research failed.' }];
+          if (outcome.value.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')) return [];
+          return [{ source: sources[index], assetVersion: outcome.value.assetVersions?.[0],
+            error: 'Transcript analysis failed. Retry this source or pass its assetVersion to analyze_video_transcripts.',
+          }];
+        }),
       };
     },
   });

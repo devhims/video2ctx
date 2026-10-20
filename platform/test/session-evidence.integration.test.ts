@@ -1220,21 +1220,47 @@ test('one search reads and parses each saved comment page once', async () =>
     expect((await store.search.searchEvidence(store, 'palette note')).packets).toEqual([]);
   }));
 
-test('deleting an unrelated asset during a comment search keeps its other hits', async () =>
-  within('comment-search-unrelated-delete', async (store) => {
+/** Runs `during` after a store read has started but before it resolves, as a concurrent request would. */
+function interleaveReads(store: SessionEvidenceStore, during: () => Promise<void>, times = 1) {
+  const read = store.read.bind(store);
+  const spy = vi.spyOn(store, 'read');
+  for (let index = 0; index < times; index += 1) spy.mockImplementationOnce(async version => {
+    const reading = read(version);
+    await during();
+    return reading;
+  });
+}
+
+test.each([1, 4])('a deletion elsewhere during a page read keeps all %i matching comments', async matches =>
+  within(`comment-search-inflight-${matches}`, async (store) => {
     const p = provider();
-    p.comments = vi.fn(async (_id: string, options?: { continuation?: string }) => ({ cacheStatus: 'miss' as const,
-      value: commentPage(4, index => options?.continuation ? `Unrelated remark ${index + 1}` : `Easel tip ${index + 1}`) }));
-    const session = sessionProvider(p, store);
-    await session.comments(id);
-    const other = (await session.comments(id, { continuation: 'next' })).assetVersions![0]!;
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const,
+      value: commentPage(6, index => index < matches ? `Easel tip ${index + 1}` : `Other remark ${index + 1}`) }));
+    await sessionProvider(p, store).comments(id);
     await store.ensureSearchIndexed();
-    const read = store.read.bind(store);
-    vi.spyOn(store, 'read').mockImplementationOnce(async version => {
-      await store.delete(other);
-      return read(version);
-    });
-    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toHaveLength(4);
+    // Deleting a memory advances the store generation, so the in-flight page read is fenced.
+    interleaveReads(store, async () => store.deleteMemory('unrelated'));
+    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toHaveLength(matches);
+  }));
+
+test('a comment search that keeps being interrupted asks for a retry instead of returning nothing', async () =>
+  within('comment-search-inflight-exhausted', async (store) => {
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Easel tip ${index + 1}`) }));
+    await sessionProvider(p, store).comments(id);
+    await store.ensureSearchIndexed();
+    interleaveReads(store, async () => store.deleteMemory('unrelated'), 3);
+    await expect(store.search.searchEvidence(store, 'easel tip')).rejects.toThrow('Retry the search');
+  }));
+
+test('deleting the matched page during its read still returns nothing for it', async () =>
+  within('comment-search-inflight-own-delete', async (store) => {
+    const p = provider();
+    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Easel tip ${index + 1}`) }));
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    await store.ensureSearchIndexed();
+    interleaveReads(store, async () => { await store.delete(version); });
+    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toEqual([]);
   }));
 
 test('repeated comment searches showing the same passages reuse their saved rows', async () =>
@@ -1325,4 +1351,72 @@ test.each(Array.from({ length: 11 }, (_, index) => 1975 + index))('a matched tok
     const excerpt = (await store.search.searchEvidence(store, 'needle')).packets[0]!.excerpts[0]!;
     expect(excerpt.text).toMatch(/\bneedle\b/);
     expect(excerpt.text).toContain('Author: Reviewer');
+  }));
+
+// Real SQLite availability/generation checks, with R2 used only to load analyst inputs.
+test.each(['transcript', 'frame', 'storyboard_sheet'] as const)(
+  'saved %s analysis reads once and fences deletion, clearing, and same-version restoration', async kind => {
+    for (const mutation of ['none', 'delete', 'clear', 'restore'] as const) {
+      await within(`analysis-recheck-${kind}-${mutation}`, async store => {
+        const value = kind === 'transcript' ? transcript() : kind === 'frame' ? oneFrame(id) : oneSheet(id);
+        const retrieve = () => store.retrieve(`recheck:${kind}`, kind, id, false,
+          async () => ({ value, cacheStatus: 'miss' as const }),
+          () => kind === 'storyboard_sheet' ? { sheetIndex: 0, manifestVersion: 'manifest' } : {});
+        const version = (await retrieve()).assetVersions![0]!;
+        const ctx = context(store, provider());
+        const duringInference = async () => {
+          if (mutation === 'none') return;
+          await store.delete(mutation === 'clear' ? undefined : version);
+          if (mutation === 'restore') expect((await retrieve()).assetVersions).toEqual([version]);
+        };
+        ctx.analyzeFrames = async () => {
+          await duringInference();
+          return { findings: [{ observation: 'A chart.', timestampsMs: [1000] }], warnings: [] };
+        };
+        ctx.analyzeStoryboard = async () => {
+          await duringInference();
+          return { findings: [{ observation: 'A chart.', frameIndexes: [0] }], warnings: [] };
+        };
+        ctx.transcriptPolicy = { mode: 'contextual_analysis', researchQuestion: 'Describe the opening.',
+          analyze: async () => {
+            await duringInference();
+            return { summary: 'A clear opening sentence.',
+              findings: [{ claim: 'A clear opening sentence.', excerptIds: ['opening'] }],
+              excerpts: [{ id: 'opening', text: 'A clear opening sentence.', startMs: 0, endMs: 5600 }],
+              coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 5600 }, warnings: [] };
+          } };
+        const read = vi.spyOn(store, 'read');
+        const pending = kind === 'transcript'
+          ? executeAnalyzeVideoTranscript({ assetVersion: version, focus: 'Describe the opening.' }, ctx, 'analysis')
+          : kind === 'frame'
+            ? executeAnalyzeVideoFrames({ assetVersions: [version], focus: 'Describe the chart.' }, ctx, 'analysis')
+            : executeAnalyzeVideoStoryboard({ assetVersions: [version], focus: 'Describe the chart.' }, ctx, 'analysis');
+        if (mutation === 'none') {
+          await expect(pending).resolves.toMatchObject({ assetVersions: [version] });
+          expect(store.evidence()).toHaveLength(1);
+        } else {
+          await expect(pending).rejects.toThrow('unavailable or deleted');
+          expect(store.evidence()).toEqual([]);
+        }
+        expect(read).toHaveBeenCalledExactlyOnceWith(version);
+      });
+    }
+  },
+);
+
+
+test('failed preview cleanup stays queued across store reconstruction and removes only private objects', async () =>
+  within('preview-cleanup-retry', async (store, reopen, sql) => {
+    const key = 'agent-frames/cleanup-owner/abandoned.jpg';
+    const retained = 'agent-frames/cleanup-owner/published.jpg';
+    await env.RESEARCH.put(key, new Uint8Array([255, 216, 255, 217]));
+    await env.RESEARCH.put(retained, 'retained');
+    store.queueCleanup([key]);
+    const failing = new SessionEvidenceStore(sql, { delete: async () => { throw new Error('R2 unavailable'); } } as unknown as R2Bucket, 'test-session/preview-cleanup-retry/');
+    await expect(failing.cleanup()).rejects.toThrow('R2 unavailable');
+    expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toEqual([{ blob_key: key }]);
+    await reopen().cleanup();
+    expect(await env.RESEARCH.head(key)).toBeNull();
+    expect(await env.RESEARCH.head(retained)).not.toBeNull();
+    expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toEqual([]);
   }));

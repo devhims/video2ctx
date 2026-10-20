@@ -13,6 +13,8 @@ export interface WatchIndexRequest extends YouTubeClientOptions {
   outputDir: string;
   lang?: string;
   granularity?: 'segment' | 'word';
+  /** Include storyboard contact sheets; defaults to transcript-only indexing. */
+  withStoryboards?: boolean;
   maxStoryboardSheets?: number;
 }
 

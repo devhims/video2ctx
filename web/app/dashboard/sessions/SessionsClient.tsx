@@ -404,8 +404,8 @@ function ToolTrace({ tools, status }: { tools: AgentProgress['tools']; status: A
         event.preventDefault();
         setExpandedTools(current => ({ ...current, [tool.toolCallId]: !current[tool.toolCallId] }));
       }}>
-        <span className={`agent-tool-icon status-${tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
-          : tool.status === 'completed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
+        <span className={`agent-tool-icon status-${tool.status === 'completed' && tool.analysis === 'failed' ? 'failed' : tool.status}`}>{tool.status === 'running' ? <CircleNotchIcon className='agent-spin' size={14} aria-hidden='true' />
+          : tool.status === 'completed' && tool.analysis !== 'failed' ? <CheckIcon size={14} aria-hidden='true' /> : <WarningCircleIcon size={14} aria-hidden='true' />}</span>
         <span className='agent-tool-label'>
           <span className='agent-tool-name'>{agentToolLabel(tool)}</span>
           {tool.name === 'get_video_storyboard' && <span className='agent-tool-mode'>{isStoryboardMetadata(tool) ? 'Preview Details' : 'Preview Images'}</span>}

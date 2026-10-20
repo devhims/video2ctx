@@ -317,6 +317,13 @@ describe('delivered context disclosure', () => {
     expect(evidenceDeliveryOperation({ createdByTool: 'analyze_video_storyboard', deliveredSources: [] })).toBe('image_analysis');
     expect(evidenceDeliveryOperation({ createdByTool: 'analyze_video_transcript', deliveredSources: [] })).toBe('transcript_analysis');
     expect(evidenceDeliveryOperation({ createdByTool: 'get_video_frames', deliveredSources: [] })).toBe('retrieval');
+    // Retrieval tools that analyze content while saving it report the analysis they performed.
+    expect(evidenceDeliveryOperation({ createdByTool: 'get_video_frames', deliveredSources: [] }, ['youtube_frame_analysis', 'youtube_frame_retrieval'])).toBe('image_analysis');
+    expect(evidenceDeliveryOperation({ createdByTool: 'get_video_storyboard', deliveredSources: [] }, ['youtube_storyboard_analysis'])).toBe('image_analysis');
+    expect(evidenceDeliveryOperation({ createdByTool: 'get_video_transcript', deliveredSources: [] }, ['youtube_transcript_analysis'])).toBe('transcript_analysis');
+    expect(evidenceDeliveryOperation({ createdByTool: 'get_video_frames', deliveredSources: [] }, ['retrieval_analysis_failure', 'youtube_frame_retrieval'])).toBe('retrieval');
+    // Artifacts never upgrade evidence this turn did not produce.
+    expect(evidenceDeliveryOperation({ deliveredSources: ['inherited_subject'] }, ['youtube_frame_analysis'])).toBe('inherited');
     expect(evidenceDeliveryOperation({ deliveredSources: ['search_context'] })).toBe('saved_read');
     expect(evidenceDeliveryOperation({ deliveredSources: ['read_prior_evidence'] })).toBe('saved_read');
     expect(evidenceDeliveryOperation({ deliveredSources: ['inherited_subject', 'read_prior_evidence'] })).toBe('saved_read');

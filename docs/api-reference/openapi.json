@@ -6742,6 +6742,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",
@@ -8002,6 +8003,7 @@
                                 "enum": [
                                   "catalog_lookup",
                                   "catalog_write",
+                                  "catalog_write_wait",
                                   "player",
                                   "player_response",
                                   "download",
@@ -8348,6 +8350,21 @@
                     "completed",
                     "failed",
                     "interrupted"
+                  ]
+                },
+                "activity": {
+                  "type": "string",
+                  "enum": [
+                    "loading",
+                    "analyzing",
+                    "finishing"
+                  ]
+                },
+                "analysis": {
+                  "type": "string",
+                  "enum": [
+                    "completed",
+                    "failed"
                   ]
                 },
                 "startedAt": {
@@ -9582,6 +9599,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",
@@ -10549,6 +10567,7 @@
                             "enum": [
                               "catalog_lookup",
                               "catalog_write",
+                              "catalog_write_wait",
                               "player",
                               "player_response",
                               "download",

@@ -40,6 +40,8 @@ export const agentProgressSchema = z.object({
     activity: z.enum(['gathering', 'thinking', 'writing']).optional() }).optional(),
   tools: z.array(z.object({
     toolCallId: z.string(), name: z.string(), operation: z.string(),
+    activity: z.enum(['loading', 'analyzing', 'finishing']).optional().catch(undefined),
+    analysis: z.enum(['completed', 'failed']).optional().catch(undefined),
     // Keep a future tool status from discarding the entire progress snapshot.
     status: z.string().pipe(z.enum(['running', 'completed', 'failed', 'interrupted', 'unknown']).catch('unknown')), startedAt: z.number(), finishedAt: z.number().optional(),
     input: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number()), z.array(z.string().max(64))])),

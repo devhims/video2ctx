@@ -1,3 +1,7 @@
+import { storyboardMetadata } from '../src/agents/providers/youtube/storyboard';
+import { RunAssetCache, withRunAssetCache } from '../src/agents/runtime/run-asset-cache';
+import { readAnalysisAssets } from '../src/agents/providers/youtube/tools/stored-analysis';
+import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { env as workerEnv, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
 import type { Transcript } from 'all-things-youtube';
@@ -1376,4 +1380,198 @@ test('account deletion removes session references while retaining the shared tra
   });
   expect((await env.VIDEO_ASSETS.list({ prefix: `youtube/videos/${id}/` })).objects).toHaveLength(1);
   expect(await catalog().readVersion(data.catalogVersions[0]!)).toMatchObject({ value: transcript(id) });
+});
+
+function cacheAnalysisContext(store: SessionEvidenceStore, assetCache: RunAssetCache): AgentToolContext {
+  return { runId: 'cached-analysis', signal: new AbortController().signal,
+    session: store, assetCache, provider: provider({ value: transcript('abcdefghijk'), cacheStatus: 'miss' }),
+    transcriptPolicy: { mode: 'complete_transcript' },
+    executeEvidenceTool: execution => execution.execute(), finalize: vi.fn() };
+}
+
+test.each(['transcript', 'frame', 'storyboard_sheet'] as const)(
+  'same-run %s retrieval supplies analysis without catalog reads, including session hits', async kind => {
+    const id = videoId();
+    const board = receiptStoryboard(id);
+    const frames = { videoId: id, frames: [1000, 2000].map(timestampMs => ({ timestampMs,
+      width: 640, height: 360, mimeType: 'image/jpeg' as const, imageBase64: '/9j/AA==' })),
+      failures: [], meta: { partial: false, warnings: [] } };
+    // The session adapter sees an already-published upstream response, as in production.
+    const textSource = await source(id);
+    const frameRefs = await saveVideoResource({ ...env, YOUTUBE_FRAMES_BACKEND: 'media' },
+      { kind: 'frames', id, timestampsMs: [1000, 2000], maxWidth: 640, extractionTimeoutMs: 5000 }, frames, Date.now(), 60000);
+    const sheetRefs = await saveVideoResource(env, { kind: 'storyboard', id, maxSheets: 1 }, board, Date.now(), 60000);
+    const manifestRefs = await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true },
+      storyboardMetadata(board), Date.now(), 60000);
+    const upstream = { ...provider(textSource),
+      frames: async () => ({ value: frames, cacheStatus: 'miss' as const, catalogVersions: frameRefs }),
+      storyboard: async () => ({ value: board, cacheStatus: 'miss' as const, catalogVersions: [...manifestRefs, ...sheetRefs] }),
+    };
+    await within(`cache-${kind}`, async ({ store, backend }) => {
+      let versions: string[] = [];
+      // A new run retrieving the same selection seeds its cache from verified session hits too.
+      for (const expectedReuse of [false, true]) {
+        await withRunAssetCache(store, new AbortController().signal, async cache => {
+          const wrapped = sessionProvider(upstream, store, false, undefined, cache);
+          const retrieved = kind === 'transcript' ? await wrapped.transcript(id)
+            : kind === 'frame' ? await wrapped.frames!({ videoId: id, timestampsMs: [1000, 2000], maxWidth: 640 })
+            : await wrapped.storyboard!(id, undefined, { sheetIndexes: [0] });
+          expect(retrieved.sessionReused === true).toBe(expectedReuse);
+          versions = retrieved.assetVersions!.filter(version => store.assetInfo(version)!.kind === kind);
+          expect(versions).toHaveLength(kind === 'frame' ? 2 : 1);
+          const reads = vi.spyOn(backend, 'read');
+          try {
+            const context = cacheAnalysisContext(store, cache);
+            const first = await readAnalysisAssets(context, versions, kind, 'first');
+            expect(first.assets.map(({ asset }) => asset.version)).toEqual(versions);
+            if (kind === 'frame') expect(first.assets.map(({ value }) =>
+              (value as typeof frames).frames[0]!.timestampMs)).toEqual([1000, 2000]);
+            await readAnalysisAssets(context, versions, kind, 'followup');
+            expect(reads).not.toHaveBeenCalled();
+          } finally { reads.mockRestore(); }
+        });
+      }
+      // Saved-only analysis in a later run loads each exact version once.
+      await withRunAssetCache(store, new AbortController().signal, async cache => {
+        const reads = vi.spyOn(backend, 'read');
+        try {
+          const context = cacheAnalysisContext(store, cache);
+          await readAnalysisAssets(context, versions, kind, 'restored');
+          await readAnalysisAssets(context, versions, kind, 'followup');
+          expect(reads).toHaveBeenCalledTimes(versions.length);
+        } finally { reads.mockRestore(); }
+      });
+    });
+  },
+);
+
+test('cached analysis respects deletion, generation changes, refresh and current-version metadata', async () => {
+  const id = videoId();
+  const first = await source(id, 'Original text.');
+  const second = await source(id, 'Updated text.');
+  await within('cache-lifecycle', async ({ store, backend }) => {
+    await withRunAssetCache(store, new AbortController().signal, async cache => {
+      const upstream = provider(first);
+      const wrapped = sessionProvider(upstream, store, false, undefined, cache);
+      const version = (await wrapped.transcript(id)).assetVersions![0]!;
+      const context = cacheAnalysisContext(store, cache);
+      const loaded = await readAnalysisAssets(context, [version], 'transcript', 'first');
+      await expect(readAnalysisAssets(context, [version], 'frame', 'wrong-kind')).rejects.toThrow('requires saved frame');
+      context.pinnedVideoId = 'other000001';
+      await expect(readAnalysisAssets(context, [version], 'transcript', 'wrong-video')).rejects.toThrow('pinned to video');
+      context.pinnedVideoId = undefined;
+      // Explicit refresh still calls the provider and returns a new immutable version.
+      vi.mocked(upstream.transcript).mockResolvedValue(second);
+      const refreshed = (await wrapped.transcript(id, undefined, { refresh: true })).assetVersions![0]!;
+      expect(refreshed).not.toBe(version);
+      expect((await store.readAsset(version, cache))!.asset.current).toBe(false);
+      expect((await store.readAsset(refreshed, cache))!.asset.current).toBe(true);
+      context.refreshEvidence = true;
+      await expect(readAnalysisAssets(context, [version], 'transcript', 'refresh')).rejects.toThrow('Fresh evidence');
+      context.refreshEvidence = false;
+      await store.delete(version);
+      await expect(readAnalysisAssets(context, [version], 'transcript', 'deleted')).rejects.toThrow('unavailable or deleted');
+      // Same-version restoration must not validate findings from before deletion.
+      vi.mocked(upstream.transcript).mockResolvedValue(first);
+      expect((await wrapped.transcript(id, undefined, { refresh: true })).assetVersions).toEqual([version]);
+      expect(() => loaded.assertAvailable()).toThrow('unavailable or deleted');
+      // A new generation invalidates unrelated cached assets too.
+      const reads = vi.spyOn(backend, 'read');
+      try {
+        await readAnalysisAssets(context, [refreshed], 'transcript', 'after-deletion');
+        expect(reads).toHaveBeenCalledOnce();
+      } finally { reads.mockRestore(); }
+    });
+  });
+});
+
+test('oversized analysis payloads fall back to verified storage and failed persistence never seeds the cache', async () => {
+  const id = videoId(), data = await source(id);
+  await within('cache-fallback', async ({ store, backend }) => {
+    const cache = new RunAssetCache(store, 1);
+    const wrapped = sessionProvider(provider(data), store, false, undefined, cache);
+    const version = (await wrapped.transcript(id)).assetVersions![0]!;
+    const reads = vi.spyOn(backend, 'read');
+    try {
+      const context = cacheAnalysisContext(store, cache);
+      await readAnalysisAssets(context, [version], 'transcript', 'first');
+      await readAnalysisAssets(context, [version], 'transcript', 'second');
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally { reads.mockRestore(); }
+    await store.delete();
+    const failedCache = new RunAssetCache(store);
+    const pin = vi.spyOn(backend, 'pin').mockRejectedValue(new Error('publication failed'));
+    try {
+      await expect(sessionProvider(provider(data), store, false, undefined, failedCache).transcript(id))
+        .rejects.toThrow('publication failed');
+      expect(failedCache.get(store, version, store.generation())).toBeUndefined();
+      expect(store.brief().assets).toEqual([]);
+    } finally { pin.mockRestore(); }
+  });
+});
+
+
+test('cached transcripts still enforce the stored duration limit before returning bytes', async () => {
+  const id = videoId(), data = await source(id);
+  await within('cache-duration-limit', async ({ sql, prefix, backend, atomic }) => {
+    const store = new SessionEvidenceStore(sql, env.RESEARCH, prefix, undefined, backend, atomic, 60);
+    await withRunAssetCache(store, new AbortController().signal, async cache => {
+      const version = (await sessionProvider(provider(data), store, false, undefined, cache).transcript(id)).assetVersions![0]!;
+      expect((await store.readAsset(version, cache))!.value).toEqual(data.value);
+      sql.exec("UPDATE session_assets SET details_json=json_set(details_json,'$.endMs',120000) WHERE version=?", version);
+      await expect(store.readAsset(version, cache)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
+    });
+  });
+});
+
+test('private coordinator RPC starts transcript analysis while the real catalog write is blocked', async () => {
+  const { YouTubeCacheCoordinatorCore } = await import('../src/lib/youtube-cache-coordinator');
+  const { createYouTubeAgentProvider } = await import('../src/agents/providers/youtube/provider');
+  const { executeGetVideoTranscriptForModel } = await import('../src/agents/providers/youtube/tools/get-video-transcript');
+  const { sha256 } = await import('../src/lib/http');
+  const id = videoId();
+  const raw = transcript(id);
+  const operation = { kind: 'transcript' as const, id, granularity: 'word' as const };
+  const cacheKey = `video-resource:v1:${await sha256(JSON.stringify(videoResourceKey(operation)))}`;
+  const coordinator = env.YOUTUBE_REQUEST_COORDINATOR.getByName(cacheKey);
+  await runInDurableObject(coordinator, instance => {
+    Object.assign(instance, { coordinator: new YouTubeCacheCoordinatorCore(env, async () => raw) });
+  });
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const original = VideoCatalog.prototype.save;
+  const saving = vi.spyOn(VideoCatalog.prototype, 'save').mockImplementation(async function (this: VideoCatalog, ...args) {
+    if (args[0].videoId === id) await blocked;
+    return original.apply(this, args);
+  });
+  try {
+    await within(`parallel-rpc-${id}`, async ({ store, backend }) => {
+      const reads = vi.spyOn(backend, 'read');
+      let startedResolve!: () => void;
+      const started = { promise: new Promise<void>(resolve => { startedResolve = resolve; }), resolve: () => startedResolve() };
+      const ctx: AgentToolContext = {
+        runId: 'parallel-rpc', signal: new AbortController().signal, session: store,
+        provider: sessionProvider(createYouTubeAgentProvider(env), store),
+        transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Explain the text', analyze: async input => {
+          expect(input.segments).toEqual(raw.segments);
+          expect(store.brief().assets).toHaveLength(0);
+          started.resolve();
+          return { summary: 'Original public transcript', findings: [], excerpts: [], warnings: [],
+            coverage: { completeTranscriptRead: true, segmentCount: 1, startMs: 0, endMs: 1000 } };
+        } },
+        executeEvidenceTool: execution => execution.execute(), finalize: vi.fn(),
+      };
+      let returned = false;
+      const work = executeGetVideoTranscriptForModel({ videoId: id, analysis: 'Explain the text' }, ctx, 'parallel');
+      void work.then(() => { returned = true; });
+      await started.promise;
+      expect(returned).toBe(false);
+      release();
+      const packet = await work;
+      expect(packet.artifacts[0]?.type).toBe('youtube_transcript_analysis');
+      expect(packet.assetVersions).toHaveLength(1);
+      expect(store.has(packet.assetVersions![0]!)).toBe(true);
+      expect(reads).not.toHaveBeenCalled();
+    });
+  } finally { release(); saving.mockRestore(); }
 });

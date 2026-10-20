@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mergeAgentMessages, safeSourceUrl, isActiveAgentRun, agentRunSchema, type AgentMessage } from './agent-sessions.ts';
+import { mergeAgentMessages, safeSourceUrl, isActiveAgentRun, agentRunSchema, agentProgressSchema, type AgentMessage } from './agent-sessions.ts';
 
 test('merges older pages chronologically and replaces updated messages without duplicates', () => {
   const message = (id: string, turn: number, role: AgentMessage['role'], status: AgentMessage['status'] = 'completed'): AgentMessage => ({ messageId: id, runId: id, conversationTurn: turn, role, status, content: '', parentMessageId: null, createdAt: 1, updatedAt: 1 });
@@ -105,4 +105,17 @@ test('future tool statuses preserve the progress snapshot without inventing fail
     assert.equal(agentProgressSchema.parse({ ...snapshot, tools: [{ ...snapshot.tools[0], status }] }).tools[0].status, status);
   }
   assert.equal(agentProgressSchema.safeParse({ ...snapshot, tools: [{ ...snapshot.tools[0], status: null }] }).success, false);
+});
+
+
+test('progress preserves tool activity and analysis outcomes, tolerating future values', () => {
+  const snapshot = { run: { sessionId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', runId: 'a54e2d7b-bc42-4c4f-b81d-6b64e92836d8', status: 'running' }, phase: 'research',
+    tools: [{ toolCallId: 't', name: 'get_video_transcript', operation: 'transcript', status: 'running', startedAt: 1, input: {}, activity: 'analyzing', analysis: 'failed' }] };
+  assert.equal(agentProgressSchema.parse(snapshot).tools[0].activity, 'analyzing');
+  assert.equal(agentProgressSchema.parse(snapshot).tools[0].analysis, 'failed');
+  snapshot.tools[0].activity = 'future-activity';
+  snapshot.tools[0].analysis = 'future-outcome';
+  const parsed = agentProgressSchema.parse(snapshot);
+  assert.equal(parsed.tools[0].activity, undefined);
+  assert.equal(parsed.tools[0].analysis, undefined);
 });

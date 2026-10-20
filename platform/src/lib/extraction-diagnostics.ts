@@ -4,7 +4,7 @@ const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Deliberately no free-form strings, error messages, URLs, headers, or stderr.
 export const extractionEventSchema = z.object({
-  stage: z.enum(['catalog_lookup', 'catalog_write', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
+  stage: z.enum(['catalog_lookup', 'catalog_write', 'catalog_write_wait', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy', 'media_decode', 'media_admission', 'media_source']),
   failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge']).optional(),
   egress: z.enum(['direct', 'proxy']).optional(), proxySlot: z.number().int().min(0).max(3).optional(),

@@ -540,13 +540,23 @@ export interface EvidenceRunRecord {
 export type EvidenceDeliveryOperation = NonNullable<ModelEvidencePacket['delivery']>['operation'];
 const IMAGE_ANALYSIS_TOOLS = new Set(['analyze_video_frames', 'analyze_video_storyboard']);
 const TRANSCRIPT_ANALYSIS_TOOLS = new Set(['analyze_video_transcript']);
+/** Analysis a retrieval tool can return when asked to analyze content while saving it. */
+const IMAGE_ANALYSIS_ARTIFACTS = new Set(['youtube_frame_analysis', 'youtube_storyboard_analysis']);
+const TRANSCRIPT_ANALYSIS_ARTIFACTS = new Set(['youtube_transcript_analysis']);
 /** Deliveries a model of this run asked for. Other sources load earlier evidence automatically. */
 const EXPLICIT_READ_SOURCES = new Set(['search_context', 'read_prior_evidence', 'read_session_evidence']);
 
-/** The operation this turn performed for a packet. Anything without a current record is inherited. */
-export function evidenceDeliveryOperation(record: EvidenceRunRecord | undefined): EvidenceDeliveryOperation {
-  if (record?.createdByTool) return IMAGE_ANALYSIS_TOOLS.has(record.createdByTool) ? 'image_analysis'
-    : TRANSCRIPT_ANALYSIS_TOOLS.has(record.createdByTool) ? 'transcript_analysis' : 'retrieval';
+/**
+ * The operation this turn performed for a packet. Anything without a current record is inherited.
+ * A packet this run created is an analysis when its tool analyzes, or when a retrieval tool
+ * returned analyst findings for the content it saved (`artifactTypes` of the packet).
+ */
+export function evidenceDeliveryOperation(record: EvidenceRunRecord | undefined, artifactTypes: readonly string[] = []): EvidenceDeliveryOperation {
+  if (record?.createdByTool) {
+    if (IMAGE_ANALYSIS_TOOLS.has(record.createdByTool) || artifactTypes.some(type => IMAGE_ANALYSIS_ARTIFACTS.has(type))) return 'image_analysis';
+    if (TRANSCRIPT_ANALYSIS_TOOLS.has(record.createdByTool) || artifactTypes.some(type => TRANSCRIPT_ANALYSIS_ARTIFACTS.has(type))) return 'transcript_analysis';
+    return 'retrieval';
+  }
   return record?.deliveredSources.some(source => EXPLICIT_READ_SOURCES.has(source)) ? 'saved_read' : 'inherited';
 }
 
@@ -619,9 +629,10 @@ export function finalizationEvidenceForModel(
     })
     : [projectEvidencePacketsForModel(compact, { maxCharacters: labelled(maxCharacters, compact.length) })];
   const projected = projections.flatMap(projection => projection.evidence);
+  const artifactTypes = new Map(compact.map(packet => [packet.packetId, packet.artifacts.map(artifact => artifact.type)]));
   const evidence = projected.map(packet => {
     if (!runRecords) return packet;
-    const operation = evidenceDeliveryOperation(runRecords.get(packet.packetId));
+    const operation = evidenceDeliveryOperation(runRecords.get(packet.packetId), artifactTypes.get(packet.packetId));
     return { ...packet, delivery: { operation, note: deliveryNote(operation, packet.kind) } };
   });
   // A packet shown for one comparison subject is not omitted overall.

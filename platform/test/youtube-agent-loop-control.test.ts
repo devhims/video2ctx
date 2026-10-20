@@ -141,7 +141,7 @@ describe('YouTube AgentCore loop control', () => {
     context.executeEvidenceTool = async execution => {
       const packet = await execute(execution);
       saved.push(packet);
-      if (execution.toolName === 'analyze_video_transcript' && packet.sources[0]?.videoId === 'video000001') release();
+      if (packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis') && packet.sources[0]?.videoId === 'video000001') release();
       return packet;
     };
     context.provider.transcript = vi.fn(async (...args: Parameters<typeof fetch>) => {
@@ -162,7 +162,7 @@ describe('YouTube AgentCore loop control', () => {
     const model = new MockLanguageModelV4({ doGenerate: async call => {
       if (step++ === 0) return modelResult({ toolCallId: 'pipeline', toolName: 'research_video_transcripts',
         input: JSON.stringify({ sources: [1, 2, 3].map(n => ({ videoId: `video00000${n}` })), focus: 'Practical tasks' }) });
-      expect(JSON.stringify(call.prompt)).toContain(failure === 'error' ? 'No captions' : 'complete nonempty saved transcript');
+      expect(JSON.stringify(call.prompt)).toContain(failure === 'error' ? 'No captions' : 'not saved in this session');
       return modelResult({ toolCallId: 'finish', toolName: 'finalize_answer', input: JSON.stringify({
         blocks: [{ text: 'Supported finding.', evidenceIds: ['transcript:video000001:window:0:0'] }],
         intent: 'topic_research', confidence: 'medium', artifacts: [], warnings: [],
@@ -207,8 +207,7 @@ describe('YouTube AgentCore loop control', () => {
       } });
       const run = runResearchAgentWithModel({ model, finalizationModel: finalizer, message: 'Research tasks', context,
         decision: { route: 'topic_research', researchVideoCount: 2 } });
-      await vi.advanceTimersByTimeAsync(1);
-      expect(saved.some(packet => packet.artifacts.some(a => a.type === 'youtube_transcript_analysis'))).toBe(true);
+      await vi.waitFor(() => expect(saved.some(packet => packet.artifacts.some(a => a.type === 'youtube_transcript_analysis'))).toBe(true), { interval: 1 });
       await vi.advanceTimersByTimeAsync(40_000);
       await expect(run).resolves.toMatchObject({ finishReason: 'timeout-finalized' });
       release();
@@ -1969,7 +1968,7 @@ it('replaces a saved over-limit transcript given by assetVersion with the next s
   expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000002']);
   expect(retrievalSlots).toBe(0);
   expect(vi.mocked(context.executeEvidenceTool).mock.calls.filter(([execution]) => execution.toolName === 'get_video_transcript'))
-    .toEqual([[expect.objectContaining({ input: { videoId: 'video000002' } })]]);
+    .toEqual([[expect.objectContaining({ input: expect.objectContaining({ videoId: 'video000002', analysis: 'Research this topic' }) })]]);
 });
 
 it('keeps metadata in conversation memory when caption languages exceed the cap', () => {

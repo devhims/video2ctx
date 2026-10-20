@@ -76,7 +76,8 @@ export async function executeAnalyzeVideoTranscript(
       operation: 'transcript',
       semanticKey,
       execute: async () => {
-        const { asset, value } = (await readAnalysisAssets(context, [parsed.assetVersion], 'transcript'))[0]!;
+        const { assets, assertAvailable } = await readAnalysisAssets(context, [parsed.assetVersion], 'transcript', toolCallId);
+        const { asset, value } = assets[0]!;
         const transcript = value as Transcript;
         if (
           transcript.videoId !== asset.videoId ||
@@ -84,64 +85,18 @@ export async function executeAnalyzeVideoTranscript(
           !transcript.segments?.some((segment) => segment.text.trim())
         )
           throw new Error('Analysis requires a complete nonempty saved transcript.');
-        const sourceId = `youtube:${asset.videoId}:transcript`;
         // Every preflight check passed: admit the saved inputs as delivered source content,
         // billed once per run per unit, immediately before inference. A later analyst
         // failure keeps the charge; a rejected selection above never reaches this line.
         context.deliverSavedAssets?.([parsed.assetVersion]);
-        const evidence = await observeAgentOperation(
-          { runId: context.runId, toolCallId, videoId: asset.videoId, stage: 'transcript_analysis' },
-          context.signal,
-          () =>
-            analystEvidence(
-              { videoId: asset.videoId, focus: parsed.focus },
-              context,
-              transcript.segments,
-              sourceId,
-              toolCallId,
-              semanticKey,
-              {
-                language: transcript.track.languageCode,
-                provenance: transcript.track.provenance,
-                ...(transcript.translatedTo ? { translatedTo: transcript.translatedTo.languageCode } : {}),
-              },
-            ),
-        );
-        await readAnalysisAssets(context, [parsed.assetVersion], 'transcript');
-        return evidencePacketSchema.parse({
-          packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
-          kind: 'youtube_transcript',
-          sources: [
-            {
-              id: sourceId,
-              provider: 'youtube',
-              kind: 'transcript',
-              videoId: asset.videoId,
-              url: youtubeVideoUrl(asset.videoId),
-            },
-          ],
-          excerpts: evidence.excerpts,
-          artifacts: [
-            {
-              type: evidence.artifactType,
-              title: evidence.artifactTitle,
-              data: { videoId: asset.videoId, track: transcript.track, ...evidence.artifactData },
-            },
-          ],
-          warnings: [
-            ...evidence.warnings,
-            ...(!asset.current
-              ? [
-                  {
-                    code: 'SUPERSEDED_SESSION_EVIDENCE',
-                    message: 'Analysis uses an older stored transcript version.',
-                  },
-                ]
-              : []),
-          ],
-          assetVersions: [parsed.assetVersion],
-          usage: [],
+        const packet = await analyzeTranscriptEvidence(transcript, parsed.focus, context, toolCallId, semanticKey);
+        assertAvailable();
+        packet.assetVersions = [parsed.assetVersion];
+        if (!asset.current) packet.warnings.unshift({
+          code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored transcript version.',
         });
+        packet.warnings = packet.warnings.slice(0, 50);
+        return evidencePacketSchema.parse(packet);
       },
     });
   } catch (error) {
@@ -214,4 +169,54 @@ function isTimeoutError(error: unknown): boolean {
   return (
     error.name === 'TimeoutError' || /(?:timed?\s*out|timeout|aborted due to timeout)/iu.test(error.message)
   );
+}
+
+export async function analyzeTranscriptEvidence(transcript: Transcript, focus: string, context: AgentToolContext, toolCallId: string, semanticKey: string) {
+  if (transcript.meta.partial || !transcript.segments.some(segment => segment.text.trim()))
+    throw new Error('Analysis requires a complete nonempty transcript.');
+  const sourceId = `youtube:${transcript.videoId}:transcript`;
+  const evidence = await observeAgentOperation(
+    { runId: context.runId, toolCallId, videoId: transcript.videoId, stage: 'transcript_analysis' },
+    context.signal,
+    () =>
+      analystEvidence(
+        { videoId: transcript.videoId, focus },
+        context,
+        transcript.segments,
+        sourceId,
+        toolCallId,
+        semanticKey,
+        {
+          language: transcript.track.languageCode,
+          provenance: transcript.track.provenance,
+          ...(transcript.translatedTo ? { translatedTo: transcript.translatedTo.languageCode } : {}),
+        },
+      ),
+  );
+  return evidencePacketSchema.parse({
+    packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
+    kind: 'youtube_transcript',
+    sources: [
+      {
+        id: sourceId,
+        provider: 'youtube',
+        kind: 'transcript',
+        videoId: transcript.videoId,
+        url: youtubeVideoUrl(transcript.videoId),
+      },
+    ],
+    excerpts: evidence.excerpts,
+    artifacts: [
+      {
+        type: evidence.artifactType,
+        title: evidence.artifactTitle,
+        data: { videoId: transcript.videoId, track: transcript.track, ...evidence.artifactData },
+      },
+    ],
+    warnings: [
+      ...evidence.warnings,
+    ],
+    assetVersions: [],
+    usage: [],
+  });
 }

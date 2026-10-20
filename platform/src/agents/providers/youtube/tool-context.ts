@@ -1,3 +1,4 @@
+import type { RunAssetCache } from '../../runtime/run-asset-cache';
 import type { StoredExtractionDiagnostic } from '../../../lib/extraction-diagnostics';
 import type { FrameAnalyst } from './frame-analyst';
 import type { SaveFramePreviews } from '../../runtime/frame-previews';
@@ -20,9 +21,14 @@ export interface EvidenceToolExecution {
   semanticKey: string;
   operation: EvidenceOperation;
   input: unknown;
+  /** Current phase cancellation, propagated internally to queued provider admission. */
+  signal?: AbortSignal;
   /** Supplemental lookups leave this many provider slots for required retrieval.
    * Trusted runtime policy only, never a model-supplied tool argument. */
   reserveProviderCalls?: number;
+  /** Retry only analysis of a completed retrieval whose analyst failed. The runtime
+   * invokes this for a new call ID, never by re-running extraction or its billing. */
+  retrySavedAnalysis?: (packet: EvidencePacket) => Promise<EvidencePacket>;
   execute: () => Promise<EvidencePacket>;
 }
 
@@ -41,6 +47,9 @@ export interface AgentToolContext {
   maxVideoSeconds?: number;
   refreshEvidence?: boolean;
   session?: import('../../runtime/session-evidence').SessionAccess;
+  assetCache?: RunAssetCache;
+  /** Public activity only; never include analysis prompts or content. */
+  onToolActivity?(toolCallId: string, activity: 'loading' | 'analyzing' | 'finishing'): void;
   onExtractionDiagnostic?: (event: StoredExtractionDiagnostic) => void;
   researchDeadlineAt?: number;
   researchQuestion?: string;
@@ -60,10 +69,13 @@ export interface AgentToolContext {
    * delivery ledger sources. Durable, so a resumed run reports what it did before the restart.
    */
   evidenceRunRecords?(packetIds: readonly string[]): ReadonlyMap<string, import('../../runtime/model-evidence').EvidenceRunRecord>;
+  analyzeTranscript?: TranscriptAnalyst;
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
   saveFramePreviews?: SaveFramePreviews;
   saveStoryboardPreviews?: SaveStoryboardPreviews;
+  /** Remove unpublished previews, durably queuing failed storage deletions for retry. */
+  discardPreviews?(previews: readonly import('../../runtime/frame-previews').FramePreview[]): Promise<void>;
   /** Qualify likely unit errors in place and add notes, such as unverified figures. Never rejects the answer. */
   reviewAnswerBlocks?(blocks: readonly { text: string; evidenceIds: string[] }[]): { blocks: { text: string; evidenceIds: string[] }[]; warnings: FinalizeAnswerInput['warnings'] };
   runId: string;

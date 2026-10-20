@@ -35,7 +35,7 @@ export function executeAnalyzeVideoFrames(
     semanticKey: `frame-analysis:${JSON.stringify({ assetVersions: versions, focus: parsed.focus })}`,
     execute: async () => {
       if (!context.analyzeFrames) throw new Error('Frame analysis is unavailable.');
-      const assets = await readAnalysisAssets(context, versions, 'frame');
+      const { assets, assertAvailable } = await readAnalysisAssets(context, versions, 'frame', toolCallId);
       const values = assets.map(({ asset, value }) => {
         const frames = framesSchema.parse(value);
         if (frames.videoId !== asset.videoId || frames.frames.length !== 1)
@@ -55,64 +55,75 @@ export function executeAnalyzeVideoFrames(
       // billed once per run per unit, immediately before inference. A later analyst
       // failure keeps the charge; a rejected selection above never reaches this line.
       context.deliverSavedAssets?.(versions);
-      const analysis = await context.analyzeFrames({
-        frames,
-        focus: parsed.focus,
-        researchQuestion: context.researchQuestion,
-        signal: context.signal,
-        modelCallId: `frame-analyst:${context.runId}:${toolCallId}`,
+      const packet = await analyzeFrameEvidence(frames, parsed.focus, context, toolCallId);
+      assertAvailable();
+      packet.assetVersions = versions;
+      packet.artifacts[0]!.data.sessionReused = true;
+      // Carry the recorded selections for the analyzed positions from the request that retrieved them.
+      const selections = recordedFrameSelections(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs));
+      if (selections) packet.artifacts[0]!.data.selections = selections;
+      if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
+        code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored frame version.',
       });
-      context.signal.throwIfAborted();
-      // Recheck availability after inference so deletion cannot recreate derived evidence.
-      await readAnalysisAssets(context, versions, 'frame');
-      const sourceId = `youtube:${videoId}:frames`;
-      const visual = visualAnalysisExcerpts({
-        kind: 'requested', idPrefix: `frames:${videoId}:${safeIdPart(toolCallId)}`, sourceId,
-        findings: analysis.findings.map(finding => ({ observation: finding.observation, frames: finding.timestampsMs })),
-        sharedFindings: (analysis.sharedFindings ?? []).map(finding => ({ observation: finding.observation, frames: finding.timestampsMs })),
-        timeOf: time => time,
-        assertAvailable: time => {
-          if (!frames.frames.some((frame) => frame.timestampMs === time)) throw new Error('Analyst cited an unavailable frame.');
-        },
-      });
-      return evidencePacketSchema.parse({
-        packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
-        kind: 'youtube_frames',
-        sources: [
-          { id: sourceId, provider: 'youtube', kind: 'frames', videoId, url: youtubeVideoUrl(videoId) },
-        ],
-        excerpts: visual.excerpts,
-        artifacts: [
-          {
-            type: 'youtube_frame_analysis',
-            title: `Saved frame analysis for ${videoId}`,
-            data: {
-              videoId,
-              focus: parsed.focus,
-              sessionReused: true,
-              requestedTimestampsMs: frames.frames.map((frame) => frame.timestampMs),
-              selections: recordedFrameSelections(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs)),
-              frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping),
-              failures: [],
-              provenanceVersion: VISUAL_PROVENANCE_VERSION,
-              sharedObservations: visual.sharedObservations,
-            },
-          },
-        ],
-        warnings: [
-          { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only.' },
-          ...frames.meta.warnings.map((message) => ({ code: 'FRAME_EXTRACTION_WARNING', message })),
-          ...analysis.warnings.map((message) => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
-          ...assets
-            .filter(({ asset }) => !asset.current)
-            .map(() => ({
-              code: 'SUPERSEDED_SESSION_EVIDENCE',
-              message: 'Analysis uses an older stored frame version.',
-            })),
-        ],
-        assetVersions: versions,
-        usage: [],
-      });
+      packet.warnings = packet.warnings.slice(0, 50);
+      return evidencePacketSchema.parse(packet);
     },
+  });
+}
+
+/** Analyze already validated bytes. Persistence and input admission belong to the caller. */
+export async function analyzeFrameEvidence(frames: z.infer<typeof framesSchema>, focus: string, context: AgentToolContext, toolCallId: string) {
+  if (!context.analyzeFrames) throw new Error('Frame analysis is unavailable.');
+  if (!frames.frames.length) throw new Error('No frames are available for analysis.');
+  const videoId = frames.videoId;
+  const analysis = await context.analyzeFrames!({
+    frames,
+    focus,
+    researchQuestion: context.researchQuestion,
+    signal: context.signal,
+    modelCallId: `frame-analyst:${context.runId}:${toolCallId}`,
+  });
+  context.signal.throwIfAborted();
+  // Recheck availability after inference so deletion cannot recreate derived evidence.
+  const sourceId = `youtube:${videoId}:frames`;
+  const visual = visualAnalysisExcerpts({
+    kind: 'requested', idPrefix: `frames:${videoId}:${safeIdPart(toolCallId)}`, sourceId,
+    findings: analysis.findings.map(finding => ({ observation: finding.observation, frames: finding.timestampsMs })),
+    sharedFindings: (analysis.sharedFindings ?? []).map(finding => ({ observation: finding.observation, frames: finding.timestampsMs })),
+    timeOf: time => time,
+    assertAvailable: time => {
+      if (!frames.frames.some((frame) => frame.timestampMs === time)) throw new Error('Analyst cited an unavailable frame.');
+    },
+  });
+  return evidencePacketSchema.parse({
+    packetId: `packet:${context.runId}:${safeIdPart(toolCallId)}`,
+    kind: 'youtube_frames',
+    sources: [
+      { id: sourceId, provider: 'youtube', kind: 'frames', videoId, url: youtubeVideoUrl(videoId) },
+    ],
+    excerpts: visual.excerpts,
+    artifacts: [
+      {
+        type: 'youtube_frame_analysis',
+        title: `Frame analysis for ${videoId}`,
+        data: {
+          videoId,
+          focus,
+          sessionReused: false,
+          requestedTimestampsMs: [...frames.frames.map(frame => frame.timestampMs), ...frames.failures.map(failure => failure.timestampMs)].sort((a, b) => a - b),
+          frames: frames.frames.map(({ imageBase64, ...mapping }) => mapping),
+          failures: frames.failures,
+          provenanceVersion: VISUAL_PROVENANCE_VERSION,
+          sharedObservations: visual.sharedObservations,
+        },
+      },
+    ],
+    warnings: [
+      { code: 'SELECTED_FRAME_EVIDENCE', message: 'Observations cover selected still frames only.' },
+      ...frames.meta.warnings.map((message) => ({ code: 'FRAME_EXTRACTION_WARNING', message })),
+      ...analysis.warnings.map((message) => ({ code: 'VISUAL_ANALYSIS_WARNING', message })),
+    ],
+    assetVersions: [],
+    usage: [],
   });
 }

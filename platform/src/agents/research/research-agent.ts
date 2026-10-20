@@ -1,5 +1,7 @@
 import { inspectionRecordsForModel, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
+import { scheduleEvidenceTools } from '../runtime/evidence-scheduler';
+import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
@@ -81,7 +83,7 @@ import {
 } from './capability-router';
 
 type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research' | 'inspect_video' }>;
-const MAX_CONCURRENT_EVIDENCE_REQUESTS = 4;
+
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
 // A single inspected video is answered from its whole transcript in one call, without a
@@ -108,7 +110,13 @@ export function agentCoreReasoningEffort(
   return 'low';
 }
 
-export async function executeResearchRun(options: {
+export async function executeResearchRun(options: Parameters<typeof executeResearchRunWithAssets>[0]): Promise<void> {
+  return options.session
+    ? withRunAssetCache(options.session, options.signal, cache => executeResearchRunWithAssets(options, cache))
+    : executeResearchRunWithAssets(options);
+}
+
+async function executeResearchRunWithAssets(options: {
   session?: SessionEvidenceStore;
   classificationDeadlineAt?: number;
   onClassifying?: (deadlineAt: number) => void | Promise<void>;
@@ -142,6 +150,7 @@ export async function executeResearchRun(options: {
   modelCallPrefix: string;
   onClassificationDiagnostic?: (event: ClassificationDiagnostic) => void;
   onTranscriptDiagnostic?: TranscriptDiagnosticSink;
+  onToolActivity?: AgentToolContext['onToolActivity'];
   onExtractionDiagnostic?: AgentToolContext['onExtractionDiagnostic'];
   persistedRoute?: CapabilityRouteDecision;
   persistRoute: (decision: CapabilityRouteDecision) => void | Promise<void>;
@@ -152,8 +161,9 @@ export async function executeResearchRun(options: {
   executeEvidenceTool: (execution: EvidenceToolExecution) => Promise<EvidencePacket>;
   saveFramePreviews?: AgentToolContext['saveFramePreviews'];
   saveStoryboardPreviews?: AgentToolContext['saveStoryboardPreviews'];
+  discardPreviews?: AgentToolContext['discardPreviews'];
   finalize: (toolCallId: string, input: FinalizeAnswerInput) => Promise<AgentTurnResult>;
-}): Promise<void> {
+}, assetCache?: RunAssetCache): Promise<void> {
   const modelMetadata = { agent_run_id: options.runId };
   const modelFailover: ModelFailoverState = options.modelFailover ?? { fallback: false };
   modelFailover.beforeAttempt = () => assertModelCostAvailable(options.modelBudget);
@@ -251,12 +261,9 @@ export async function executeResearchRun(options: {
   const researchDeadlineAt = options.researchDeadlineAt ?? Date.now() + researchTimeoutMs(decision.useStoryboard);
   modelFailover.deadlineAt = researchDeadlineAt;
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
-  const limiter = new ConcurrencyLimiter(MAX_CONCURRENT_EVIDENCE_REQUESTS);
-  // Slow provider requests must not occupy the slots needed to analyze assets
-  // that have already arrived. The research context also limits active models.
-  const analysisLimiter = new ConcurrencyLimiter(4);
+
   const upstream = createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset) : upstream, decision);
+  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     runModel(options.env, options.sessionAffinity, 'low', {
       ...modelMetadata,
@@ -271,6 +278,7 @@ export async function executeResearchRun(options: {
   const context: AgentToolContext = {
     traceToolCall: options.traceToolCall,
     session: options.session,
+    assetCache,
     deliverEvidence: options.deliverEvidence,
     deliverSavedAssets: options.deliverSavedAssets,
     evidenceRunRecords: options.evidenceRunRecords,
@@ -278,10 +286,12 @@ export async function executeResearchRun(options: {
     userMessageId: options.userMessageId,
     currentDate: options.currentDate,
     maxVideoSeconds: agentMaxVideoSeconds(options.env),
-    provider,
+    ...scheduleEvidenceTools(provider, options.executeEvidenceTool, options.signal),
     saveFramePreviews: options.saveFramePreviews,
+    onToolActivity: options.onToolActivity,
     onExtractionDiagnostic: options.onExtractionDiagnostic,
     saveStoryboardPreviews: options.saveStoryboardPreviews,
+    discardPreviews: options.discardPreviews,
     analyzeFrames: decision.useStoryboard === false ? undefined : (input) => createFrameAnalyst(
       runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
@@ -290,21 +300,13 @@ export async function executeResearchRun(options: {
       runModel(options.env, options.sessionAffinity, 'low', { ...modelMetadata, model_role: 'visual_analyst', capability: decision.route }),
       options.modelBudget,
     )(input),
+    analyzeTranscript: transcriptAnalyst,
     transcriptPolicy: decision.route === 'inspect_video' ? { mode: 'complete_transcript' } : {
       mode: 'contextual_analysis',
       researchQuestion: options.message,
       analyze: transcriptAnalyst,
     },
     signal: options.signal,
-    executeEvidenceTool: (execution) => (execution.toolName.startsWith('analyze_') ? analysisLimiter : limiter).run(() => {
-      options.signal.throwIfAborted();
-      return options.executeEvidenceTool({ ...execution, execute: async () => {
-        options.signal.throwIfAborted();
-        const packet = await execution.execute();
-        options.signal.throwIfAborted();
-        return packet;
-      } });
-    }),
     finalize: options.finalize,
   };
 
@@ -508,7 +510,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         const reserveProviderCalls = options.decision.route === 'topic_research'
           ? Math.max(0, researchVideoTarget(options.decision) - transcriptVideos.size) : 0;
         try { await executeGetVideo({ videoId }, { ...trackedContext, signal,
-          executeEvidenceTool: execution => trackedContext.executeEvidenceTool({ ...execution, reserveProviderCalls }),
+          executeEvidenceTool: execution => trackedContext.executeEvidenceTool({ ...execution, signal, reserveProviderCalls }),
         }, `analysis-metadata:${videoId}`); }
         catch { signal.throwIfAborted(); }
         return transcriptSourceContext(videoId, [...evidence.values()]);
@@ -583,6 +585,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       }
       : options.context.transcriptPolicy,
+    analyzeTranscript: options.context.analyzeTranscript ? input => analystLimiter.run(async () => {
+      input.signal.throwIfAborted();
+      return options.context.analyzeTranscript!({ ...input, conversationHistory: options.conversationHistory,
+        sourceContext: { ...input.sourceContext, ...await analysisSourceContext(input.videoId, input.signal) } });
+    }) : undefined,
     analyzeFrames: options.context.analyzeFrames ? (input) => analystLimiter.run(async () => {
       input.signal.throwIfAborted();
       return options.context.analyzeFrames!({ ...input, conversationHistory: options.conversationHistory,
@@ -658,7 +665,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         ...trackedContext, signal,
         executeEvidenceTool: (execution) => {
           signal.throwIfAborted();
-          return trackedContext.executeEvidenceTool({ ...execution, execute: async () => {
+          return trackedContext.executeEvidenceTool({ ...execution, signal, execute: async () => {
             signal.throwIfAborted();
             const packet = await execution.execute();
             signal.throwIfAborted();

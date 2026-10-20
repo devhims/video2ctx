@@ -12,9 +12,9 @@ export class YouTubeRequestCoordinator extends DurableObject<Env> {
     this.coordinator = new YouTubeCacheCoordinatorCore(this.env);
   }
 
-  async getOrLoad(requestJson: string): Promise<string> {
+  async getOrLoad(requestJson: string, onReady?: (valueJson: string) => Promise<void>): Promise<string> {
     const request = parseRequest(requestJson);
-    return JSON.stringify(await this.coordinator.getOrLoad(request));
+    return JSON.stringify(await this.coordinator.getOrLoad(request, onReady ? value => onReady(JSON.stringify(value)) : undefined));
   }
 }
 

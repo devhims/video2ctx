@@ -8,6 +8,8 @@ const inputValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.numbe
 export const agentToolTraceSchema = z.object({
   toolCallId: z.string(), name: z.string(), operation: z.string(),
   status: z.enum(['running', 'completed', 'failed', 'interrupted']),
+  activity: z.enum(['loading', 'analyzing', 'finishing']).optional(),
+  analysis: z.enum(['completed', 'failed']).optional(),
   startedAt: z.number(), finishedAt: z.number().optional(),
   input: z.record(z.string(), inputValue),
   output: z.object({
@@ -43,7 +45,7 @@ const inputKeys = new Set(['query', 'videoId', 'channelId', 'playlistId', 'langu
 export function toolTrace(row: {
   tool_call_id: string; tool_name: string; operation: string; semantic_key: string;
   status: 'running' | 'completed' | 'failed'; created_at: number; updated_at: number; result_json: string | null;
-}, terminal: boolean) {
+}, terminal: boolean, activity?: 'loading' | 'analyzing' | 'finishing') {
   const input: Record<string, z.infer<typeof inputValue>> = {};
   try {
     const parsed = JSON.parse(row.semantic_key.slice(row.semantic_key.indexOf(':') + 1));
@@ -58,7 +60,14 @@ export function toolTrace(row: {
   // A reset can leave assets saved without a terminal tool result. Do not
   // turn that missing result into a failure or use updated_at as a finish time.
   const status = terminal && row.status === 'running' ? 'interrupted' : row.status;
+  const combined = ['get_video_transcript', 'get_video_frames', 'get_video_storyboard'].includes(row.tool_name);
+  const analysis = combined && packet?.success
+    ? packet.data.warnings.some(warning => warning.code === 'RETRIEVAL_ANALYSIS_FAILED') ? 'failed'
+      : packet.data.artifacts.some(artifact => ['youtube_transcript_analysis', 'youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)) ? 'completed' : undefined
+    : undefined;
   return agentToolTraceSchema.parse({
+    ...(combined && activity ? { activity } : {}),
+    ...(analysis ? { analysis } : {}),
     toolCallId: row.tool_call_id, name: row.tool_name, operation: row.operation,
     status, startedAt: row.created_at, ...(row.status !== 'running' ? { finishedAt: row.updated_at } : {}), input,
     ...(packet?.success ? { output: {
