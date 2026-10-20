@@ -1,4 +1,3 @@
-import { inspectionRecordsForModel, type InspectionRecords } from './inspection-records';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
@@ -66,8 +65,6 @@ export interface SessionAccess {
   brief(): SessionBrief;
   readAsset?(version: string): Promise<{ asset: SessionAsset; value: unknown } | null>;
   evidence(version?: string): EvidencePacket[];
-  /** Bounded structural inspection metadata, without observations or caption text. */
-  inspectionRecords?(videoIds: readonly string[]): InspectionRecords;
   readTranscriptEvidence?(version: string): Promise<{ packets: EvidencePacket[]; nextOffset?: number }>;
   /** The over-limit error for a saved transcript, from stored metadata only. */
   transcriptOverLimit?(version: string): VideoTooLongError | undefined;
@@ -808,13 +805,6 @@ export class SessionEvidenceStore implements SessionAccess {
       .exec<{ generation: number }>('SELECT generation FROM session_run_generations WHERE run_id=?', runId)
       .toArray()[0]?.generation ?? this.generation();
   }
-  /** Structural saved inspection metadata, without delivering source observations. */
-  inspectionRecords(videoIds: readonly string[]): InspectionRecords {
-    const subjects = new Set(videoIds);
-    return inspectionRecordsForModel(this.evidence().filter(packet =>
-      packet.sources.some(source => source.videoId && subjects.has(source.videoId))));
-  }
-
   /** Increments on every memory write or removal, so a model snapshot can be revalidated before commit. */
   memoryVersion() {
     return this.sql.exec<{ version: number }>('SELECT version FROM session_memory_state WHERE id=1').one().version;

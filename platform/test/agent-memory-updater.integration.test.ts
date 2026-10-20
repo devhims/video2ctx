@@ -489,18 +489,6 @@ test('an accepted process answer cannot seed fabricated frame history as questio
   await runInDurableObject(runtime, async instance => {
     const question = 'Why 3:20 instead of 3:30?';
     const runId = await addRun(instance, 1, question);
-    const asset = await internals(instance).sessionStore.retrieve('frame:abcdefghijk:640:200000', 'frame', 'abcdefghijk', false,
-      async () => ({ value: { videoId: 'abcdefghijk', frames: [{ timestampMs: 200000 }], failures: [], meta: { partial: false, warnings: [] } }, cacheStatus: 'miss' }),
-      () => ({ timestampMs: 200000 }));
-    internals(instance).sessionStore.savePacket({ assetVersions: asset.assetVersions, packetId: 'saved-frame-history', kind: 'youtube_frames',
-      sources: [{ id: 'frames', provider: 'youtube', kind: 'frames', videoId: 'abcdefghijk' }],
-      excerpts: [{ id: 'observation', sourceId: 'frames', text: 'Paid image observation', startMs: 200000 }],
-      artifacts: [{ type: 'youtube_frame_analysis', data: { requestedTimestampsMs: [200000],
-        frames: [{ timestampMs: 200000, mimeType: 'image/jpeg', width: 640, height: 360 }], failures: [] } }], warnings: [], usage: [] });
-    const structural = internals(instance).sessionStore.inspectionRecords(['abcdefghijk']);
-    expect(structural.items[0]?.inputTimestampsMs).toEqual([200000]);
-    expect(JSON.stringify(structural)).not.toContain('Paid image observation');
-    expect(internals(instance).sessionStore.inspectionRecords(['xxxxxxxxxxx']).items).toEqual([]);
     vi.spyOn(internals(instance), 'memoryUpdaterModel').mockReturnValue(deltaModel([
       upsert('question', 'sampled frames', 'The agent sampled 0:55, 1:10, 1:30 and 3:20.'),
       upsert('context', 'sampling', 'The transcript guided those selections.', { userQuote: question }),

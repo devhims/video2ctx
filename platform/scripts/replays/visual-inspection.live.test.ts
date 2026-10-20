@@ -10,6 +10,7 @@ import { generateMemoryDelta } from '../../src/agents/runtime/memory-updater';
 import { extractFrames } from '../../../packages/youtube-skills/src/watch/workflow';
 import { SessionEvidenceStore, versionEvidencePacket } from '../../src/agents/runtime/session-evidence';
 import { metadataForConversation } from '../../src/agents/runtime/conversation-metadata';
+import { isInspectionPacket } from '../../src/agents/runtime/inspection-records';
 import { estimateModelCostMicros } from '../../src/agents/runtime/model-budget';
 import { buildAgentTurnResult } from '../../src/agents/finalizer';
 import { compactAgentResult } from '../../src/agents/response';
@@ -106,7 +107,7 @@ function save() {
 async function run(message: string, session: SessionEvidenceStore, history: any[] = []) {
   const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
   let result: any; let route: any; let costMicros = 0;
-  const packets: any[] = []; const tools: any[] = [];
+  const packets: any[] = []; const delivered: any[] = []; const tools: any[] = [];
   const records = new Map(); const completed = new Map(); let providerCalls = 0;
   const started = Date.now();
   await executeResearchRun({ ...identity, env: production, session, message, sessionAffinity: `replay:${identity.runId}`,
@@ -120,6 +121,7 @@ async function run(message: string, session: SessionEvidenceStore, history: any[
     evidenceRunRecords: () => records,
     deliverEvidence: (incoming, source) => {
       for (const packet of incoming) records.set(packet.packetId, { ...records.get(packet.packetId), deliveredSources: [source] });
+      delivered.push(...incoming);
       return { admitted: incoming, withheld: [] };
     },
     executeEvidenceTool: async execution => {
@@ -160,7 +162,9 @@ async function run(message: string, session: SessionEvidenceStore, history: any[
     parentId: history.at(-1)?.agentMessageId ?? null, createdAt: started });
   session.search.upsertHistory({ id: identity.agentMessageId, role: 'assistant', text: result.answer, ordinal: history.length * 2 + 1,
     parentId: identity.userMessageId, createdAt: Date.now() });
-  return { row, result, turn: { ...identity, user: message, assistant: result.answer, resourceIds: [videoId], metadata, evidence } };
+  // As the runtime does, a turn's inspection records are the visual packets it produced or received.
+  const inspection = [...packets, ...delivered].filter(isInspectionPacket);
+  return { row, result, turn: { ...identity, user: message, assistant: result.answer, resourceIds: [videoId], metadata, evidence, inspection } };
 }
 
 describe('local live replay of session 694a77da', () => {

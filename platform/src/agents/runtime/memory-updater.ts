@@ -111,6 +111,17 @@ const UNSAFE = [
 const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
+ * The span of `question` that `quote` names, ignoring case and whitespace differences, in
+ * the user's original letters with whitespace collapsed. Undefined when absent or under 3 characters.
+ */
+function userWords(question: string, quote: string): string | undefined {
+  const words = normalize(quote);
+  if (words.length < 3) return undefined;
+  const pattern = new RegExp(words.split(' ').map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'iu');
+  return question.match(pattern)?.[0].replace(/\s+/g, ' ');
+}
+
+/**
  * Convert decoded output into storable changes. Authorization uses only the
  * projection the model received. Unsupported or unsafe entries are dropped, never repaired.
  * Findings still require semantic grounding by the model. User context and questions
@@ -121,7 +132,6 @@ export function validateMemoryDelta(
 ): { changes: MemoryChange[]; rejected: number } {
   const citationIds = new Set(projection.citations.map(citation => citation.id));
   const shown = new Set(projection.memories.map(memory => memory.id));
-  const question = normalize(projection.question);
   const seen = new Set<string>();
   const changes: MemoryChange[] = [];
   let rejected = Math.max(0, delta.changes.length - MAX_CHANGES);
@@ -140,12 +150,10 @@ export function validateMemoryDelta(
           if (change.text && evidenceIds.length && evidenceIds.every(evidenceId => citationIds.has(evidenceId)))
             accepted = { action: 'upsert', kind: 'finding', topic: change.topic, text: change.text, evidenceIds };
         } else {
-          // Store the actual user text, never an assistant-authored sampling history.
-          const quote = normalize(change.userQuote);
-          const match = quote.length >= 3 ? question.indexOf(quote) : -1;
-          if (!evidenceIds.length && match >= 0 && !UNSAFE.some(pattern => pattern.test(change.userQuote))) {
-            accepted = { action: 'upsert', kind: change.kind, topic: change.topic,
-              text: change.userQuote, evidenceIds: [] };
+          // Store the user's own words from the question, never the model's copy of them.
+          const quote = userWords(projection.question, change.userQuote);
+          if (!evidenceIds.length && quote && !UNSAFE.some(pattern => pattern.test(quote))) {
+            accepted = { action: 'upsert', kind: change.kind, topic: change.topic, text: quote, evidenceIds: [] };
           }
         }
       }

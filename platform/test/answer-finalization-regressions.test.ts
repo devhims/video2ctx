@@ -59,3 +59,20 @@ it('answers a workflow follow-up using older history without a second model', as
   for (const value of ['old-answer-id', 'Earlier I cited 3:20', 'nextOffset', 'searched-old-answer', 'alternative at 3:30', 'budgetTruncated']) expect(prompt).toContain(value);
 });
 
+
+it('gives workflow follow-ups the inspection records of this conversation branch only', async () => {
+  const finalizer = new MockLanguageModelV4({ doGenerate: async () => response(answer('The recorded reason was the presenter introduction.')) });
+  const options = runtime(finalizer);
+  const withReason = (packetId: string, reason: string): EvidencePacket => ({ ...frame, packetId, artifacts: [{ type: 'youtube_frame_retrieval',
+    data: { ...frame.artifacts[0]!.data, selections: [{ timestampMs: 200000, reason, evidenceIds: [] }] } }] });
+  options.message = 'Why did you pick 3:20 in abcdefghijk?';
+  options.conversationHistory = [{ userMessageId: 'u1', agentMessageId: 'a1', user: 'What is she holding?', assistant: 'A microphone.',
+    resourceIds: ['abcdefghijk'], inspection: [withReason('branch-frames', 'Presenter introduced at 3:20')] }];
+  // Another conversation's saved inspection of the same video must not be offered as this branch's reason.
+  options.session = { brief: () => ({ assets: [], memories: [] }), evidence: () => [withReason('other-conversation', 'Foreign reason')],
+    readEvidence: vi.fn() } as unknown as NonNullable<typeof options.session>;
+  await executeResearchRun(options);
+  const prompt = JSON.stringify(finalizer.doGenerateCalls[0]!.prompt);
+  expect(prompt).toContain('Presenter introduced at 3:20');
+  expect(prompt).not.toContain('Foreign reason');
+});

@@ -74,6 +74,7 @@ import {
 import { buildAgentTurnResult } from './finalizer';
 import type { EvidenceRunRecord } from './runtime/model-evidence';
 import { metadataForConversation, unambiguousMetadataRecords, evidenceWithConversationMetadata } from './runtime/conversation-metadata';
+import { isInspectionPacket } from './runtime/inspection-records';
 import { AGENT_MODEL_ID, createAgentModel, estimateAgentModelCostMicros } from './model';
 import { normalizeAgentExecutionError } from './runtime/agent-errors';
 import {
@@ -1506,6 +1507,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           ))
         ORDER BY p.created_at ASC
       `.map(row => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
+      // Structural inspection history stays on this branch: only packets this turn produced or received.
+      const inspection = admittedPackets.filter(isInspectionPacket);
       const evidence = citedEvidenceForConversation(
         result.citations, admittedPackets, this.sessionStore.evidenceForCitations([...citedIds]),
       );
@@ -1536,6 +1539,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         assistant: result.warnings.some(warning=>warning.code==='SESSION_EVIDENCE_DELETED') ? '[Historical answer omitted because its supporting evidence was deleted.]' : result.answer,
         ...(metadata.length ? { metadata } : {}),
         ...(evidence.length ? { evidence } : {}),
+        ...(inspection.length ? { inspection } : {}),
         resourceIds: [...new Set([
           ...extractYouTubeVideoIds(parent.execution_message ?? parent.message),
           ...result.citations.flatMap((citation) => citation.videoId ? [citation.videoId] : []),

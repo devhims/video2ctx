@@ -1,9 +1,19 @@
 import type { EvidencePacket } from '../contracts';
 import { evidencePacketForModel, evidenceDeliveryOperation, type EvidenceRunRecord } from './model-evidence';
 
-/** Structural inspection history is available even on history-only routes. It carries
- * no image observations or caption text, so it never bypasses paid evidence admission.
- * Presence establishes a saved record, not which prior turn used it or why it was chosen.
+const INSPECTION_ARTIFACT_TYPES = new Set(['youtube_frame_analysis', 'youtube_frame_retrieval', 'youtube_storyboard_analysis', 'youtube_storyboard_retrieval']);
+
+/** A frame or storyboard retrieval or analysis, which an inspection record can describe. */
+export function isInspectionPacket(packet: EvidencePacket): boolean {
+  return packet.artifacts.some(artifact => INSPECTION_ARTIFACT_TYPES.has(artifact.type));
+}
+
+/**
+ * Structural inspection history for the current turn and the earlier turns on its
+ * conversation branch, available even on history-only routes. Records carry image
+ * positions and coverage, never image observations or caption text. Selection reasons are
+ * notes the agent wrote in those same turns, like its earlier answers in conversation history.
+ * Packets are taken newest first, deduplicated, and bounded once.
  */
 export function inspectionRecordsForModel(packets: readonly EvidencePacket[], records?: ReadonlyMap<string, EvidenceRunRecord>) {
   const seen = new Set<string>(); let remaining = 12_000; let omittedRecords = 0;
@@ -11,14 +21,14 @@ export function inspectionRecordsForModel(packets: readonly EvidencePacket[], re
   for (const packet of packets) {
     if (seen.has(packet.packetId)) continue;
     seen.add(packet.packetId);
-    if (!packet.artifacts.some(artifact => ['youtube_frame_analysis', 'youtube_frame_retrieval', 'youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type))) continue;
+    if (!isInspectionPacket(packet)) continue;
     const item = inspectionRecord(packet, records?.get(packet.packetId));
     if (!item.frameCoverage && !item.visualCoverage) continue;
     const size = JSON.stringify(item).length;
     if (size > remaining) { omittedRecords++; continue; }
     remaining -= size; items.push(item);
   }
-  return { scope: 'saved_session_inspection_records' as const, items, omittedRecords };
+  return { scope: 'conversation_branch_inspection_records' as const, items, omittedRecords };
 }
 
 function inspectionRecord(packet: EvidencePacket, record?: EvidenceRunRecord) {
@@ -41,23 +51,6 @@ function inspectionRecord(packet: EvidencePacket, record?: EvidenceRunRecord) {
     observationTimes: packet.excerpts.slice(0, 60).map(excerpt => ({ startMs: excerpt.startMs, endMs: excerpt.endMs })),
     observationTimesOmitted: Math.max(0, packet.excerpts.length - 60),
   };
-}
-export type InspectionRecords = ReturnType<typeof inspectionRecordsForModel>;
-
-
-/** Merge structural inventories without allowing older duplicates or extra views to expand the bound. */
-export function mergeInspectionRecords(views: readonly InspectionRecords[], records?: ReadonlyMap<string, EvidenceRunRecord>): InspectionRecords {
-  const seen = new Set<string>(); const items: InspectionRecords['items'] = []; let remaining = 12_000;
-  let omittedRecords = views.reduce((sum, view) => sum + view.omittedRecords, 0);
-  for (const view of views) for (const item of view.items) {
-    if (seen.has(item.packetId)) continue;
-    seen.add(item.packetId);
-    const entry = { ...item, operationThisTurn: evidenceDeliveryOperation(records?.get(item.packetId)) };
-    const size = JSON.stringify(entry).length;
-    if (size > remaining) { omittedRecords++; continue; }
-    remaining -= size; items.push(entry);
-  }
-  return { scope: 'saved_session_inspection_records', items, omittedRecords };
 }
 
 /** Interpret structural records only when explaining recorded inspection activity. */

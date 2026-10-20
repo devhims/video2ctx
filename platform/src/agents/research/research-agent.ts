@@ -1,4 +1,4 @@
-import { inspectionRecordsForModel, mergeInspectionRecords, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
+import { inspectionRecordsForModel, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
@@ -233,7 +233,7 @@ export async function executeResearchRun(options: {
         onFailure: code => finalizationFailures.push(code),
         deadlineAt, message: options.message, conversationHistory: options.conversationHistory, decision, historyPage, sessionBrief,
         context: { traceToolCall: options.traceToolCall, runId: options.runId, currentDate: options.currentDate, signal,
-          session: options.session, evidenceRunRecords: options.evidenceRunRecords, finalize: (id, input) => persist(() => options.finalize(id, input)) },
+          evidenceRunRecords: options.evidenceRunRecords, finalize: (id, input) => persist(() => options.finalize(id, input)) },
         evidence: handoffEvidence, handoffGaps, researchContext: options.recoveredResearchContext
           ? options.prepareResearchContext?.(options.recoveredResearchContext) ?? options.recoveredResearchContext : undefined, toolFailures: options.recoveredToolFailures,
         modelBudget: options.modelBudget, modelCallPrefix: options.modelCallPrefix, onDraft: options.onDraft,
@@ -411,6 +411,8 @@ export async function runResearchAgentWithModel(
   });
 }
 
+const VISUAL_TOOL_NAMES: readonly string[] = ['get_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'analyze_video_storyboard'];
+
 async function runResearchAgentWithModelWithinDeadline(options: {
   researchDeadlineAt: number;
   finalizationDeadlineAt?: number;
@@ -438,7 +440,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !['get_video_storyboard','get_video_frames','analyze_video_frames','analyze_video_storyboard'].includes(name) || options.decision.useStoryboard !== false);
+    .filter(name => !VISUAL_TOOL_NAMES.includes(name) || options.decision.useStoryboard !== false);
   // With a configured finalizer, research only signals completion. The finalizer writes
   // the answer, so research never composes one that would be discarded.
   const completionTool = options.finalizationModel ? COMPLETE_RESEARCH_TOOL_NAME : FINALIZE_ANSWER_TOOL_NAME;
@@ -709,7 +711,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             '',
             `Activated capability: ${capability.id}`,
             capability.instructions(completionTool),
-            ...(visualEvidenceLevel(options.decision) !== 'none' ? [VISUAL_INSPECTION_SKILL] : []),
+            // The skill accompanies exactly the visual tools this model can call.
+            ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
             ...(options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
@@ -877,7 +880,7 @@ async function runUnifiedFinalizer(options: {
   model: LanguageModel;
   message: string;
   decision: CapabilityRouteDecision;
-  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'traceToolCall' | 'currentDate' | 'evidenceRunRecords' | 'session'>;
+  context: Pick<AgentToolContext, 'runId' | 'signal' | 'finalize' | 'traceToolCall' | 'currentDate' | 'evidenceRunRecords'>;
   sessionBrief?: ReturnType<typeof sessionBriefForModel>;
   historyPage?: ReturnType<NonNullable<NonNullable<AgentToolContext['session']>['readHistory']>>;
   evidence: EvidencePacket[];
@@ -902,15 +905,17 @@ async function runUnifiedFinalizer(options: {
     : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepared = finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds,
     options.context.evidenceRunRecords?.(options.evidence.map(packet => packet.packetId)));
-  const subjects = new Set([...options.evidence.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])),
-    ...(options.conversationHistory?.at(-1)?.resourceIds ?? []), ...extractYouTubeVideoIds(options.message)]);
-  const savedInspection = [...options.evidence].reverse().concat(conversationEvidence([], options.conversationHistory ?? []))
-    .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
-  const structural = options.context.session?.inspectionRecords?.([...subjects]);
-  const inspectionRecords = mergeInspectionRecords([inspectionRecordsForModel(savedInspection), ...(structural ? [structural] : [])],
-    options.context.evidenceRunRecords?.([...savedInspection.map(packet => packet.packetId), ...(structural?.items.map(item => item.packetId) ?? [])]));
   const intent = options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
+  // Inspection records come only from this turn and the earlier turns on this conversation
+  // branch, never from other conversations that share the session's saved assets.
+  const subjects = new Set([...options.evidence.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])),
+    ...(options.conversationHistory?.at(-1)?.resourceIds ?? []), ...extractYouTubeVideoIds(options.message)]);
+  const inspected = conversational ? [] : [...options.evidence].reverse()
+    .concat([...options.conversationHistory ?? []].reverse().flatMap(turn => [...turn.inspection ?? [], ...turn.evidence ?? []]))
+    .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
+  const inspectionRecords = inspected.length
+    ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -922,12 +927,6 @@ async function runUnifiedFinalizer(options: {
   const contextIncomplete = missingInputs.length > 0 || historyPage?.nextOffset !== undefined;
   console.log(JSON.stringify({ event: 'agent_finalizer_context_plan', runId: options.context.runId,
     plan: 'answer_only', missingInputs }));
-  const answerContext = { historyPage, contextIncomplete, missingInputs, session: options.sessionBrief,
-    researchContext: options.researchContext, conversationHistory: conversationHistoryForModel(options.conversationHistory),
-    evidenceOmittedFromContext: prepared.omitted,
-    applicationDurationNotice: currentDurationNotice() || undefined,
-    providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
-      ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure) };
   let feedback: { errors: unknown; previousCandidate?: string } | undefined;
   // Recovery can reach an expired main deadline. Use the remaining retry allowance.
   const firstAttempt = Date.now() >= options.deadlineAt ? 1 : 0;
@@ -1025,12 +1024,20 @@ async function runUnifiedFinalizer(options: {
           ...(options.context.currentDate ? [options.context.currentDate] : []),
         ].join('\n'),
         messages: [{role:'user',content:JSON.stringify({
-          ...answerContext, comparisonVideoIds,
+          historyPage, contextIncomplete, missingInputs, comparisonVideoIds,
+          session: options.sessionBrief,
+          researchContext: options.researchContext,
+          conversationHistory: conversationHistoryForModel(options.conversationHistory),
           request: options.message,
           responseIntent: intent,
           numberedItemCount,
           route: options.decision,
           evidence: prepared.evidence,
+          // Saved list packets that could not fit even as counts. Budgeted together with evidence.
+          evidenceOmittedFromContext: prepared.omitted,
+          applicationDurationNotice: currentDurationNotice() || undefined,
+          providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
+            ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure),
           inspectionRecords,
           validationFeedback: feedback,
         })}, {role:'user',content:'Return the complete structured answer from the supplied inputs now. Do not promise future work or request another inspection. State any remaining gap.'}],
@@ -1098,7 +1105,8 @@ async function runUnifiedFinalizer(options: {
       });
       usageRecorded = true;
       validationStage = 'output_schema';
-      // Structure and inspection-evidence failures share the single repair allowance.
+      // Only an unrenderable answer is retried. Everything below either repairs the
+      // answer deterministically or attaches a note; none of it rejects the answer.
       const salvaged = finishReason === 'length' ? await salvageTruncatedAnswer(candidate, outputSchema) : undefined;
       if (finishReason === 'length' && !salvaged) throw new Error('Final answer was truncated by the output token limit.');
       const output = salvaged?.output ?? result.output;

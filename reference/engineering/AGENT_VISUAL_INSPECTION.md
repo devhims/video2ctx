@@ -6,7 +6,7 @@ Our application controls tool access, saved evidence, frame mappings, structured
 
 ## Workflow
 
-The internal [visual-inspection skill](../../platform/src/agents/research/skills/visual-inspection/SKILL.md) is included when the research route allows visual evidence. It reuses adequate saved analysis, uses publisher timestamps or captions to locate subjects, and uses storyboard overviews when the location is unclear. Exact frames resolve small text, conflicting names or inadequate thumbnails. Captions and storyboards are retrieved when they help answer the question.
+The internal [visual-inspection skill](../../platform/src/agents/research/skills/visual-inspection/SKILL.md) is included whenever the research model has visual tools, so the guidance and the tools are always offered together. It reuses adequate saved analysis, uses publisher timestamps or captions to locate subjects, and uses storyboard overviews when the location is unclear. Exact frames resolve small text, conflicting names or inadequate thumbnails. Captions and storyboards are retrieved when they help answer the question.
 
 For example, if a user asks what the presenter holds at 3:20, the answer describes the visible object and cites that frame. It omits unsolicited statements about checking transcripts or inspecting frames. If the user later asks why 3:20 was chosen, the answer uses the recorded selection notes and states when the reason is unknown.
 
@@ -31,9 +31,9 @@ sequenceDiagram
 ## Boundaries
 
 - Exact-frame selection notes bind one reason to each requested timestamp. Locating references must have been delivered for the same video. Historical requests without notes remain readable; a requested workflow explanation should state that the reasons are unknown.
-- Structural inspection records have a 12,000-character content budget. They contain image positions, coverage and operation labels, without image observations or caption text. They do not bypass paid evidence admission.
+- Structural inspection records come only from the current turn and the earlier turns on its conversation branch: the frame and storyboard packets each turn produced or received. Other conversations that share the session's saved assets never contribute. Records have a 12,000-character content budget and contain image positions, coverage, operation labels and the agent's own selection notes, without image observations or caption text.
 - The finalizer writes the answer from prepared context. Existing schema, citation, budget and deadline checks remain. Invalid structured answers retain the existing single repair allowance. No additional reviewer model, reviewer prompt or semantic review rejection runs before persistence.
-- Context and unresolved-question memories store verified user quotes, including quote-only upserts with omitted or empty generated text. Findings require nonempty text and admitted citations. Updater version 2 skips pending version 1 jobs; existing memory is not backfilled.
+- Context and unresolved-question memories store the matching words from the user's question in the user's own letters, including quote-only upserts with omitted or empty generated text. Findings require nonempty text and admitted citations. Updater version 2 skips pending version 1 jobs; existing memory is not backfilled.
 - `SKILL.md` is authoritative. The platform build checks its generated TypeScript bundle.
 
 ## Local replay

@@ -94,6 +94,13 @@ describe('bounded projection authorizes proposals (reviewer round 1, finding 1)'
       .changes[0]?.text).toBe('only care about the second video');
   });
 
+  it('stores the user\'s own letters even when the model changes case or spacing', () => {
+    const question = 'Note: I only care about the  iPhone 15 Pro (2023)\nreview.';
+    expect(validate([change({ kind: 'context', topic: 'device', userQuote: 'i only care about the IPHONE 15 pro (2023) review' })], input({ question }))
+      .changes[0]?.text).toBe('I only care about the iPhone 15 Pro (2023) review');
+    expect(validate([change({ kind: 'context', topic: 'device', userQuote: 'care about the iPhone 16' })], input({ question })).changes).toEqual([]);
+  });
+
   it('rejects fabricated frame history stored as an unresolved question', () => {
     const question = 'Why 3:20 instead of 3:30?';
     const invented = 'The agent sampled 0:55, 1:10, 1:30 and 3:20.';

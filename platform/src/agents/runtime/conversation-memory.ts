@@ -13,6 +13,8 @@ export interface ConversationTurn {
   metadata?: EvidencePacket[];
   /** Persisted source packets cited by this turn, separate from assistant claims. */
   evidence?: EvidencePacket[];
+  /** Frame and storyboard packets this turn produced or received, for structural inspection records only. */
+  inspection?: EvidencePacket[];
 }
 
 export interface LinkedConversationTurn extends ConversationTurn {
@@ -112,7 +114,7 @@ export function conversationAssistantMessage(turn: ConversationTurn, metadataByR
 
 /** Prior statements resolve follow-ups; they are not independently verified evidence. */
 export function conversationHistoryForModel(history: readonly ConversationTurn[] = []) {
-  return history.map(({ userMessageId, agentMessageId, user, assistant }) => ({ userMessageId, agentMessageId, user, assistant }));
+  return history.map(({ user, assistant }) => ({ user, assistant }));
 }
 
 /** Reuse only source packets cited along the selected ancestor chain. */

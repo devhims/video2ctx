@@ -1,4 +1,4 @@
-import { inspectionRecordsForModel, mergeInspectionRecords } from '../src/agents/runtime/inspection-records';
+import { inspectionRecordsForModel } from '../src/agents/runtime/inspection-records';
 import type { EvidencePacket } from '../src/agents/contracts';
 
 const packet: EvidencePacket = { packetId: 'board', kind: 'youtube_storyboard', sources: [{ id: 'video', provider: 'youtube', kind: 'storyboard', videoId: 'abcdefghijk' }],
@@ -13,11 +13,13 @@ it('distinguishes all image inputs from the subset of reported observation times
   expect(JSON.stringify(view)).not.toContain('Private paid observation');
 });
 
-it('bounds and deduplicates structural records across saved and inherited views', () => {
+it('bounds records once and counts each omitted packet once, even when repeated across turns', () => {
   const many = Array.from({ length: 100 }, (_, i) => ({ ...packet, packetId: `board-${i}` }));
-  const view = inspectionRecordsForModel(many);
-  expect(view.omittedRecords).toBeGreaterThan(0);
-  const merged = mergeInspectionRecords([view, view]);
-  expect(new Set(merged.items.map(item => item.packetId)).size).toBe(merged.items.length);
-  expect(JSON.stringify(merged.items).length).toBeLessThan(12500);
+  const once = inspectionRecordsForModel(many);
+  const repeated = inspectionRecordsForModel([...many, ...many]);
+  expect(once.omittedRecords).toBeGreaterThan(0);
+  expect(repeated).toEqual(once);
+  expect(new Set(repeated.items.map(item => item.packetId)).size).toBe(repeated.items.length);
+  expect(repeated.items.length + repeated.omittedRecords).toBe(100);
+  expect(JSON.stringify(repeated.items).length).toBeLessThan(12500);
 });
