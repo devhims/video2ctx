@@ -186,7 +186,7 @@ cascades to both their account and ledger.
 ## Deleted-account credit continuity
 
 Migration `0026_deleted_accounts.sql` replaces the signup grant trigger. A new
-email receives the one-time signup grant, raised to 5,000 by migration 0027. A returning email receives an
+email receives the one-time signup grant, raised to 5,000 by migration 0028. A returning email receives an
 `adjustment` with operation ID `returning-account:v1`, equal to the newest
 recorded deletion's unclaimed carryover balance. Database insertion order, rather
 than wall-clock timestamps, determines the latest record using a monotonic
