@@ -22,6 +22,12 @@ const profiles: Record<string, { modelId: string; providerOptions: ProviderOptio
     providerOptions: { fireworks: { thinking: { type: 'enabled', budgetTokens: FINALIZER_THINKING_TOKENS } } },
     pricing: { uncachedInputUsdPerMillionTokens: .275, cachedInputUsdPerMillionTokens: .00875, outputUsdPerMillionTokens: .825 },
   },
+  // Visual analyst. Low reasoning keeps image answers fast; most of its cost is image input.
+  'kimi-k3': {
+    modelId: 'accounts/fireworks/models/kimi-k3',
+    providerOptions: { fireworks: { reasoningEffort: 'low' } },
+    pricing: { uncachedInputUsdPerMillionTokens: 3.75, cachedInputUsdPerMillionTokens: .375, outputUsdPerMillionTokens: 18.75 },
+  },
   'gpt-oss-120b': {
     modelId: 'accounts/fireworks/models/gpt-oss-120b',
     providerOptions: { fireworks: { reasoningEffort: 'low' } },

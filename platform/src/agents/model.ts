@@ -34,6 +34,30 @@ export function createClassifierFallbackModel(
     sessionAffinity, 'low', { ...metadata, model_role: 'classifier', model_variant: 'fallback' });
 }
 
+/** Visual model fallback state per run, so its outage switch persists across analyses without moving other roles. */
+const visualFailoverStates = new WeakMap<ModelFailoverState, ModelFailoverState>();
+
+/**
+ * The configured visual model has its own outage switch: a stall moves only visual analysis
+ * to DeepSeek, and a GLM outage leaves the visual model in use. The run deadline, cost check
+ * and diagnostics stay shared, including deadline updates made after the model was created.
+ */
+function visualFailoverState(shared: ModelFailoverState): ModelFailoverState {
+  let state = visualFailoverStates.get(shared);
+  if (state) return state;
+  let fallback = false;
+  state = {
+    get fallback() { return fallback; },
+    set fallback(value) { fallback = value; },
+    get deadlineAt() { return shared.deadlineAt; },
+    set deadlineAt(value) { shared.deadlineAt = value; },
+    get onDiagnostic() { return shared.onDiagnostic; },
+    get beforeAttempt() { return shared.beforeAttempt; },
+  };
+  visualFailoverStates.set(shared, state);
+  return state;
+}
+
 export function createAgentModel(
   env: Env,
   sessionAffinity: string,
@@ -57,15 +81,19 @@ function configuredAgentModel(
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
-  const provider: string | undefined = backup ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
+  // Frame and storyboard analysts use their own Fireworks model when one is configured.
+  const visualModel = metadata?.model_role === 'visual_analyst' ? env.AGENT_VISUAL_MODEL?.trim() : undefined;
+  const useVisualProfile = !backup && Boolean(visualModel);
+  const provider: string | undefined = backup || useVisualProfile ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
   const useFireworks = provider === 'fireworks';
   if (provider && !['workers-ai', 'fireworks'].includes(provider)) {
     throw new Error(`Unsupported agent ${isFinalizer ? 'finalizer' : useTextProfile ? 'text' : 'GLM'} provider.`);
   }
   if (useFireworks && !env.FIREWORKS_API_KEY?.trim()) throw new Error('Fireworks secret is not configured.');
-  const profile = useFireworks && (backup || isFinalizer || useTextProfile)
-    ? fireworksFinalizerProfile(backup ? CLASSIFIER_FALLBACK_TEXT_MODEL : isFinalizer ? env.AGENT_FINALIZER_MODEL : textModel) : undefined;
+  const profile = useFireworks && (backup || isFinalizer || useTextProfile || useVisualProfile)
+    ? fireworksFinalizerProfile(backup ? CLASSIFIER_FALLBACK_TEXT_MODEL : isFinalizer ? env.AGENT_FINALIZER_MODEL
+      : useVisualProfile ? visualModel : textModel) : undefined;
   const finalizerEffort = isFinalizer && !backup ? env.AGENT_FINALIZER_REASONING_EFFORT?.trim() : undefined;
   if (finalizerEffort && !['low', 'medium'].includes(finalizerEffort)) {
     throw new Error('Unsupported finalizer reasoning effort.');
@@ -117,9 +145,11 @@ function configuredAgentModel(
   } });
   // Backups run inside the same timeout policy as their primary, without a second wrapper.
   if (backup) return configured;
-  const execution = { state: failoverState ?? { fallback: false },
+  const runState = failoverState ?? { fallback: false };
+  const execution = { state: useVisualProfile ? visualFailoverState(runState) : runState,
     role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
-  if (useFireworks && model.modelId === FIREWORKS_GLM_MODEL_ID) {
+  // GLM and the configured visual model share the DeepSeek backup and its timeout policy.
+  if (useFireworks && (model.modelId === FIREWORKS_GLM_MODEL_ID || useVisualProfile)) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
     return withModelFailover({ primary: configured, fallback, ...execution });
   }
