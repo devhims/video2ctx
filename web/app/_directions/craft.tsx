@@ -225,9 +225,9 @@ export function CraftDirection() {
         <p className='craft-sub'>
           Everything your agent needs to understand videos
           <a className='craft-offer' href='/dashboard'>
-            <Gift size={16} aria-hidden='true' />
+            <Gift size={18} weight='duotone' aria-hidden='true' />
             <span>
-              Get $10 in free credits during our launch week.{' '}
+              Get <strong>$10 in free credits</strong> during our launch week.{' '}
               <span className='craft-offer-terms'>No card required.</span>
             </span>
           </a>

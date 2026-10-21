@@ -703,8 +703,6 @@ html:has(.craft) {
 .craft-sub {
   max-width: 50ch;
   margin: var(--space-lg) 0 0;
-  /* Brighter than the soft ink so the offer line under it, which shares the
-   * paragraph, reads as the quieter of the two. */
   color: color-mix(in oklch, var(--ink) 50%, var(--ink-soft));
   font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
   font-weight: 550;
@@ -715,15 +713,27 @@ html:has(.craft) {
 /* Keep the signup offer and card reassurance together. */
 .craft-offer {
   width: fit-content;
-  margin: var(--space-xs) auto 0;
-  color: var(--ink-muted);
+  max-width: 100%;
+  margin: var(--space-md) auto 0;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--rule));
+  border-radius: var(--radius-home-control);
+  background: linear-gradient(
+    110deg,
+    color-mix(in oklch, var(--accent) 14%, var(--paper)),
+    color-mix(in oklch, var(--accent) 5%, var(--paper))
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, var(--accent) 12%, transparent),
+    0 0 24px color-mix(in oklch, var(--accent) 9%, transparent);
+  color: var(--ink-soft);
   display: block;
   text-decoration: none;
   transition: color var(--control) var(--out);
   font-family: var(--font-home-body);
   font-size: 0.8125rem;
-  font-weight: 450;
-  line-height: 1.35;
+  font-weight: 500;
+  line-height: 1.5;
   text-wrap: balance;
 }
 
@@ -731,6 +741,12 @@ html:has(.craft) {
   display: inline-block;
   margin-right: 0.35em;
   vertical-align: -0.2em;
+  color: color-mix(in oklch, var(--accent) 72%, var(--ink));
+}
+
+.craft-offer strong {
+  color: var(--ink);
+  font-weight: 650;
 }
 
 .craft-offer-terms {
