@@ -34,7 +34,7 @@ async function seed(name: string, status = 'failed') {
       user_message_id,agent_message_id,turn_ordinal,message,status,phase,
       credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
       VALUES (${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},
-      1,'Private prompt',${status},'executing',1000,0,0,0)`;
+      1,'Private prompt',${status},'executing',5000,0,0,0)`;
     instance.sql`INSERT INTO agent_tool_calls (run_id,tool_call_id,semantic_key,tool_name,operation,status,credits,created_at,updated_at)
       VALUES (${runId},'tool','meaning','get_video','video','completed',1,0,0)`;
   });
@@ -165,7 +165,7 @@ test('migrates stored agent message IDs without changing answers, history, or pa
     const saved = JSON.stringify({ runId, conversationId, userMessageId: row.user_message_id,
       assistantMessageId: agentMessageId, intent: 'inspect_video', answer: 'The saved answer.',
       confidence: 'medium', citations: [], artifacts: [], warnings: [],
-      billing: { creditsCharged: 1, creditsRemaining: 999 } });
+      billing: { creditsCharged: 1, creditsRemaining: 4999 } });
     instance.sql`UPDATE agent_runs SET result_json = ${saved}, billing_settled = 1 WHERE id = ${runId}`;
     instance.sql`INSERT INTO agent_tool_calls
       (run_id,tool_call_id,semantic_key,tool_name,operation,status,result_json,credits,created_at,updated_at)
@@ -190,7 +190,7 @@ test('migrates stored agent message IDs without changing answers, history, or pa
       fiberId: 'migration-followup', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const followup = await instance.startRun({ message: 'Explain that answer', conversationId, parentMessageId: agentMessageId },
-      { userId, creditsRemaining: 999 });
+      { userId, creditsRemaining: 4999 });
     if ('rejected' in followup) throw Error(followup.message);
     expect(followup.agentMessageId).not.toBe(agentMessageId);
     expect(instance.sql`SELECT parent_message_id FROM agent_runs WHERE id = ${followup.runId}`[0])
@@ -209,7 +209,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
     const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
       agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'A summary.',
       confidence: 'medium', citations: [], artifacts: [{ type: 'youtube_video_metadata', data: { id: 'abcdefghijk', viewCount: 999999 } }],
-      warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } });
+      warnings: [], billing: { creditsCharged: 1, creditsRemaining: 4999 } });
     instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
     const packetId = `packet:${runId}:video`;
     const packet = JSON.stringify({ packetId, kind: 'youtube_video',
@@ -221,7 +221,7 @@ test('restores provider metadata for follow-ups and validates historical citatio
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({ fiberId: 'metadata-test', name: 'agent-runtime-run',
       status: 'running', createdAt: Date.now(), accepted: true });
     const receipt = await instance.startRun({ message: 'How many views did it have?', conversationId },
-      { userId, creditsRemaining: 999 });
+      { userId, creditsRemaining: 4999 });
     if ('rejected' in receipt) throw Error(receipt.message);
     await reserveAgentCredits(env, userId, receipt.runId);
     const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
@@ -257,7 +257,7 @@ test('direct finalization restores cited frame evidence from ancestors and marks
     const saved = JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
       agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'The woman holds the microphone.',
       confidence: 'medium', citations: [citation], artifacts: [], warnings: [],
-      billing: { creditsCharged: 1, creditsRemaining: 999 } });
+      billing: { creditsCharged: 1, creditsRemaining: 4999 } });
     instance.sql`UPDATE agent_runs SET result_json = ${saved} WHERE id = ${runId}`;
     for (const id of ['frame-proof', 'uncited-proof']) {
       const packet = JSON.stringify({ packetId: id, kind: 'youtube_frames',
@@ -271,7 +271,7 @@ test('direct finalization restores cited frame evidence from ancestors and marks
       status: 'running', createdAt: Date.now(), accepted: true });
     try {
       const receipt = await instance.startRun({ message: 'Correct your earlier statement.', conversationId },
-        { userId, creditsRemaining: 999 });
+        { userId, creditsRemaining: 4999 });
       if ('rejected' in receipt) throw Error(receipt.message);
       await reserveAgentCredits(env, userId, receipt.runId);
       const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
@@ -300,10 +300,10 @@ test('direct finalization restores cited frame evidence from ancestors and marks
 test('terminal run polling settles persisted evidence exactly once', async () => {
   const { runtime, userId, runId } = await seed('agent-settle-runtime');
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed', request: { message: 'Private prompt' } });
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
   await runtime.getRun(runId);
   await runtime.reconcileRun(runId);
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
 });
 
 test('progress restores the persisted phase and tool trace without inference or private diagnostics', async () => {
@@ -344,7 +344,7 @@ test('pre-billing terminal runs are not charged retroactively', async () => {
     instance.sql`ALTER TABLE agent_runs DROP COLUMN billing_settled`;
   });
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
-  expect(await creditBalance(env, userId)).toBe(1000);
+  expect(await creditBalance(env, userId)).toBe(5000);
 });
 
 test.each(['routing', 'executing', 'finalizing'])('migrates an active legacy %s run without restarting its phase clock', async phase => {
@@ -370,7 +370,7 @@ test('recovers a D1 settlement committed before the SQLite checkpoint', async ()
   const { runtime, userId, runId } = await seed('agent-cross-store-recovery');
   await settleAgentCredits(env, userId, runId, 1, 0);
   await runtime.reconcileRun(runId);
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
   await runInDurableObject(runtime, async instance => {
     expect(instance.sql`SELECT billing_settled FROM agent_runs WHERE id = ${runId}`[0])
       .toMatchObject({ billing_settled: 1 });
@@ -389,7 +389,7 @@ test('completed responses use the settled ledger balance, not their admission sn
   // Another account operation consumes credits between admission and settlement.
   await reserveAgentCredits(env, userId, 'another-run');
   expect(await runtime.getRun(runId)).toMatchObject({ result: { billing: {
-    creditsCharged: 1, creditsRemaining: 977,
+    creditsCharged: 1, creditsRemaining: 4977,
   } } });
 });
 
@@ -397,7 +397,7 @@ test('deadline watchdog settles abandoned runs without restarting inference', as
   const { runtime, userId, runId } = await seed('agent-watchdog-runtime', 'running');
   await runtime.reconcileRun(runId);
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'failed' });
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
 });
 
 test('account deletion clears runtime data and rejects delayed admissions', async () => {
@@ -410,10 +410,10 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   await runtime.deleteAccountData();
   expect(await runtime.getRun(runId)).toBeNull();
   expect(await runtime.getConversation(conversationId, userId)).toBeNull();
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
   await runInDurableObject(runtime, async instance => {
   await expect(instance.startRun({ message: 'A delayed request', conversationId }, {
-    userId, creditsRemaining: 999,
+    userId, creditsRemaining: 4999,
   })).rejects.toThrow('deletion');
   });
   await runtime.deleteAccountData();
@@ -433,7 +433,7 @@ test('queued admissions retain their IDs and do not expire before classification
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
       fiberId: identity.runId, name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
-    const receipt = await instance.startRun(request, { userId, creditsRemaining: 1000 }, identity);
+    const receipt = await instance.startRun(request, { userId, creditsRemaining: 5000 }, identity);
     expect(receipt).toMatchObject({ request: { message: request.message }, runId: identity.runId, userMessageId: identity.userMessageId, agentMessageId: identity.agentMessageId, status: 'pending' });
     expect(fiber).toHaveBeenCalledOnce();
     fiber.mockRestore();
@@ -446,7 +446,7 @@ test('an interrupted pending admission retries startup without inserting a dupli
   const identity = { runId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID(), admittedAt: Date.now() };
   await runInDurableObject(runtime, async instance => {
     const fiber = vi.spyOn(instance, 'startFiber').mockRejectedValue(new Error('startup interrupted'));
-    const admission = { userId, creditsRemaining: 1000 };
+    const admission = { userId, creditsRemaining: 5000 };
     await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
     await expect(instance.startRun(request, admission, identity)).rejects.toThrow('startup interrupted');
     expect(fiber).toHaveBeenCalledTimes(2);
@@ -464,7 +464,7 @@ test('keyless follow-ups create new runs while an active session still rejects o
       fiberId: 'stub', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const request = { conversationId, message: 'Research five videos' };
-    const admission = { userId, creditsRemaining: 1000 };
+    const admission = { userId, creditsRemaining: 5000 };
     const first = await instance.startRun(request, admission);
     if ('rejected' in first) throw new Error(first.message);
     expect(await instance.startRun(request, admission)).toMatchObject({ rejected: true, code: 'AGENT_CONVERSATION_BUSY' });
@@ -493,7 +493,7 @@ test('saves a ready answer and settles it idempotently', async () => {
   });
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed' });
   await runtime.reconcileRun(runId);
-  expect(await creditBalance(env, userId)).toBe(999);
+  expect(await creditBalance(env, userId)).toBe(4999);
 });
 
 
@@ -582,8 +582,8 @@ test('persists an out-of-scope rejection and refunds the evidence credit reserva
       warnings: [{ code: 'OUT_OF_SCOPE', message: 'Bookings are outside YouTube video synthesis.' }] });
   });
   expect(await runtime.getRun(runId)).toMatchObject({ status: 'completed', route: { route: 'rejected' },
-    result: { intent: 'rejected', citations: [], billing: { creditsCharged: 0, creditsRemaining: 1000 } } });
-  expect(await creditBalance(env, userId)).toBe(1000);
+    result: { intent: 'rejected', citations: [], billing: { creditsCharged: 0, creditsRemaining: 5000 } } });
+  expect(await creditBalance(env, userId)).toBe(5000);
 });
 
 test('persists private transcript rejection details and retrieves only this run diagnostics', async () => {
@@ -621,7 +621,7 @@ test('retry admission preserves the failed request, original display text, and s
     const fiber = vi.spyOn(instance, 'startFiber').mockResolvedValue({
       fiberId: 'retry-test', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
-    const admission = { userId, creditsRemaining: 999 };
+    const admission = { userId, creditsRemaining: 4999 };
     const receipt = await instance.startRun({ message: 'try again', conversationId }, admission);
     expect(receipt).not.toHaveProperty('rejected');
     if ('rejected' in receipt) return;
@@ -650,7 +650,7 @@ test('does not reinterpret a new task or a retry in another session as the faile
     });
     for (const [message, session] of [['try again with a different video', conversationId], ['try again', crypto.randomUUID()]]) {
       const receipt = await instance.startRun({ message: message!, conversationId: session! },
-        { userId, creditsRemaining: 999 });
+        { userId, creditsRemaining: 4999 });
       if ('rejected' in receipt) throw Error(receipt.message);
       expect(instance.sql`SELECT execution_message FROM agent_runs WHERE id = ${receipt.runId}`[0])
         .toEqual({ execution_message: null });
@@ -666,7 +666,7 @@ test('legacy retry chains keep their original branch and completed retries remem
     // The failed request belongs to a valid completed branch.
     const result = JSON.stringify({ runId: crypto.randomUUID(), conversationId, userMessageId: crypto.randomUUID(),
       agentMessageId: parentId, intent: 'clarification', answer: 'Which comparison?',
-      confidence: 'low', citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 999 } });
+      confidence: 'low', citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 4999 } });
     instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,
       turn_ordinal,message,status,phase,result_json,credits_remaining_at_admission,created_at,updated_at)
       VALUES ('parent',${userId},${conversationId},${crypto.randomUUID()},${parentId},0,'Earlier request','completed','completed',${result},999,0,0)`;
@@ -679,7 +679,7 @@ test('legacy retry chains keep their original branch and completed retries remem
       fiberId: 'legacy-retry', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const receipt = await instance.startRun({ message: 'retry', conversationId },
-      { userId, creditsRemaining: 999 });
+      { userId, creditsRemaining: 4999 });
     if ('rejected' in receipt) throw Error(receipt.message);
     const row = instance.sql`SELECT * FROM agent_runs WHERE id = ${receipt.runId}`[0]!;
     expect(row).toMatchObject({ execution_message: 'Summarize https://youtu.be/abcdefghijk', parent_message_id: parentId });
@@ -1006,7 +1006,7 @@ test('restores display citations consistently without rewriting canonical answer
       agentMessageId: String(row.agent_message_id), intent: 'inspect_video', answer, confidence: 'medium',
       citations: ['frame:1', 'frame:2'].map(id => ({ id, sourceId: 'frames', provider: 'youtube',
         videoId: 'abcdefghijk', title: 'Saved video', excerpt: 'A person is visible.' })),
-      artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } };
+      artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 4999 } };
     const literalUser = 'Explain the literal token [cite:example].';
     instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify(result)}, message = ${literalUser} WHERE id = ${runId}`;
     const page = await instance.getConversation(conversationId, userId);
@@ -1572,9 +1572,9 @@ test('a run stores the client time zone and older runs fall back to UTC', async 
       fiberId: 'zone', name: 'agent-runtime-run', status: 'running', createdAt: Date.now(), accepted: true,
     });
     const zoned = await instance.startRun({ message: 'Videos from this year', conversationId: crypto.randomUUID(), timeZone: 'Asia/Kolkata' },
-      { userId, creditsRemaining: 1000 });
+      { userId, creditsRemaining: 5000 });
     const plain = await instance.startRun({ message: 'Videos from today', conversationId: crypto.randomUUID() },
-      { userId, creditsRemaining: 1000 });
+      { userId, creditsRemaining: 5000 });
     if ('rejected' in zoned || 'rejected' in plain) throw new Error('run rejected');
     const zone = (runId: string) => state.storage.sql.exec('SELECT time_zone FROM agent_runs WHERE id = ?', runId).toArray()[0];
     expect(zone(zoned.runId)).toEqual({ time_zone: 'Asia/Kolkata' });
@@ -1979,7 +1979,7 @@ function insertFollowUps(instance: { sql: (strings: TemplateStringsArray, ...val
     const runId = crypto.randomUUID(), userMessageId = crypto.randomUUID(), agentMessageId = crypto.randomUUID();
     const result = JSON.stringify({ runId, conversationId: options.conversationId, userMessageId, agentMessageId,
       intent: 'context_answer', answer: `Follow-up ${turn + 1}.`, confidence: 'medium', citations: options.citations,
-      artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 999 } });
+      artifacts: [], warnings: [], billing: { creditsCharged: 0, creditsRemaining: 4999 } });
     instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,parent_message_id,user_message_id,agent_message_id,
       turn_ordinal,message,status,phase,result_json,credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
       VALUES (${runId},${options.userId},${options.conversationId},${String(parent.agent_message_id)},${userMessageId},${agentMessageId},
@@ -2007,7 +2007,7 @@ test('preserves admitted cited lineage across bounded follow-ups, excludes uncit
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
     instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
       agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'A caption.', confidence: 'medium',
-      citations: [lineageCitation(cited)], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } })} WHERE id = ${runId}`;
+      citations: [lineageCitation(cited)], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 4999 } })} WHERE id = ${runId}`;
     instance.sql`INSERT INTO agent_evidence_packets VALUES (${`packet:${runId}:cited`},${runId},'tool',${packet(`packet:${runId}:cited`, cited)},2000)`;
     instance.sql`INSERT INTO agent_evidence_packets VALUES (${`packet:${runId}:uncited`},${runId},'tool',
       ${packet(`packet:${runId}:uncited`, { ...cited, id: 'transcript:uncited', text: 'Uncited caption' })},2001)`;
@@ -2046,7 +2046,7 @@ test('restores exactly delivered metadata snapshots and cited saved-session evid
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
     instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
       agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'A video.', confidence: 'medium', citations: [],
-      artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } })} WHERE id = ${runId}`;
+      artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 4999 } })} WHERE id = ${runId}`;
     instance.sql`INSERT INTO agent_evidence_packets VALUES (${`packet:${runId}:video`},${runId},'tool',${JSON.stringify({
       packetId: `packet:${runId}:video`, kind: 'youtube_video', sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: lineageVideo, title: 'A video' }],
       excerpts: [], artifacts: [{ type: 'youtube_video_metadata', title: 'A video', data: { id: lineageVideo, viewCount: 404433 } }],
@@ -2133,7 +2133,7 @@ test('conversation history carries only the inspection records its own turns pro
     const parent = instance.sql`SELECT * FROM agent_runs WHERE id = ${runId}`[0]!;
     instance.sql`UPDATE agent_runs SET result_json = ${JSON.stringify({ runId, conversationId, userMessageId: parent.user_message_id,
       agentMessageId: parent.agent_message_id, intent: 'inspect_video', answer: 'She holds a microphone.', confidence: 'medium',
-      citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 999 } })} WHERE id = ${runId}`;
+      citations: [], artifacts: [], warnings: [], billing: { creditsCharged: 1, creditsRemaining: 4999 } })} WHERE id = ${runId}`;
     const frames = (packetId: string, basis: string) => JSON.stringify({ packetId, kind: 'youtube_frames',
       sources: [{ id: 'frames', provider: 'youtube', kind: 'frames', videoId: lineageVideo }], excerpts: [], warnings: [], usage: [],
       artifacts: [{ type: 'youtube_frame_retrieval', data: { requestedTimestampsMs: [200000],

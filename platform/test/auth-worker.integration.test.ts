@@ -268,7 +268,7 @@ describe('signed Polar webhook delivery', () => {
     expect(response.status).toBe(200);
     const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
     expect(await billing.json()).toMatchObject({
-      plan: 'starter', creditBalance: 1000, canManageBilling: true, needsBillingAttention: true,
+      plan: 'starter', creditBalance: 5000, canManageBilling: true, needsBillingAttention: true,
     });
     const invalid = JSON.parse(body);
     delete invalid.data.customer;
@@ -290,7 +290,7 @@ describe('signed Polar webhook delivery', () => {
       expect(response.status).toBeLessThan(300);
       const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
       expect(await billing.json()).toMatchObject({
-        plan: 'starter', status: 'inactive', creditBalance: 1000, canManageBilling: false, needsBillingAttention: false,
+        plan: 'starter', status: 'inactive', creditBalance: 5000, canManageBilling: false, needsBillingAttention: false,
       });
     });
   }
@@ -316,7 +316,7 @@ describe('signed Polar webhook delivery', () => {
     }
     for (const browser of [payer, other]) {
       const summary = await request('/v1/billing', { headers: { cookie: browser.cookie } });
-      expect(await summary.json()).toMatchObject({ plan: 'starter', creditBalance: 1000 });
+      expect(await summary.json()).toMatchObject({ plan: 'starter', creditBalance: 5000 });
     }
     const alerts = await request('/v1/notifications', { headers: { cookie: payer.cookie } });
     expect(await alerts.json()).toMatchObject({ notifications: [] });
@@ -349,7 +349,7 @@ describe('signed Polar webhook delivery', () => {
     });
     expect(oversized.status).toBe(413);
     const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
-    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
+    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 5000, canManageBilling: false });
   });
 
   test('returns a retryable failure with safe event diagnostics when a verified event cannot be applied', async () => {
@@ -384,7 +384,7 @@ describe('signed Polar webhook delivery', () => {
       expect(response.status).toBe(400);
     }
     const billing = await request('/v1/billing', { headers: { cookie: browser.cookie } });
-    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 1000, canManageBilling: false });
+    expect(await billing.json()).toMatchObject({ plan: 'starter', creditBalance: 5000, canManageBilling: false });
   });
 });
 

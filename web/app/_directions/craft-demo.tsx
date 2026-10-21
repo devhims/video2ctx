@@ -161,7 +161,7 @@ export function CraftDemo() {
       ) : limitReached ? (
         <div className='craft-limit-message' role='alert'>
           <p>
-            You have reached the free daily limit. Sign in to get 1,000 free
+            You have reached the free daily limit. Sign in to get 5,000 free
             credits.
           </p>
           <a href='/dashboard'>Go to dashboard</a>
@@ -312,7 +312,7 @@ function CraftResult({ result }: { result: DemoResponse }) {
                   transcript.segments.length,
                 )}
                 noun='segments'
-                offer='Get the full transcript with 1,000 free credits'
+                offer='Get the full transcript with 5,000 free credits'
                 complete='Full transcript returned'
                 signedIn={signedIn}
               />
@@ -404,7 +404,7 @@ function CraftResult({ result }: { result: DemoResponse }) {
                     Math.min(visibleCommentCount, comments.comments.length),
                   )}
                   noun='comments'
-                  offer='Get them all with 1,000 free credits'
+                  offer='Get them all with 5,000 free credits'
                   complete='All returned comments shown'
                   signedIn={signedIn}
                   // The offer waits until the sample runs out, so the panel

@@ -21,7 +21,7 @@ import { CraftNav } from './craft-nav';
 import { CraftPricing } from './craft-pricing';
 import { Flashlight } from './flashlight';
 import { FlickeringPixelText } from '../_components/flickering-pixel-text';
-import { ArrowRight } from '@phosphor-icons/react/ssr';
+import { ArrowRight, Gift } from '@phosphor-icons/react/ssr';
 
 /* The three things video2ctx does, in the order the page shows them. */
 const PILLARS = [
@@ -225,12 +225,14 @@ export function CraftDirection() {
         <p className='craft-sub'>
           Everything your agent needs to understand videos
           <a className='craft-offer' href='/dashboard'>
-            <span>Get started for free</span>
-            <span className='craft-offer-terms'>
-              1,000 credits · No card required
-              <ArrowRight size={10} weight='bold' aria-hidden='true' />
-            </span>
+            <Gift size={16} aria-hidden='true' />
+            <span>Get $10 in free credits during our launch week.</span>
           </a>
+          <span className='craft-offer-details'>
+            <a href='https://www.producthunt.com/products/video2ctx?launch=video2ctx' target='_blank' rel='noopener noreferrer'>Product Hunt launch</a>
+            <span aria-hidden='true'> · </span>
+            <span>No card required</span>
+          </span>
         </p>
         <CraftDemo />
       </section>
@@ -415,7 +417,7 @@ export function CraftDirection() {
           <p>
             Ask across videos, read what’s on screen, and catch new uploads.
             <br />
-            Start with 1,000 free credits.
+            Start with $10 in free credits during our Product Hunt launch week.
           </p>
           <div className='craft-actions'>
             <CraftCloseAction />

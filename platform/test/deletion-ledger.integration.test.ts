@@ -21,7 +21,7 @@ async function history(email: string) {
 
 test.each([340,0,-7,20000])('re-registration restores %i credits and never grants another onboarding allowance', async balance => {
   const email=`carry-${balance}@example.test`, first=`carry-first-${balance}`, second=`carry-second-${balance}`, third=`carry-third-${balance}`;
-  await create(first,email); await adjust(first,balance-1000);
+  await create(first,email); await adjust(first,balance-5000);
   await deleteAccountRecords(env.DB,{id:first,email});
   const original=await history(email);
   expect(original).toHaveLength(1);
@@ -47,7 +47,7 @@ test('outstanding reservations are not refunded into another signup and database
   const email='reserved-return@example.test'; await create('reserved-first',email);
   await env.DB.prepare(`INSERT INTO billing_accounts (user_id,provider_customer_id,plan,provider_updated_at,updated_at)
     VALUES ('reserved-first','polar-customer-reference','builder',0,0)`).run();
-  await reserveCredits(credits,'reserved-first','in-flight',800,{});
+  await reserveCredits(credits,'reserved-first','in-flight',4800,{});
   await env.DB.prepare("DELETE FROM user WHERE id='reserved-first'").run();
   expect((await history(email))[0]).toMatchObject({remaining_credits:200,polar_customer_id:'polar-customer-reference',plan:'builder',deletion_source:'database',deleted_by_user_id:null});
   await create('reserved-second',email);
@@ -56,7 +56,7 @@ test('outstanding reservations are not refunded into another signup and database
 });
 
 test('ledger failure rolls back final deletion and a retry records one history row', async () => {
-  const id='failed-ledger-delete',email='failed-ledger-delete@example.test';await create(id,email);await adjust(id,-600);
+  const id='failed-ledger-delete',email='failed-ledger-delete@example.test';await create(id,email);await adjust(id,-4600);
   await env.DB.prepare(`CREATE TRIGGER test_fail_deletion_audit BEFORE INSERT ON deleted_accounts
     WHEN NEW.user_id='failed-ledger-delete' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`).run();
   try {
@@ -69,7 +69,7 @@ test('ledger failure rolls back final deletion and a retry records one history r
 });
 
 test('returning signup is atomic, does not reuse deleted IDs, and cannot duplicate normalized emails concurrently', async () => {
-  const email='atomic-return@example.test';await create('atomic-first',email);await adjust('atomic-first',-1000);
+  const email='atomic-return@example.test';await create('atomic-first',email);await adjust('atomic-first',-5000);
   await deleteAccountRecords(env.DB,{id:'atomic-first',email});
   await expect(create('atomic-first',email)).rejects.toThrow('Deleted user IDs cannot be reused');
   await env.DB.prepare(`CREATE TRIGGER test_fail_returning_credit BEFORE INSERT ON credit_ledger
@@ -88,12 +88,12 @@ test('returning signup is atomic, does not reuse deleted IDs, and cannot duplica
 
 test('real Better Auth signups get fresh identities and carry the last balance across repeated deletion', async () => {
   const email='auth-repeat-signup@example.test';const ids:string[]=[];
-  for(const expected of [1000,350,200]) {
+  for(const expected of [5000,350,200]) {
     const response=await SELF.fetch('http://auth.test/__test/session',{method:'POST',body:JSON.stringify({email})});
     expect(response.status).toBe(200);
     const {user}=await response.json() as {user:{id:string;email:string}};ids.push(user.id);
     expect(await creditBalance(credits,user.id)).toBe(expected);
-    if(expected===1000) await adjust(user.id,-650); else if(expected===350) await adjust(user.id,-150);
+    if(expected===5000) await adjust(user.id,-4650); else if(expected===350) await adjust(user.id,-150);
     await deleteAccountRecords(env.DB,user);
   }
   expect(new Set(ids).size).toBe(3); expect(await history(email)).toHaveLength(3);
@@ -116,7 +116,7 @@ test('migration preserves existing balances and backfills no invented deletion h
 
 
 test('credit carryover uses the latest recorded deletion even when deletion timestamps disagree', async () => {
-  const email='ordered-history@example.test';await create('ordered-first',email);await adjust('ordered-first',-100);
+  const email='ordered-history@example.test';await create('ordered-first',email);await adjust('ordered-first',-4100);
   await deleteAccountRecords(env.DB,{id:'ordered-first',email});
   // Simulate clock skew or a lower-precision timestamp from an older Worker.
   await env.DB.prepare("UPDATE deleted_accounts SET deleted_at=9999999999999 WHERE user_id='ordered-first'").run();
@@ -128,7 +128,7 @@ test('credit carryover uses the latest recorded deletion even when deletion time
 
 
 test('idempotent user inserts for an existing account do not fail or refill its balance', async () => {
-  const id='idempotent-existing-user',email='idempotent-existing@example.test';await create(id,email);await adjust(id,-700);
+  const id='idempotent-existing-user',email='idempotent-existing@example.test';await create(id,email);await adjust(id,-4700);
   await env.DB.prepare(`INSERT OR IGNORE INTO user (id,name,email,createdAt,updatedAt) VALUES (?,'Demo',?,0,0)`).bind(id,email).run();
   expect(await creditBalance(credits,id)).toBe(300);
 });
@@ -161,7 +161,7 @@ test('review: an authenticated admin email change cannot transfer a deleted bala
   const response=await SELF.fetch('http://auth.test/__test/session',{method:'POST',body:JSON.stringify({email:'review-email-admin@example.test'})});
   const admin=await response.json() as {user:{id:string};cookie:string};
   await env.DB.prepare("UPDATE user SET role='admin' WHERE id=?").bind(admin.user.id).run();
-  const email='review-original@example.test';await create('review-first',email);await adjust('review-first',-660);
+  const email='review-original@example.test';await create('review-first',email);await adjust('review-first',-4660);
   await deleteAccountRecords(env.DB,{id:'review-first',email});await create('review-second',email);
   const auth=createAuth(env,{waitUntil:()=>{}});
   await auth.api.adminUpdateUser({body:{userId:'review-second',data:{email:'review-renamed@example.test'}},headers:new Headers({cookie:admin.cookie,origin:env.APP_ORIGIN})});
@@ -306,7 +306,7 @@ test('a refund for a different Polar customer never changes the transferred bala
 });
 
 test('a failed successor signup rolls back its nonzero carryover claim', async () => {
-  const email='failed-transfer-claim@example.test';await create('failed-claim-first',email);await adjust('failed-claim-first',-660);
+  const email='failed-transfer-claim@example.test';await create('failed-claim-first',email);await adjust('failed-claim-first',-4660);
   await deleteAccountRecords(env.DB,{id:'failed-claim-first',email});
   await env.DB.prepare(`CREATE TRIGGER test_failed_transfer_claim BEFORE INSERT ON credit_ledger
     WHEN NEW.user_id='failed-claim-second' BEGIN SELECT RAISE(ABORT,'opening balance unavailable'); END`).run();
@@ -422,6 +422,9 @@ test.each(['unclaimed','transferred'] as const)('real migration retains legacy p
   await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES (?,'Legacy',?,0,0)").bind(id,email).run();
   await db.prepare("INSERT INTO billing_accounts (user_id,provider_customer_id,plan,status,provider_updated_at,updated_at) VALUES (?,?,'builder','active',?,?)")
     .bind(id,`customer-${id}`,newerAt,newerAt).run();
+  // This shared migration database may already have the launch trigger from an earlier case.
+  // Model the legacy account's original 1,000-credit balance explicitly.
+  await db.prepare("UPDATE credit_ledger SET credits=1000,metadata_json='{\"allowance\":1000}' WHERE user_id=? AND operation_id='onboarding:v1'").bind(id).run();
   for(const [orderId,amount,at] of [[`order-${id}`,9000,new Date('2026-10-14T10:01:00Z').getTime()],[`newer-${id}`,0,newerAt+60000]] as const) {
     await db.prepare("INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,metadata_json,created_at) VALUES (?,?,?,'grant',?,'{\"kind\":\"billing-cycle\"}',?)")
       .bind(orderId,id,`polar:order:${orderId}`,amount,at).run();

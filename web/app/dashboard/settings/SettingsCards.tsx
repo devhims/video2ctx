@@ -104,7 +104,7 @@ export function BillingCard({ promise }: { promise: NonNullable<AccountSeeds['bi
           ? 'Your subscription needs payment attention. Open Manage billing to review it or update your payment details.'
           : billing?.plan === 'builder'
           ? `${formatNumber(billing.creditBalance)} credits available from a ${formatNumber(billing.includedCredits)} credit monthly allowance.`
-          : 'Includes 1,000 onboarding credits. Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.'}</p>
+          : `${billing?.includedCredits ? `Includes ${formatNumber(billing.includedCredits)} one-time signup credits. ` : ''}Upgrade to Builder for a 10,000 credit monthly allowance and higher workspace limits.`}</p>
         {billing?.plan === 'builder' && billing.currentPeriodEnd && <p className='settings-save-status mt-3' role='status'>{billing.cancelAtPeriodEnd
           ? `Builder remains active until ${formatBillingDate(billing.currentPeriodEnd)}.`
           : `Next renewal: ${formatBillingDate(billing.currentPeriodEnd)}.`}</p>}

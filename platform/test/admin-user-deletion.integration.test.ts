@@ -301,5 +301,5 @@ test('admin search returns each deleted signup separately alongside the active a
   expect(all.filter(u=>u.status==='deleted')).toHaveLength(26);
   expect(all.filter(u=>u.status==='deleted').every(u=>u.isAdmin===false)).toBe(true);
   const history=await (await request('/admin/users?q=history-00')).json();
-  expect(history).toMatchObject({users:[{id:'history-00',status:'deleted',signedUpAt:123,deletedAt:expect.any(Number),creditBalance:1000,deletionSource:'admin',deletedByUserId:admin.user.id}],nextOffset:null});
+  expect(history).toMatchObject({users:[{id:'history-00',status:'deleted',signedUpAt:123,deletedAt:expect.any(Number),creditBalance:5000,deletionSource:'admin',deletedByUserId:admin.user.id}],nextOffset:null});
 });

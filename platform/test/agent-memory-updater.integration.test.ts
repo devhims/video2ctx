@@ -38,7 +38,7 @@ async function seed(name: string) {
     await reserveAgentCredits(env, userId, runId);
     instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,turn_ordinal,message,status,phase,
       credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
-      VALUES (${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},${turn},${message},'running','executing',1000,0,0,0)`;
+      VALUES (${runId},${userId},${conversationId},${crypto.randomUUID()},${crypto.randomUUID()},${turn},${message},'running','executing',5000,0,0,0)`;
     instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify({ route: 'finalize', responseIntent: 'context_answer', reason: 'Stored context' })},0)`;
     internals(instance).sessionStore.beginRun(runId);
     return runId;

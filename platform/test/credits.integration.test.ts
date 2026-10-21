@@ -8,6 +8,8 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { Hono } from 'hono';
 import type { App } from '../src/types';
 import { meterOperation } from '../src/lib/metering';
+import { getBillingSummary } from '../src/lib/billing';
+import { signupGrant } from '../src/lib/signup-credits';
 import {
   creditBalance,
   entitlements,
@@ -46,7 +48,7 @@ describe('credit queries on D1', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ saved: true });
     expect(response.headers.get('X-Credits-Charged')).toBe('1');
-    expect(response.headers.get('X-Credits-Remaining')).toBe('999');
+    expect(response.headers.get('X-Credits-Remaining')).toBe('4999');
     expect(tracked.calls()).toBe(2);
     expect(tracked.queries.join(' ')).not.toContain('billing_accounts');
     expect(tracked.queries.join(' ')).not.toContain("'grant'");
@@ -56,9 +58,12 @@ describe('credit queries on D1', () => {
   test('signup grants credits before any API operation and repeated reads never regrant them', async () => {
     const id = 'signup-grant';
     await createUser(id);
-    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(1000);
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(5000);
     expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
-    await addCredits(id, -1000, 'spend-signup-credits');
+    await addCredits(id, -5000, 'spend-signup-credits');
+    expect(await signupGrant(env.DB, id)).toBe(5000);
+    expect(await entitlements(env, id)).toMatchObject({ includedCredits: 5000 });
+    expect(await getBillingSummary(env, id)).toMatchObject({ includedCredits: 5000, creditBalance: 0 });
     const tracked = trackRoundTrips(env.DB);
     expect(await creditBalance({ ...env, DB: tracked.db }, id)).toBe(0);
     expect(tracked.calls()).toBe(1);
@@ -81,7 +86,7 @@ describe('credit queries on D1', () => {
       await env.DB.prepare('DROP TRIGGER test_fail_signup_grant').run();
     }
     await createUser(id);
-    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await creditBalance(env, id)).toBe(5000);
     expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
   });
 
@@ -93,7 +98,7 @@ describe('credit queries on D1', () => {
       settleCreditsAndReadBalance(env, id, 'operation', 10, 3, 0),
       settleCreditsAndReadBalance(env, id, 'operation', 10, 3, 0),
     ]);
-    expect(balances).toEqual([997, 997]);
+    expect(balances).toEqual([4997, 4997]);
     expect(await operationCount(id, 'operation', 'settle')).toBe(1);
   });
 
@@ -183,6 +188,17 @@ describe('credit queries on D1', () => {
     await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
     expect((await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all()).results).toEqual(before.results);
     expect(await creditBalance({ ...env, DB: db }, 'empty')).toBe(0);
+    // Applying the launch migration must leave historical allowances and spent balances intact.
+    expect(await entitlements({ ...env, DB: db }, 'empty')).toMatchObject({ includedCredits: 1000 });
+    expect(await getBillingSummary({ ...env, DB: db }, 'empty')).toMatchObject({ includedCredits: 1000, creditBalance: 0 });
+    await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES ('launch-user','Launch','launch@migration.test',0,0)").run();
+    expect(await signupGrant(db, 'launch-user')).toBe(5000);
+    expect(await creditBalance({ ...env, DB: db }, 'launch-user')).toBe(5000);
+    await db.prepare("DELETE FROM user WHERE id='launch-user'").run();
+    await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES ('returning-launch','Launch','launch@migration.test',0,0)").run();
+    expect(await signupGrant(db, 'returning-launch')).toBeNull();
+    expect(await entitlements({ ...env, DB: db }, 'returning-launch')).toMatchObject({ includedCredits: 0 });
+    expect(await creditBalance({ ...env, DB: db }, 'returning-launch')).toBe(5000);
   });
 
   test('manual grants update the stored balance once even when retried concurrently', async () => {
@@ -195,7 +211,7 @@ describe('credit queries on D1', () => {
       ON CONFLICT(user_id,operation_id,entry_type) DO NOTHING`
     ).bind(crypto.randomUUID(), id, Date.now()).run();
     await Promise.all([grant(), grant()]);
-    expect(await creditBalance(env, id)).toBe(11000);
+    expect(await creditBalance(env, id)).toBe(15000);
     expect(await operationCount(id, 'manual-bonus', 'adjustment')).toBe(1);
   });
 
@@ -203,7 +219,7 @@ describe('credit queries on D1', () => {
     const id = 'data-parallel-balance';
     await createUser(id);
     await setBuilderPlan(id);
-    await addCredits(id, -990, 'opening');
+    await addCredits(id, -4990, 'opening');
     const attempts = await Promise.allSettled([
       reserveCredits(env, id, 'request-a', 7, {}),
       reserveCredits(env, id, 'request-b', 7, {}),
@@ -219,16 +235,16 @@ describe('credit queries on D1', () => {
     const id = 'data-parallel-retry';
     await createUser(id);
     await Promise.all([
-      reserveCredits(env, id, 'request', 1000, {}),
-      reserveCredits(env, id, 'request', 1000, {}),
+      reserveCredits(env, id, 'request', 5000, {}),
+      reserveCredits(env, id, 'request', 5000, {}),
     ]);
     expect(await creditBalance(env, id)).toBe(0);
     expect(await operationCount(id, 'request', 'reserve')).toBe(1);
     await Promise.all([
-      releaseCredits(env, id, 'request', 1000),
-      releaseCredits(env, id, 'request', 1000),
+      releaseCredits(env, id, 'request', 5000),
+      releaseCredits(env, id, 'request', 5000),
     ]);
-    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await creditBalance(env, id)).toBe(5000);
   });
 
   test('a failed balance update rolls back the ledger insertion', async () => {
@@ -242,7 +258,7 @@ describe('credit queries on D1', () => {
       await expect(reserveCredits(env, id, 'failed-request', 7, {})).rejects.toThrow('test balance failure');
       expect(await operationCount(id, 'failed-request', 'reserve')).toBe(0);
       expect((await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?')
-        .bind(id).first())?.available_credits).toBe(1000);
+        .bind(id).first())?.available_credits).toBe(5000);
     } finally {
       await env.DB.prepare('DROP TRIGGER test_reject_balance_update').run();
     }
@@ -257,7 +273,7 @@ describe('credit queries on D1', () => {
         VALUES ('rollback-entry',?,'rollback','adjustment',10000,0)`).bind(id),
       env.DB.prepare('INSERT INTO credit_accounts (user_id) VALUES (?)').bind('nonexistent-user'),
     ])).rejects.toThrow();
-    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await creditBalance(env, id)).toBe(5000);
     expect(await operationCount(id, 'rollback', 'adjustment')).toBe(0);
   });
 
@@ -292,7 +308,7 @@ describe('credit queries on D1', () => {
     ) INSERT INTO credit_ledger (id,user_id,operation_id,entry_type,credits,created_at)
       SELECT 'history-' || n, ?, 'history-' || n, 'adjustment', 1, 0 FROM entries`).bind(id).run();
     const result = await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).all();
-    expect(result.results).toEqual([{ available_credits: 2000 }]);
+    expect(result.results).toEqual([{ available_credits: 6000 }]);
     expect(result.meta.rows_read).toBeLessThanOrEqual(3);
   });
 
@@ -300,9 +316,9 @@ describe('credit queries on D1', () => {
     const id = 'agent-settlement';
     await createUser(id);
     await Promise.all([reserveAgentCredits(env, id, 'run'), reserveAgentCredits(env, id, 'run')]);
-    expect(await creditBalance(env, id)).toBe(1000 - AGENT_CREDIT_RESERVE);
+    expect(await creditBalance(env, id)).toBe(5000 - AGENT_CREDIT_RESERVE);
     await Promise.all([settleAgentCredits(env, id, 'run', 3, 42), settleAgentCredits(env, id, 'run', 3, 42)]);
-    expect(await creditBalance(env, id)).toBe(997);
+    expect(await creditBalance(env, id)).toBe(4997);
     expect(await reserveAgentCredits(env, id, 'run')).toBe(false);
     expect(await operationCount(id, 'agent:run', 'reserve')).toBe(1);
     expect(await operationCount(id, 'agent:run', 'settle')).toBe(1);
@@ -314,14 +330,14 @@ describe('credit queries on D1', () => {
     await creditBalance(env, id);
     await settleAgentCredits(env, id, 'cancelled-run', 0, 0);
     expect(await reserveAgentCredits(env, id, 'cancelled-run')).toBe(false);
-    expect(await creditBalance(env, id)).toBe(1000);
+    expect(await creditBalance(env, id)).toBe(5000);
   });
 
   test('parallel agent runs cannot overdraw an account', async () => {
     const id = 'agent-parallel-balance';
     await createUser(id);
     await setBuilderPlan(id);
-    await addCredits(id, AGENT_CREDIT_RESERVE - 1000, 'test:agent-funds');
+    await addCredits(id, AGENT_CREDIT_RESERVE - 5000, 'test:agent-funds');
     const attempts = await Promise.allSettled([
       reserveAgentCredits(env, id, 'run-a'), reserveAgentCredits(env, id, 'run-b'),
     ]);
@@ -336,15 +352,15 @@ describe('credit queries on D1', () => {
     const userId = 'payment-starter-credit-user';
     await createUser(userId);
 
-    await expect(creditBalance(env, userId)).resolves.toBe(1_000);
-    await expect(creditBalance(env, userId)).resolves.toBe(1_000);
+    await expect(creditBalance(env, userId)).resolves.toBe(5_000);
+    await expect(creditBalance(env, userId)).resolves.toBe(5_000);
     await expect(operationCount(userId, 'onboarding:v1', 'grant')).resolves.toBe(1);
   });
 
   test('reads preserve adjustments instead of topping the account back up', async () => {
     const userId = 'payment-legacy-credit-user';
     await createUser(userId);
-    await addCredits(userId, -904, 'test:remaining-balance');
+    await addCredits(userId, -4904, 'test:remaining-balance');
 
     await expect(creditBalance(env, userId)).resolves.toBe(96);
   });
@@ -352,7 +368,7 @@ describe('credit queries on D1', () => {
   test('does not grant Builder credits outside a paid-order webhook', async () => {
     const userId = 'payment-builder-credit-user';
     await createUser(userId);
-    await addCredits(userId, -600, 'test:builder-balance');
+    await addCredits(userId, -4600, 'test:builder-balance');
     await setBuilderPlan(userId);
 
     await expect(entitlements(env, userId)).resolves.toMatchObject({
@@ -369,25 +385,25 @@ describe('credit queries on D1', () => {
 
     await reserveCredits(env, userId, 'operation:one', 200, { kind: 'test' });
     await reserveCredits(env, userId, 'operation:one', 200, { kind: 'test' });
-    await expect(creditBalance(env, userId)).resolves.toBe(800);
+    await expect(creditBalance(env, userId)).resolves.toBe(4800);
 
     await settleCredits(env, userId, 'operation:one', 200, 120, 500);
     await settleCredits(env, userId, 'operation:one', 200, 120, 500);
-    await expect(creditBalance(env, userId)).resolves.toBe(880);
+    await expect(creditBalance(env, userId)).resolves.toBe(4880);
 
     await reserveCredits(env, userId, 'operation:two', 100, { kind: 'test' });
     await releaseCredits(env, userId, 'operation:two', 100);
     await releaseCredits(env, userId, 'operation:two', 100);
-    await expect(creditBalance(env, userId)).resolves.toBe(880);
+    await expect(creditBalance(env, userId)).resolves.toBe(4880);
   });
 
   test('rejects a reservation larger than the available balance', async () => {
     const userId = 'payment-insufficient-credit-user';
     await createUser(userId);
 
-    await expect(reserveCredits(env, userId, 'operation:too-large', 1_001, {}))
+    await expect(reserveCredits(env, userId, 'operation:too-large', 5_001, {}))
       .rejects.toMatchObject({ status: 402, code: 'INSUFFICIENT_CREDITS' });
-    await expect(creditBalance(env, userId)).resolves.toBe(1_000);
+    await expect(creditBalance(env, userId)).resolves.toBe(5_000);
   });
 });
 

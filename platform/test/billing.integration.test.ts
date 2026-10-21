@@ -33,11 +33,11 @@ describe('Polar payment queries on D1', () => {
     await addCredits(userId, 20_000, 'admin:checkout-balance');
     await syncCustomerState(env, activeCustomerState(userId));
     await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
-      plan: 'builder', creditsReady: false, creditBalance: 21_000,
+      plan: 'builder', creditsReady: false, creditBalance: 25_000,
     });
     await applyPaidOrder(env, paidOrder(userId, 'checkout-confirmed-order', new Date('2026-08-25T00:00:00Z')));
     await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
-      plan: 'builder', creditsReady: true, creditBalance: 21_000,
+      plan: 'builder', creditsReady: true, creditBalance: 25_000,
     });
     await env.DB.prepare("UPDATE credit_ledger SET created_at=? WHERE user_id=? AND operation_id GLOB 'polar:order:*'")
       .bind(new Date('2026-07-20T00:00:00Z').getTime(), userId).run();
@@ -163,7 +163,7 @@ describe('Polar payment queries on D1', () => {
 
   test.each(['paid', 'refund', 'paid and refund'])('preserves history when a newer customer snapshot arrives before %s', async (kind) => {
     const userId = `portal-out-of-order-${kind.replaceAll(' ', '-')}`;
-    await createUser(userId);
+    await createUser(userId, 1000);
     const customer = activeCustomerState(userId);
     customer.timestamp = new Date('2026-08-26T00:00:00Z');
     customer.data.activeSubscriptions = [];
@@ -187,7 +187,7 @@ describe('Polar payment queries on D1', () => {
   for (const kind of ['paid', 'refund'] as const) test.each(['valid', 'ownership mismatch', 'different customer'])(
     `repairs only history on an already acknowledged ${kind} replay: %s`, async (scenario) => {
       const userId = `portal-replay-${kind}-${scenario.replaceAll(' ', '-')}`;
-      await createUser(userId);
+      await createUser(userId, 1000);
       const customer = activeCustomerState(userId);
       customer.timestamp = new Date('2026-08-26T00:00:00Z');
       customer.data.activeSubscriptions = [];
@@ -221,12 +221,12 @@ describe('Polar payment queries on D1', () => {
     customer.data.activeSubscriptions = [];
     await syncCustomerState(env, customer);
     await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
-      plan: 'starter', canManageBilling: true, needsBillingAttention: true, creditBalance: 1000,
+      plan: 'starter', canManageBilling: true, needsBillingAttention: true, creditBalance: 5000,
     });
     await syncSubscriptionState(env, subscriptionUpdate(userId, 'canceled', '2026-08-25T00:00:00Z'));
     await syncSubscriptionState(env, subscriptionUpdate(userId, status, '2026-08-24T12:00:00Z'));
     await expect(getBillingSummary({ ...workerEnv, ...env }, userId)).resolves.toMatchObject({
-      plan: 'starter', canManageBilling: false, needsBillingAttention: false, creditBalance: 1000,
+      plan: 'starter', canManageBilling: false, needsBillingAttention: false, creditBalance: 5000,
     });
   });
 
@@ -284,7 +284,7 @@ describe('Polar payment queries on D1', () => {
         await expect(account(userId)).resolves.toEqual(before);
         await expect(balance(userId)).resolves.toBe(beforeBalance);
         await expect(account(payer)).resolves.toBeNull();
-        await expect(balance(payer)).resolves.toBe(1000);
+        await expect(balance(payer)).resolves.toBe(5000);
         await expect(operationCount(userId, `polar:order:${order.data.id}`)).resolves.toBe(0);
         await expect(operationCount(userId, `polar:refund:${order.data.id}`)).resolves.toBe(0);
         expect(logs).toHaveBeenCalledOnce();
@@ -314,12 +314,12 @@ describe('Polar payment queries on D1', () => {
       customer.data.activeSubscriptions[0]!.metadata = { app_user_id: userId };
       await syncCustomerState(env, customer);
       await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
-      await expect(balance(userId)).resolves.toBe(1000);
+      await expect(balance(userId)).resolves.toBe(5000);
       const paid = paidOrder(userId, 'identity-correct-order', new Date('2026-08-25T00:00:00.000Z'));
       paid.data.metadata = { app_user_id: userId };
       await applyPaidOrder(env, paid);
       await expect(balance(userId)).resolves.toBe(10_000);
-      await expect(balance(payer)).resolves.toBe(1000);
+      await expect(balance(payer)).resolves.toBe(5000);
     } finally { logs.mockRestore(); }
   });
 
@@ -330,7 +330,7 @@ describe('Polar payment queries on D1', () => {
     state.data.activeSubscriptions[0]!.metadata = { app_user_id: userId };
     await syncCustomerState(env, state);
     await expect(account(userId)).resolves.toMatchObject({ plan: 'builder', status: 'active' });
-    await expect(balance(userId)).resolves.toBe(1000);
+    await expect(balance(userId)).resolves.toBe(5000);
   });
 
   test('uses the current configured 10,000-credit Builder allowance', async () => {
@@ -347,7 +347,7 @@ describe('Polar payment queries on D1', () => {
   test('tops up Builder credits and makes Polar retries idempotent', async () => {
     const userId = 'payment-paid-user';
     await createUser(userId);
-    await addCredits(userId, 6_500, 'test:opening-balance');
+    await addCredits(userId, 2_500, 'test:opening-balance');
     const payload = paidOrder(userId, 'paid-order');
     payload.data.metadata = { app_user_id: userId };
 
@@ -367,7 +367,7 @@ describe('Polar payment queries on D1', () => {
   test('preserves balances already above the Builder allowance', async () => {
     const userId = 'payment-carry-user';
     await createUser(userId);
-    await addCredits(userId, 24_000, 'test:opening-balance');
+    await addCredits(userId, 20_000, 'test:opening-balance');
 
     await applyPaidOrder(env, paidOrder(userId, 'carry-order'));
 
@@ -410,11 +410,13 @@ function subscriptionUpdate(userId: string, status: WebhookSubscriptionUpdatedPa
   return { ...event, type: 'subscription.updated', timestamp: new Date(timestamp), data: { ...event.data, status } };
 }
 
-async function createUser(userId: string): Promise<void> {
+async function createUser(userId: string, openingCredits = 5000): Promise<void> {
   const timestamp = Date.now();
   await env.DB.prepare(
     'INSERT INTO user (id,name,email,emailVerified,createdAt,updatedAt) VALUES (?,?,?,?,?,?)'
   ).bind(userId, userId, `${userId}@test.local`, 1, timestamp, timestamp).run();
+  // Legacy replay scenarios start with the pre-launch allowance.
+  if (openingCredits !== 5000) await addCredits(userId, openingCredits - 5000, 'test:legacy-signup');
 }
 
 async function addCredits(userId: string, credits: number, operationId: string): Promise<void> {

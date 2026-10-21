@@ -689,37 +689,47 @@ html:has(.craft) {
   text-wrap: balance;
 }
 
-/* The free offer, set as quietly as the open-source note it replaced so it
- * reads as a footnote to the claim. It is a link because "Get started" reads
- * as an action, and a phrase that looks clickable should go somewhere. */
+/* Signup and Product Hunt are separate links within the hero offer. */
 .craft-offer {
   width: fit-content;
   margin: var(--space-xs) auto 0;
   color: var(--ink-muted);
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
+  gap: 0.35em;
   text-decoration: none;
   transition: color var(--control) var(--out);
   font-family: var(--font-home-body);
   font-size: 0.8125rem;
   font-weight: 450;
   line-height: 1.35;
+  text-wrap: balance;
+}
+
+.craft-offer > svg {
+  flex-shrink: 0;
+}
+
+.craft-offer-details {
+  display: block;
+  margin-top: 0.35em;
+  color: var(--ink-muted);
+  font-family: var(--font-home-body);
+  font-size: 0.75rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
+
+.craft-offer-details a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.craft-offer-details > span:last-child {
   white-space: nowrap;
-}
-
-/* Two phrases that only ever break between each other, so a narrow screen
- * gets two clean lines instead of "1,000" stranded from "credits". */
-.craft-offer-terms {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35em;
-}
-
-.craft-offer-terms::before {
-  content: '·';
-  margin-inline: 0.35em 0;
 }
 
 /* ------------------------------------------------------------------ form */
@@ -3475,14 +3485,6 @@ html:has(.craft) {
 
   .craft-examples [data-phones='hidden'] {
     display: none;
-  }
-
-  .craft-offer {
-    flex-direction: column;
-  }
-
-  .craft-offer-terms::before {
-    content: none;
   }
 
   .craft-run-sources,

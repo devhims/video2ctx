@@ -54,10 +54,14 @@ interface NewAccount {
 export async function queueWelcomeEmail(env: Env, account: NewAccount): Promise<boolean> {
   if (account.email.endsWith('@example.test')) return false;
 
+  const { signupGrant } = await import('./signup-credits');
+  const credits = await signupGrant(env.DB, account.id);
+  if (credits === null) return false;
+
   const { renderWelcomeEmail } = await import('./email-templates');
   const content = await renderWelcomeEmail({
     recipientName: account.name,
-    starterCredits: Number(env.STARTER_ONBOARDING_CREDITS),
+    starterCredits: credits,
     dashboardUrl: `${env.APP_ORIGIN}/dashboard`,
     agentUrl: `${env.APP_ORIGIN}/dashboard/sessions`,
   });

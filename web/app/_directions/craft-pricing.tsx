@@ -19,7 +19,7 @@ const PLANS: PricingPlan[] = [
     name: 'Starter',
     price: 'Free',
     cadence: 'No card required',
-    credits: '1,000 credits once',
+    credits: '5,000 credits once during launch week',
     description: 'Explore complete video data in the dashboard and API before committing.',
     features: [
       'Dashboard and API access',

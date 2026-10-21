@@ -6,8 +6,8 @@
 
 const FAQ = [
   {
-    q: 'How far do 1,000 free credits go?',
-    a: 'Most reads cost 1 credit, and a fresh search or comments request costs 2. In our tests, a cited Video Agent answer about one video used 4 credits and a three-video comparison used 3, so the free grant covers a few hundred questions. No card is needed, and there is one grant per account.',
+    q: 'How far do the free launch credits go?',
+    a: 'The launch gift includes 5,000 credits. Most reads cost 1 credit, and a fresh search or comments request costs 2. In our tests, a cited Video Agent answer about one video used 4 credits and a three-video comparison used 3, but the cost varies with the question and the work needed. No card is needed, and there is one grant per account.',
   },
   {
     q: 'Do I need an account?',

@@ -7,6 +7,7 @@ import type { WebhookSubscriptionUpdatedPayload } from '@polar-sh/sdk/models/com
 import type { CreditEnv } from './entitlements';
 import { ApiError, now, sha256 } from './http';
 import { paymentReceipt, refundReconciliationStatements } from './credit-continuity';
+import { signupAllowanceSql } from './signup-credits';
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
@@ -58,7 +59,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
   const row = await env.DB.prepare(`
     SELECT b.plan,b.status,b.has_payment_history,b.provider_customer_id,
       b.provider_subscription_id,b.cancel_at_period_end,b.current_period_start,b.current_period_end,
-      COALESCE(c.available_credits,0) AS credit_balance,
+      COALESCE(c.available_credits,0) AS credit_balance, ${signupAllowanceSql} AS onboarding_credits,
       EXISTS (SELECT 1 FROM billing_subscription_states WHERE user_id=u.id
         AND status IN ('incomplete','past_due','unpaid')) AS needs_attention,
       EXISTS (SELECT 1 FROM credit_ledger WHERE user_id=u.id
@@ -69,7 +70,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
       LEFT JOIN credit_accounts c ON c.user_id=u.id WHERE u.id=?
   `).bind(userId).first<BillingAccountRow & {
-    credit_balance: number; needs_attention: number; credits_ready: number;
+    credit_balance: number; needs_attention: number; credits_ready: number; onboarding_credits: number | null;
   }>();
   const plan = row?.plan === 'builder' ? 'builder' : 'starter';
   const needsBillingAttention = row?.needs_attention === 1;
@@ -77,7 +78,8 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     plan,
     status: row?.status ?? 'inactive',
     creditBalance: row?.credit_balance ?? 0,
-    includedCredits: Number(plan === 'builder' ? env.BUILDER_MONTHLY_CREDITS : env.STARTER_ONBOARDING_CREDITS),
+    includedCredits: plan === 'builder' ? Number(env.BUILDER_MONTHLY_CREDITS)
+      : row?.onboarding_credits ?? Number(env.STARTER_ONBOARDING_CREDITS),
     cancelAtPeriodEnd: row?.cancel_at_period_end === 1,
     currentPeriodStart: row?.current_period_start ?? null,
     currentPeriodEnd: row?.current_period_end ?? null,

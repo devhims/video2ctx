@@ -30,15 +30,15 @@ describe('admin credit grants', () => {
     const before = await request(`/v1/admin/credits?user=${encodeURIComponent(customer.user.email.toUpperCase())}`, { headers: headers(admin.cookie) });
     expect(before.status).toBe(200);
     expect(before.headers.get('cache-control')).toBe('no-store');
-    expect(await before.json()).toMatchObject({ user: { ...customer.user, creditBalance: 1000 }, grants: [] });
+    expect(await before.json()).toMatchObject({ user: { ...customer.user, creditBalance: 5000 }, grants: [] });
     const response = await post({ ...input, adminUserId: customer.user.id });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ user: { id: customer.user.id, creditBalance: 11000 }, replayed: false,
+    expect(await response.json()).toMatchObject({ user: { id: customer.user.id, creditBalance: 15000 }, replayed: false,
       grant: { id: input.requestId, credits: 10000, reason: '', adminUserId: admin.user.id } });
     const after = await request(`/v1/admin/credits?user=${customer.user.id}`, { headers: headers(admin.cookie) });
-    expect(await after.json()).toMatchObject({ user: { creditBalance: 11000 }, grants: [{ id: input.requestId, reason: '', credits: 10000 }] });
+    expect(await after.json()).toMatchObject({ user: { creditBalance: 15000 }, grants: [{ id: input.requestId, reason: '', credits: 10000 }] });
     const balance = await env.DB.prepare('SELECT SUM(credits) AS balance FROM credit_ledger WHERE user_id=?').bind(customer.user.id).first<{ balance: number }>();
-    expect(balance?.balance).toBe(11000);
+    expect(balance?.balance).toBe(15000);
   });
 
   test('concurrent duplicate submissions grant once; changed payloads and cross-user reuse are rejected', async () => {
@@ -51,8 +51,8 @@ describe('admin credit grants', () => {
     expect((await post({ ...input, reason: 'Different reason' })).status).toBe(409);
     const other = await session();
     expect((await post({ ...input, userId: other.user.id, reason: 'Test allowance' })).status).toBe(409);
-    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 11000 });
-    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(other.user.id).first()).toMatchObject({ available_credits: 1000 });
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 15000 });
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(other.user.id).first()).toMatchObject({ available_credits: 5000 });
   });
 
   test('validates credits and account existence and rejects untrusted origins and non-admin credentials', async () => {
@@ -72,7 +72,7 @@ describe('admin credit grants', () => {
     }
     await env.DB.prepare("UPDATE user SET role='user' WHERE id=?").bind(admin.user.id).run();
     expect((await post(input)).status).toBe(403);
-    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 1000 });
+    expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(customer.user.id).first()).toMatchObject({ available_credits: 5000 });
   });
 });
 
