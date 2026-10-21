@@ -123,51 +123,33 @@ describe('configured visual model', () => {
     signal: new AbortController().signal, modelCallId: 'frames', focus: 'Describe the boxes',
     frames: { videoId: 'abcdefghijk', frames: [{ imageBase64: images[0]!, timestampMs: 1000, mimeType: 'image/jpeg', width: 200, height: 100 }],
       failures: [], meta: { partial: false, warnings: [] } } });
-  const respond = (stalled: string, requests: Array<{ model: string; reasoning_effort?: string; service_tier?: string }>) =>
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String(init?.body)); requests.push(body);
-      if (body.model === stalled) return new Promise(() => {});
-      return sseResponse(body.model, JSON.stringify(output));
-    });
 
-  it('moves only visual analysis to DeepSeek when the visual model stalls, for the rest of the run', async () => {
+  it('fails over to DeepSeek through the run-wide switch, which a restored run keeps', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const requests: Array<{ model: string; reasoning_effort?: string; service_tier?: string }> = [];
-    respond(kimi, requests);
-    const state: ModelFailoverState = { fallback: false };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); requests.push(body);
+      if (body.model === kimi) return new Promise(() => {});
+      return sseResponse(body.model, JSON.stringify(output));
+    });
+    const events: string[] = [];
+    const state: ModelFailoverState = { fallback: false, onDiagnostic: event => events.push(event.event) };
     const first = analyzeFrames(state);
     await vi.advanceTimersByTimeAsync(10_001);
     expect(await first).toEqual(output);
     expect(requests.map(request => request.model)).toEqual([kimi, deepseek]);
     expect(requests[0]).toMatchObject({ reasoning_effort: 'low', service_tier: 'priority' });
-    // Research keeps GLM; the run-level switch belongs to the visual model alone.
+    // One switch for the run: the persisted fallback event and every later role agree.
+    expect(state.fallback).toBe(true);
+    expect(events).toContain('fallback');
     await generateText({ model: createAgentModel(kimiEnv, 'visual', 'low', { model_role: 'agent_core' }, state), prompt: 'continue' });
-    expect(requests.at(-1)!.model).toBe(FIREWORKS_GLM_MODEL_ID);
-    expect(state.fallback).toBe(false);
-    // A later analysis in the same run goes straight to the backup instead of waiting on the stalled model again.
-    expect(await analyzeFrames(state)).toEqual(output);
+    expect(requests.at(-1)!.model).toBe(deepseek);
+    // A run restored from that event starts visual analysis on the backup instead of the stalled model.
+    const restored: ModelFailoverState = { fallback: events.includes('fallback') };
+    expect(await analyzeFrames(restored)).toEqual(output);
     expect(requests.at(-1)!.model).toBe(deepseek);
     expect(requests.filter(request => request.model === kimi)).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('keeps the visual model during a GLM outage and shares the run deadline', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const requests: Array<{ model: string }> = [];
-    respond(FIREWORKS_GLM_MODEL_ID, requests);
-    const state: ModelFailoverState = { fallback: false };
-    const research = generateText({ model: createAgentModel(kimiEnv, 'visual', 'low', { model_role: 'agent_core' }, state), prompt: 'research' });
-    await vi.advanceTimersByTimeAsync(10_001);
-    await research;
-    expect(state.fallback).toBe(true);
-    expect(await analyzeFrames(state)).toEqual(output);
-    expect(requests.at(-1)!.model).toBe(kimi);
-    // An expired run deadline stops the visual model as it stops every other role.
-    state.deadlineAt = Date.now() - 1;
-    await expect(analyzeFrames(state)).rejects.toThrow();
-    expect(requests.at(-1)!.model).toBe(kimi);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

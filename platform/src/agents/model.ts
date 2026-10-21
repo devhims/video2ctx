@@ -34,30 +34,6 @@ export function createClassifierFallbackModel(
     sessionAffinity, 'low', { ...metadata, model_role: 'classifier', model_variant: 'fallback' });
 }
 
-/** Visual model fallback state per run, so its outage switch persists across analyses without moving other roles. */
-const visualFailoverStates = new WeakMap<ModelFailoverState, ModelFailoverState>();
-
-/**
- * The configured visual model has its own outage switch: a stall moves only visual analysis
- * to DeepSeek, and a GLM outage leaves the visual model in use. The run deadline, cost check
- * and diagnostics stay shared, including deadline updates made after the model was created.
- */
-function visualFailoverState(shared: ModelFailoverState): ModelFailoverState {
-  let state = visualFailoverStates.get(shared);
-  if (state) return state;
-  let fallback = false;
-  state = {
-    get fallback() { return fallback; },
-    set fallback(value) { fallback = value; },
-    get deadlineAt() { return shared.deadlineAt; },
-    set deadlineAt(value) { shared.deadlineAt = value; },
-    get onDiagnostic() { return shared.onDiagnostic; },
-    get beforeAttempt() { return shared.beforeAttempt; },
-  };
-  visualFailoverStates.set(shared, state);
-  return state;
-}
-
 export function createAgentModel(
   env: Env,
   sessionAffinity: string,
@@ -145,10 +121,9 @@ function configuredAgentModel(
   } });
   // Backups run inside the same timeout policy as their primary, without a second wrapper.
   if (backup) return configured;
-  const runState = failoverState ?? { fallback: false };
-  const execution = { state: useVisualProfile ? visualFailoverState(runState) : runState,
+  const execution = { state: failoverState ?? { fallback: false },
     role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
-  // GLM and the configured visual model share the DeepSeek backup and its timeout policy.
+  // GLM and the configured visual model share the DeepSeek backup and the run's failover switch.
   if (useFireworks && (model.modelId === FIREWORKS_GLM_MODEL_ID || useVisualProfile)) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
     return withModelFailover({ primary: configured, fallback, ...execution });
