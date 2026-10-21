@@ -17,6 +17,7 @@ import {
   AGENT_MODEL_ID,
   AGENT_MODEL_PRICING,
   FIREWORKS_GLM_MODEL_ID,
+  FINALIZER_THINKING_TOKENS,
   createAgentModel,
   createClassifierFallbackModel,
 } from '../src/agents/model';
@@ -85,12 +86,13 @@ describe('YouTube agent model', () => {
 
   test.each(['classifier', 'agent_core', 'transcript_analyst', 'visual_analyst'])('routes production %s to its text or visual model', async role => {
     const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
-      AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+      AGENT_TEXT_MODEL: 'deepseek-v4p1-flash', AGENT_VISUAL_MODEL: 'kimi-k3', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
     const visual = role === 'visual_analyst';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
-      expect(body.model).toBe(visual ? FIREWORKS_GLM_MODEL_ID : 'accounts/fireworks/models/deepseek-v4p1-flash');
-      expect(body.max_tokens).toBe(1600);
+      expect(body.model).toBe(visual ? 'accounts/fireworks/models/kimi-k3' : 'accounts/fireworks/models/deepseek-v4p1-flash');
+      // The reasoning visual model gets reasoning headroom; DeepSeek text extraction has reasoning off.
+      expect(body.max_tokens).toBe(visual ? 1600 + FINALIZER_THINKING_TOKENS : 1600);
       expect(body.service_tier).toBe('priority');
       expect(body.prompt_cache_key).toBe('session');
       expect(body.reasoning_history).toBe('interleaved');
@@ -238,6 +240,23 @@ describe('YouTube agent model', () => {
     expect(() => createAgentModel(env, 'session', 'low', { model_role: 'finalizer' })).toThrow(/Unsupported finalizer reasoning/);
     Object.assign(env, { AGENT_FINALIZER_MODEL: 'deepseek-v4p1-flash', AGENT_FINALIZER_REASONING_EFFORT: 'medium' });
     expect(() => createAgentModel(env, 'session', 'low', { model_role: 'finalizer' })).toThrow(/requires GLM/);
+  });
+
+  test('routes the visual analyst to GLM Flash when no visual model is configured', () => {
+    const env = { AI_GATEWAY_ID: '', AGENT_GLM_PROVIDER: 'fireworks', AGENT_VISUAL_MODEL: '', FIREWORKS_API_KEY: 'test-key' } as unknown as Env;
+    expect(createAgentModel(env, 'session', 'low', { model_role: 'visual_analyst' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
+    // Other roles never use the visual model.
+    Object.assign(env, { AGENT_VISUAL_MODEL: 'kimi-k3' });
+    expect(createAgentModel(env, 'session', 'low', { model_role: 'agent_core' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
+    expect(createAgentModel(env, 'session', 'low', { model_role: 'visual_analyst' }).modelId).toBe('accounts/fireworks/models/kimi-k3');
+    Object.assign(env, { AGENT_VISUAL_MODEL: 'unknown-model' });
+    expect(() => createAgentModel(env, 'session', 'low', { model_role: 'visual_analyst' })).toThrow(/Unsupported/);
+  });
+
+  test('accounts for Kimi K3 Priority prices so visual analysis is not priced as GLM', () => {
+    expect(fireworksModelPricing('accounts/fireworks/models/kimi-k3')).toEqual({
+      uncachedInputUsdPerMillionTokens: 3.75, cachedInputUsdPerMillionTokens: .375, outputUsdPerMillionTokens: 18.75,
+    });
   });
 
   test('accounts for Priority input, cache, and output prices for both production models', () => {
