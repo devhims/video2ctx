@@ -134,27 +134,18 @@ html:has(.craft) {
 }
 
 .craft-nav-product-hunt {
-  min-height: 2.25rem;
-  padding: 0 var(--space-xs);
-  border: 1px solid color-mix(in oklch, #ff6154 35%, var(--rule));
-  border-radius: var(--radius-home-control);
-  background: color-mix(in oklch, #ff6154 8%, transparent);
-  color: #ff8177;
   display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.craft-nav-product-hunt svg {
   flex-shrink: 0;
 }
 
-@media (max-width: 1000px) {
-  .craft-nav-product-hunt span {
+.craft-nav-product-hunt img {
+  display: block;
+  width: auto;
+  height: 2.25rem;
+}
+
+@media (max-width: 720px) {
+  .craft-nav-product-hunt {
     display: none;
   }
 }

@@ -11,6 +11,11 @@ const LINKS = [
   { label: 'Installation', href: '#agent-setup' },
   /* Phones drop the GitHub icon from the bar, so it lives in the menu there. */
   { label: 'GitHub', href: 'https://github.com/devhims/video2ctx', phonesOnly: true },
+  {
+    label: 'Product Hunt launch',
+    href: 'https://www.producthunt.com/products/video2ctx?launch=video2ctx',
+    phonesOnly: true,
+  },
 ];
 
 export function CraftNav() {
@@ -40,17 +45,18 @@ export function CraftNav() {
           </a>
           <a
             className='craft-nav-product-hunt'
-            href='https://www.producthunt.com/products/video2ctx?launch=video2ctx'
+            href='https://www.producthunt.com/products/video2ctx?utm_source=badge-follow&utm_medium=badge&utm_source=badge-video2ctx'
             target='_blank'
             rel='noopener noreferrer'
             aria-label='View video2ctx on Product Hunt'
             title='View video2ctx on Product Hunt'
           >
-            <svg width='20' height='20' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
-              <circle cx='12' cy='12' r='12' fill='currentColor' />
-              <path d='M8 6h5a4 4 0 0 1 0 8h-2.5v4H8V6Zm2.5 2.5v3H13a1.5 1.5 0 0 0 0-3h-2.5Z' fill='white' />
-            </svg>
-            <span>Product Hunt</span>
+            <img
+              src='https://api.producthunt.com/widgets/embed-image/v1/follow.svg?product_id=1346648&theme=dark'
+              alt='video2ctx - Turn videos into context for your agents | Product Hunt'
+              width='250'
+              height='54'
+            />
           </a>
         </div>
 
