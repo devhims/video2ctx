@@ -905,12 +905,22 @@ for (const search of ['', '?checkout=cancelled']) test(`checkout confirmation do
   } finally { await account.clear(); }
 });
 
-test('signup welcome celebration still works after sharing confetti with checkout', async ({ page }) => {
-  await page.goto('/dashboard/settings?welcome=1');
-  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Welcome to video2ctx, Fixture!' })).toBeVisible();
-  await expect(page.locator('body > [data-confetti]')).toHaveCount(1);
-  await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
-  await expect(page).toHaveURL(/\/dashboard\/settings$/);
+for (const grant of [1000, 5000]) test(`signup welcome celebration reflects the recorded ${grant}-credit grant`, async ({ page }) => {
+  const account = await accountScenario(page, { responses: {
+    '/v1/usage': { body: { plan: 'starter', creditBalance: 321, includedCredits: grant, creditGrant: 'onboarding' } },
+  } });
+  try {
+    await page.goto('/dashboard/settings?welcome=1');
+    const title = grant === 5000 ? 'Your $10 launch gift is ready!' : 'Welcome to video2ctx, Fixture!';
+    const toast = page.locator('[data-sonner-toast]').filter({ hasText: title });
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText(`${grant.toLocaleString('en-US')} free credits`);
+    await expect(page.locator('body > [data-confetti]')).toHaveCount(1);
+    await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard\/settings$/);
+    await page.reload();
+    await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
+  } finally { await account.clear(); }
 });
 
 test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {
