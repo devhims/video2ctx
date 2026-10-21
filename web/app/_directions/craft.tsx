@@ -226,13 +226,11 @@ export function CraftDirection() {
           Everything your agent needs to understand videos
           <a className='craft-offer' href='/dashboard'>
             <Gift size={16} aria-hidden='true' />
-            <span>Get $10 in free credits during our launch week.</span>
+            <span>
+              Get $10 in free credits during our launch week.{' '}
+              <span className='craft-offer-terms'>No card required.</span>
+            </span>
           </a>
-          <span className='craft-offer-details'>
-            <a href='https://www.producthunt.com/products/video2ctx?launch=video2ctx' target='_blank' rel='noopener noreferrer'>Product Hunt launch</a>
-            <span aria-hidden='true'> · </span>
-            <span>No card required</span>
-          </span>
         </p>
         <CraftDemo />
       </section>

@@ -29,14 +29,30 @@ export function CraftNav() {
   return (
     <header className='craft-nav' data-open={open ? 'true' : 'false'}>
       <div className='craft-nav-inner'>
-        <a className='craft-nav-brand' href='/' aria-label='video2ctx home'>
-          <img
-            src='/brand/logo-120.png'
-            alt=''
-            width='36'
-            height='36'
-          />
-        </a>
+        <div className='craft-nav-identity'>
+          <a className='craft-nav-brand' href='/' aria-label='video2ctx home'>
+            <img
+              src='/brand/logo-120.png'
+              alt=''
+              width='36'
+              height='36'
+            />
+          </a>
+          <a
+            className='craft-nav-product-hunt'
+            href='https://www.producthunt.com/products/video2ctx?launch=video2ctx'
+            target='_blank'
+            rel='noopener noreferrer'
+            aria-label='View video2ctx on Product Hunt'
+            title='View video2ctx on Product Hunt'
+          >
+            <svg width='20' height='20' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
+              <circle cx='12' cy='12' r='12' fill='currentColor' />
+              <path d='M8 6h5a4 4 0 0 1 0 8h-2.5v4H8V6Zm2.5 2.5v3H13a1.5 1.5 0 0 0 0-3h-2.5Z' fill='white' />
+            </svg>
+            <span>Product Hunt</span>
+          </a>
+        </div>
 
         <nav
           id='craft-product-links'

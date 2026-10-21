@@ -127,6 +127,38 @@ html:has(.craft) {
   gap: clamp(var(--space-md), 3vw, var(--space-2xl));
 }
 
+.craft-nav-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.craft-nav-product-hunt {
+  min-height: 2.25rem;
+  padding: 0 var(--space-xs);
+  border: 1px solid color-mix(in oklch, #ff6154 35%, var(--rule));
+  border-radius: var(--radius-home-control);
+  background: color-mix(in oklch, #ff6154 8%, transparent);
+  color: #ff8177;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.craft-nav-product-hunt svg {
+  flex-shrink: 0;
+}
+
+@media (max-width: 1000px) {
+  .craft-nav-product-hunt span {
+    display: none;
+  }
+}
+
 .craft-nav-brand {
   justify-self: start;
   color: var(--ink);
@@ -678,7 +710,7 @@ html:has(.craft) {
 }
 
 .craft-sub {
-  max-width: 38ch;
+  max-width: 50ch;
   margin: var(--space-lg) 0 0;
   /* Brighter than the soft ink so the offer line under it, which shares the
    * paragraph, reads as the quieter of the two. */
@@ -689,16 +721,12 @@ html:has(.craft) {
   text-wrap: balance;
 }
 
-/* Signup and Product Hunt are separate links within the hero offer. */
+/* Keep the signup offer and card reassurance together. */
 .craft-offer {
   width: fit-content;
   margin: var(--space-xs) auto 0;
   color: var(--ink-muted);
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35em;
+  display: block;
   text-decoration: none;
   transition: color var(--control) var(--out);
   font-family: var(--font-home-body);
@@ -709,26 +737,12 @@ html:has(.craft) {
 }
 
 .craft-offer > svg {
-  flex-shrink: 0;
+  display: inline-block;
+  margin-right: 0.35em;
+  vertical-align: -0.2em;
 }
 
-.craft-offer-details {
-  display: block;
-  margin-top: 0.35em;
-  color: var(--ink-muted);
-  font-family: var(--font-home-body);
-  font-size: 0.75rem;
-  font-weight: 450;
-  line-height: 1.5;
-}
-
-.craft-offer-details a {
-  color: inherit;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-
-.craft-offer-details > span:last-child {
+.craft-offer-terms {
   white-space: nowrap;
 }
 

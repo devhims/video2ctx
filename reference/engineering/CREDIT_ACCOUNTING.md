@@ -81,7 +81,7 @@ Builder top-ups, refund resets, and per-operation credit prices are unchanged.
 The offer ends through a separate PR. Add a new migration restoring 1,000 for
 future signups, leaving existing grants intact. Restore the hero's standard copy:
 "Get started for free" and "1,000 credits · No card required". Remove the Product
-Hunt offer link and restore the standard pricing, FAQ, demo and closing copy.
+Hunt navbar badge and restore the standard pricing, FAQ, demo and closing copy.
 The standard welcome toast remains in `web/lib/welcome-toast.ts` and is selected
 from the account's recorded grant, so existing launch users retain accurate messages.
 The advertised launch week is October 21 through 28, 2026. There is deliberately
