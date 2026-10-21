@@ -45,14 +45,14 @@ export function CraftNav() {
           </a>
           <a
             className='craft-nav-product-hunt'
-            href='https://www.producthunt.com/products/video2ctx?utm_source=badge-follow&utm_medium=badge&utm_source=badge-video2ctx'
+            href='https://www.producthunt.com/products/video2ctx?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-video2ctx'
             target='_blank'
             rel='noopener noreferrer'
             aria-label='View video2ctx on Product Hunt'
             title='View video2ctx on Product Hunt'
           >
             <img
-              src='https://api.producthunt.com/widgets/embed-image/v1/follow.svg?product_id=1346648&theme=dark'
+              src='https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1282390&theme=light&t=1792567154448'
               alt='video2ctx - Turn videos into context for your agents | Product Hunt'
               width='250'
               height='54'
