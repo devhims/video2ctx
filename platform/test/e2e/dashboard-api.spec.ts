@@ -942,8 +942,23 @@ test('signup onboarding saves the answers and hands over a setup prompt before t
   await expect(ready.getByLabel('Setup prompt')).toContainText('A digest of new conference talks');
   await expect.poll(() => saved).toEqual([{ agents: ['claude-code', 'codex'], goal: 'A digest of new conference talks' }]);
 
-  // Going back and generating again with the same answers does not save them twice.
+  // Steps focus their heading, which is not tabbable. Tabbing from it in either direction stays in the dialog.
+  await expect(ready.getByRole('heading', { name: /all set/ })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(ready.getByRole('button', { name: 'Go to dashboard' })).toBeFocused();
+  await ready.getByRole('heading', { name: /all set/ }).focus();
+  await page.keyboard.press('Tab');
+  await expect(ready.getByRole('button', { name: '← Change answers' })).toBeFocused();
+
+  // Going back to the agents keeps keyboard focus contained too.
   await ready.getByRole('button', { name: '← Change answers' }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(agents.getByRole('heading', { name: 'Which coding agents do you use?' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(agents.getByRole('button', { name: 'Skip for now' })).toBeFocused();
+
+  // Generating again with the same answers does not save them twice.
+  await next.click();
   await page.getByRole('button', { name: 'Generate setup prompt' }).click();
   await expect(page.getByRole('dialog', { name: /all set/ })).toBeVisible();
   expect(saved).toHaveLength(1);
