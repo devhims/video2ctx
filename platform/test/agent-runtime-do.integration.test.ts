@@ -424,6 +424,83 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
 });
 
+test('account deletion batches remote cleanup for an idle conversation with forty tool calls', async () => {
+  const { runtime, runId } = await seed('account-deletion-io-latency');
+  const measurement = await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as {
+      traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager;
+      sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+      settleRun(runId: string): Promise<void>;
+    };
+    const manager = internal.traceManager;
+    for (let i = 0; i < 40; i++) await manager.track(runId, {
+      toolCallId: `call-${i}`, name: 'context_read', operation: 'context', input: { i }, execute: async () => ({ i }),
+    });
+    await manager.publishPending();
+    await internal.settleRun(runId);
+    const prefix = instance.sql<{ input_key: string }>`SELECT input_key FROM agent_call_traces LIMIT 1`[0]!.input_key.split(runId)[0]!;
+    const timings: Record<string, number> = {};
+    const pause = () => new Promise(resolve => setTimeout(resolve, 10));
+    // Inject the same small network wait per remote operation, excluding setup.
+    const statements = Object.getPrototypeOf(env.DB.prepare('SELECT 1'));
+    const database = Object.getPrototypeOf(env.DB) as D1Database;
+    const run = statements.run, batch = database.batch;
+    const singleWrites = vi.spyOn(statements, 'run').mockImplementation(async function(this: D1PreparedStatement) {
+      await pause(); return run.call(this);
+    });
+    const batchWrites = vi.spyOn(database, 'batch').mockImplementation(async function<T = unknown>(this: D1Database, items: D1PreparedStatement[]) {
+      await pause(); return batch.call(this, items) as Promise<D1Result<T>[]>;
+    });
+    const deleteObjects = env.RESEARCH.delete.bind(env.RESEARCH);
+    const deletes = vi.spyOn(env.RESEARCH, 'delete').mockImplementation(async keys => { await pause(); return deleteObjects(keys); });
+    const publish = manager.publishPending.bind(manager), remove = internal.sessionStore.delete.bind(internal.sessionStore);
+    const publishing = vi.spyOn(manager, 'publishPending').mockImplementation(async () => {
+      const start = Date.now(); try { await publish(); } finally { timings.traceIndexMs = Date.now() - start; }
+    });
+    const removing = vi.spyOn(internal.sessionStore, 'delete').mockImplementation(async () => {
+      const start = Date.now(); try { return await remove(); } finally { timings.privateFilesMs = Date.now() - start; }
+    });
+    try {
+      const start = Date.now();
+      await instance.deleteAccountData();
+      const measurement = { event: 'deletion_latency_fixture', injectedWaitMs: 10, toolCalls: 40,
+        totalMs: Date.now() - start, ...timings, singleWrites: singleWrites.mock.calls.length,
+        batchWrites: batchWrites.mock.calls.length, fileDeleteRequests: deletes.mock.calls.length };
+      expect(deletes).toHaveBeenCalledTimes(1);
+      expect(deletes.mock.calls[0]![0]).toHaveLength(80);
+      expect(batchWrites).toHaveBeenCalledTimes(2);
+      expect(singleWrites.mock.calls.length).toBeLessThanOrEqual(2);
+      expect((await env.RESEARCH.list({ prefix })).objects).toHaveLength(0);
+      const rows = await env.DB.prepare('SELECT deleted,input_key,output_key FROM agent_tool_traces WHERE run_id=?').bind(runId).all();
+      expect(rows.results).toHaveLength(40);
+      expect(rows.results.every(row => row.deleted === 1 && row.input_key === null && row.output_key === null)).toBe(true);
+      return measurement;
+    } finally {
+      publishing.mockRestore(); removing.mockRestore(); deletes.mockRestore(); singleWrites.mockRestore(); batchWrites.mockRestore();
+    }
+  });
+  console.info(measurement);
+});
+
+test('account deletion retains its local records when a trace revocation batch fails', async () => {
+  const { runtime, runId } = await seed('account-deletion-batch-retry');
+  await runInDurableObject(runtime, async instance => {
+    const manager = (instance as unknown as { traceManager: import('../src/agents/runtime/tool-call-trace').ToolCallTraceManager }).traceManager;
+    await manager.track(runId, { toolCallId: 'retained', name: 'context_read', operation: 'context', input: {}, execute: async () => ({}) });
+    await manager.publishPending();
+    const batch = vi.spyOn(env.DB, 'batch').mockRejectedValue(new Error('temporary D1 failure'));
+    try {
+      await expect(instance.deleteAccountData()).rejects.toThrow('Trace revocation is unavailable');
+      expect(manager.hasPending).toBe(true);
+      expect(instance.sql`SELECT id FROM agent_runs`).toHaveLength(1);
+    } finally { batch.mockRestore(); }
+    await instance.deleteAccountData();
+    expect(instance.sql`SELECT id FROM agent_runs`).toHaveLength(0);
+    expect(await env.DB.prepare('SELECT deleted,input_key,output_key FROM agent_tool_traces WHERE run_id=?').bind(runId).first())
+      .toMatchObject({ deleted: 1, input_key: null, output_key: null });
+  });
+});
+
 
 test('queued admissions retain their IDs and do not expire before classification starts', async () => {
   const { runtime, userId } = await seed('queued-expired-admission');

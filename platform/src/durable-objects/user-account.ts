@@ -150,6 +150,7 @@ export class UserAccountDO extends DurableObject<Env> {
   markBillingCheckoutUncertain(id: string): void { this.#billing.markUncertain(id); }
   endBillingCheckout(id: string): void { this.#billing.endCheckout(id); }
   beginBillingDeletion(id: string): boolean { return this.#billing.beginDeletion(id); }
+  claimBillingDeletion(id: string) { return this.#billing.claimDeletion(id); }
   commitBillingDeletion(id: string): void { this.#billing.commitDeletion(id); }
   endBillingDeletion(id: string): void { this.#billing.endDeletion(id); }
 

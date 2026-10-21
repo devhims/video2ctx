@@ -227,6 +227,7 @@ export class ToolCallTraceManager {
               console.error({event:'agent_trace_retry_schedule_failed'});
             }
             let failed = false;
+            const revoked: TraceRow[] = [];
             for (const row of rows) {
               // Persist rotation before I/O so a failing batch cannot monopolize retries.
               this.sql.exec('INSERT OR REPLACE INTO agent_trace_publish_order VALUES (?,?)',row.trace_id,Date.now());
@@ -234,8 +235,12 @@ export class ToolCallTraceManager {
               // Always load the newest revision after R2 awaits. A tool may have
               // settled, or deletion may have revoked it while upload was running.
               const latest = this.byId(row.trace_id);
-              if (latest?.index_pending && !await this.publishRow(latest)) failed = true;
+              if (latest?.index_pending) {
+                if (latest.deleted) revoked.push(latest);
+                else if (!await this.publishRow(latest)) failed = true;
+              }
             }
+            if (!await this.publishRevokedRows(revoked)) failed = true;
             if (!await this.publishRunSummaries()) failed = true;
             if (!await this.publishModelAttempts()) failed = true;
             if (failed) break; // The 15-second retry backs off failures, with fair selection.
@@ -323,14 +328,41 @@ export class ToolCallTraceManager {
   }
 
   private async publishRow(row: TraceRow): Promise<boolean> {
+    try {
+      const statement = this.prepareRow(row);
+      if (statement) { await statement.run(); this.acknowledgeRow(row); }
+      return true;
+    } catch {
+      console.error({event:'agent_trace_index_failed',runId:row.run_id,toolCallId:row.tool_call_id});
+      return false;
+    }
+  }
+
+  private async publishRevokedRows(rows: TraceRow[]): Promise<boolean> {
+    if (!rows.length) return true;
+    try {
+      const writes = rows.flatMap(row => {
+        const statement = this.prepareRow(row);
+        return statement ? [{ row, statement }] : [];
+      });
+      if (writes.length) await this.db.batch(writes.map(write => write.statement));
+      // Acknowledge only the versions accepted by D1. Later revisions stay pending.
+      for (const { row } of writes) this.acknowledgeRow(row);
+      return true;
+    } catch {
+      console.error({event:'agent_trace_revocation_index_failed',traces:rows.length});
+      return false;
+    }
+  }
+
+  private prepareRow(row: TraceRow): D1PreparedStatement | null {
     this.markRunDirty(row.run_id);
     const run = this.metadata(row.run_id);
     if (!run) {
       this.sql.exec('UPDATE agent_call_traces SET index_pending=0 WHERE trace_id=?',row.trace_id);
-      return true;
+      return null;
     }
-    try {
-      await this.db.prepare(`INSERT INTO agent_tool_traces
+    return this.db.prepare(`INSERT INTO agent_tool_traces
         (trace_id,call_sequence,result_sequence,attempt,run_id,tool_call_id,user_id,session_id,tool_name,operation,source,run_status,status,started_at,finished_at,input_key,output_key,error_key,capture_error,deleted,index_version)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(trace_id) DO UPDATE SET
         result_sequence=excluded.result_sequence,tool_name=excluded.tool_name,operation=excluded.operation,source=excluded.source,run_status=excluded.run_status,
@@ -339,16 +371,14 @@ export class ToolCallTraceManager {
         capture_error=excluded.capture_error,deleted=excluded.deleted,index_version=excluded.index_version
         WHERE excluded.index_version>agent_tool_traces.index_version`)
         .bind(row.trace_id,row.call_sequence,row.result_sequence,row.revision,row.run_id,row.tool_call_id,run.userId,run.sessionId,row.name,row.operation,row.source,row.local_run_status ?? run.status,row.status,
-          row.started_at,row.finished_at,row.input_key,row.output_key,row.error_key,row.capture_error,row.deleted,row.index_version).run();
-      this.sql.exec('UPDATE agent_call_traces SET index_pending=0 WHERE trace_id=? AND index_version=?',row.trace_id,row.index_version);
-      this.sql.exec(`DELETE FROM agent_trace_publish_order WHERE trace_id=?
-        AND NOT EXISTS (SELECT 1 FROM agent_trace_payload_chunks WHERE trace_id=?)
-        AND EXISTS (SELECT 1 FROM agent_call_traces WHERE trace_id=? AND index_pending=0)`,row.trace_id,row.trace_id,row.trace_id);
-      return true;
-    } catch {
-      console.error({event:'agent_trace_index_failed',runId:row.run_id,toolCallId:row.tool_call_id});
-      return false;
-    }
+          row.started_at,row.finished_at,row.input_key,row.output_key,row.error_key,row.capture_error,row.deleted,row.index_version);
+  }
+
+  private acknowledgeRow(row: TraceRow): void {
+    this.sql.exec('UPDATE agent_call_traces SET index_pending=0 WHERE trace_id=? AND index_version=?',row.trace_id,row.index_version);
+    this.sql.exec(`DELETE FROM agent_trace_publish_order WHERE trace_id=?
+      AND NOT EXISTS (SELECT 1 FROM agent_trace_payload_chunks WHERE trace_id=?)
+      AND EXISTS (SELECT 1 FROM agent_call_traces WHERE trace_id=? AND index_pending=0)`,row.trace_id,row.trace_id,row.trace_id);
   }
 
   syncRun(runId: string) {

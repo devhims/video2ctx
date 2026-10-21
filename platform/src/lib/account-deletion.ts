@@ -14,7 +14,11 @@ export async function deleteAccount(env: Env, user: { id: string; email: string 
   await assertAccountDeletable(env, user.id);
   const account = await billingAccount(env, user.id);
   const claim = crypto.randomUUID();
-  if (!await account.beginBillingDeletion(claim)) {
+  const admission = await account.claimBillingDeletion(claim);
+  if (admission === 'deletion_in_progress') {
+    throw new ApiError(409, 'ACCOUNT_DELETION_IN_PROGRESS', 'Account deletion is already running. Please wait for cleanup to finish.');
+  }
+  if (admission !== 'acquired') {
     throw new ApiError(409, 'BILLING_OPERATION_PENDING', 'A previous billing operation must finish or be reviewed before this account can be deleted.');
   }
   try {

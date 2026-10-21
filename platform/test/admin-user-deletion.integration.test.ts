@@ -113,6 +113,29 @@ test('checkout is fenced while customer deletion is in flight and after cleanup,
   expect(requests.filter(request => request.method === 'POST')).toHaveLength(0);
 });
 
+test('a repeated admin deletion reports cleanup in progress, not a pending billing operation', async () => {
+  const { target, configured, remove } = await setup();
+  const polar = noPolarCustomer();
+  let entered!: () => void, release!: () => void;
+  const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  vi.mocked(configured.TASKS.send).mockImplementationOnce(async () => {
+    entered(); await held;
+    return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+  });
+  const first = remove();
+  await enteredPromise;
+  try {
+    const repeated = await remove();
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({ error: { code: 'ACCOUNT_DELETION_IN_PROGRESS' } });
+    expect(configured.TASKS.send).toHaveBeenCalledOnce();
+    expect(polar.mock.calls.filter(([input, init]) => new Request(input, init).method === 'DELETE')).toHaveLength(1);
+    expect(await env.DB.prepare('SELECT id FROM user WHERE id=?').bind(target.user.id).first()).not.toBeNull();
+  } finally { release(); await first; }
+  expect((await remove()).status).toBe(204);
+});
+
 test('deletion refuses an already in-flight authenticated checkout before touching Polar and succeeds on retry', async () => {
   const { target, configured, auth } = await setup();
   let entered!: () => void, release!: () => void;

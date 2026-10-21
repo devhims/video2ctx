@@ -21,12 +21,14 @@ export class BillingGate {
     if (this.sql.exec('SELECT id FROM billing_checkout_writes WHERE id=?', id).toArray().length) return;
     this.sql.exec('DELETE FROM billing_checkouts WHERE id=?', id);
   }
-  beginDeletion(id: string): boolean {
-    if (this.sql.exec('SELECT id FROM billing_checkouts LIMIT 1').toArray().length) return false;
+  // Keep the boolean contract for requests still served by an older Worker.
+  beginDeletion(id: string): boolean { return this.claimDeletion(id) === 'acquired'; }
+  claimDeletion(id: string): 'acquired' | 'checkout_pending' | 'deletion_in_progress' {
+    if (this.sql.exec('SELECT id FROM billing_checkouts LIMIT 1').toArray().length) return 'checkout_pending';
     const row = this.sql.exec<{ claim: string | null }>('SELECT claim FROM billing_deletion WHERE id=1').toArray()[0];
-    if (row?.claim) return false;
+    if (row?.claim) return 'deletion_in_progress';
     this.sql.exec('INSERT INTO billing_deletion (id,claim) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET claim=excluded.claim', id);
-    return true;
+    return 'acquired';
   }
   commitDeletion(id: string): void {
     this.sql.exec('UPDATE billing_deletion SET committed=1 WHERE id=1 AND claim=?', id);

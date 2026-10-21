@@ -174,6 +174,31 @@ function within(
     await fn(reopen(), reopen, state.storage.sql);
   });
 }
+
+test('file cleanup batches deletes, preserves active blobs and retains failed batches for retry', async () =>
+  within('cleanup-batches', async (store, reopen, sql) => {
+    await store.retrieve('active', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
+    const active = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets').one().blob_key;
+    const keys = Array.from({ length: 205 }, (_, i) => `cleanup-batches/${i}`);
+    store.queueCleanup([...keys, active]);
+    const remove = env.RESEARCH.delete.bind(env.RESEARCH);
+    let requests = 0;
+    const deleting = vi.spyOn(env.RESEARCH, 'delete').mockImplementation(async batch => {
+      expect(Array.isArray(batch)).toBe(true);
+      expect(batch).not.toContain(active);
+      if (++requests === 2) throw new Error('temporary R2 failure');
+      return remove(batch);
+    });
+    try {
+      await expect(store.cleanup()).rejects.toThrow('temporary R2 failure');
+      expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toHaveLength(106);
+      await reopen().cleanup();
+      expect(sql.exec('SELECT blob_key FROM session_blob_deletions').toArray()).toEqual([{ blob_key: active }]);
+      expect(deleting.mock.calls.map(([batch]) => batch.length)).toEqual([100, 100, 100, 5]);
+      expect(await env.RESEARCH.get(active)).not.toBeNull();
+    } finally { deleting.mockRestore(); }
+  }));
 function provider(fetch = vi.fn(async () => ({ value: transcript(), cacheStatus: 'miss' as const }))) {
   return { transcript: fetch } as unknown as YouTubeAgentProvider;
 }

@@ -934,16 +934,18 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   async cleanup() {
     this.sql.exec('CREATE TABLE IF NOT EXISTS session_blob_deletions (blob_key TEXT PRIMARY KEY)');
-    for (const row of this.sql
+    const pending = this.sql
       .exec<{ blob_key: string }>('SELECT blob_key FROM session_blob_deletions')
-      .toArray()) {
-      // Never remove an active private snapshot after a partially completed write.
-      if (
-        this.sql.exec('SELECT 1 FROM session_assets WHERE blob_key=? LIMIT 1', row.blob_key).toArray().length
-      )
-        continue;
-      await this.bucket.delete(row.blob_key);
-      this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', row.blob_key);
+      .toArray();
+    // One remote request per bounded batch, rather than one round trip per file.
+    for (let offset = 0; offset < pending.length; offset += 100) {
+      const keys = pending.slice(offset, offset + 100).map(row => row.blob_key)
+        // Recheck before each batch: a partially completed write may still own it.
+        .filter(key => !this.sql.exec('SELECT 1 FROM session_assets WHERE blob_key=? LIMIT 1', key).toArray().length);
+      if (!keys.length) continue;
+      await this.bucket.delete(keys);
+      // Retain the whole batch on failure. R2 deletion is safe to retry.
+      for (const key of keys) this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', key);
     }
   }
 }

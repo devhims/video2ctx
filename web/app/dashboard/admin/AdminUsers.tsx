@@ -40,13 +40,18 @@ export default function AdminUsers({ adminUserId }: { adminUserId: string }) {
     if (lock.current || !selected || selected.status === 'deleted' || confirmation.trim().toLowerCase() !== selected.email.toLowerCase()) return;
     const target = selected;
     lock.current = true; setBusy(true); setError(''); setNotice(''); toast.clear();
+    controller.current?.abort(); controller.current = new AbortController();
     try {
-      await deleteAdminUser(target);
+      await deleteAdminUser(target, {
+        signal: controller.current.signal,
+        onProgress: message => { if (mounted.current) setNotice(message); },
+      });
       if (!mounted.current) return;
       setResults(current => current ? { ...current, users: current.users.filter(user => user.id !== target.id) } : null);
       setSelected(null); setConfirmation(''); setNotice(`Account deleted for ${target.email}. Its deletion record is retained. Search again to view the history.`);
     } catch (cause) {
       if (!mounted.current) return;
+      setNotice('');
       if (cause instanceof PlatformApiError && cause.code === 'SUBSCRIPTION_ACTIVE') toast.show(cause.message);
       else setError(cause instanceof Error ? cause.message : 'Could not delete this account. Retry to finish cleanup.');
     } finally { lock.current = false; if (mounted.current) setBusy(false); }

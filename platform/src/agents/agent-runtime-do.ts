@@ -1367,42 +1367,70 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   async deleteAccountData(): Promise<void> {
-    // Deletion can be the first RPC after a deploy, or for a registered conversation
-    // that never started. Upgrade its schema before reading any runtime tables.
-    this.ensureAgentRuntimeSchema();
-    this.#deleted = true;
-    await this.ctx.storage.put('account-deleted', true);
-    const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;
-    this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${Date.now()}
-      WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
-    // Cancel every fiber before touching D1, even if settlement is unavailable.
-    await Promise.all(runs.filter(run => !isTerminal(run.status))
-      .map(run => this.cancelRunFiber(run.id, 'Account deleted.')));
-    await Promise.allSettled([...this.#activeRuns]);
-    for (const run of runs) await this.settleRun(run.id);
-    // Stop memory work. The drain is bounded by the updater's wall-clock deadline even if
-    // a provider ignores abort. Then close usage recording and report what was observed.
-    this.#memoryAbort?.abort(new Error('Account deleted.'));
-    await this.#memoryDrain;
-    this.sql`UPDATE agent_memory_jobs SET status = 'skipped', outcome = 'account_deleted', updated_at = ${Date.now()}
-      WHERE status IN ('pending', 'running')`;
-    this.#memoryUsageClosed = true;
-    if (!await this.settleMemoryCosts()) throw new Error('Memory cost settlement is unavailable. Retry account deletion.');
-    // Abort propagates to provider and model calls. Drain tool promises before
-    // removing evidence so a late completion cannot recreate private data.
-    await Promise.allSettled([...this.#inFlightEvidence.values()]);
-    this.traceManager.revokePayloads();
-    await this.traceManager.publishPending();
-    await this.sessionStore.delete();
-    this.sessionStore.search.clearHistory();
-    for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
-      'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_packet_operations', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
-      'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox']) {
-      this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+    const startedAt = Date.now();
+    let phaseStartedAt = startedAt, currentPhase = 'initialize', completed = false;
+    const phaseMs: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+    const phase = (next: string) => {
+      const now = Date.now();
+      phaseMs[currentPhase] = now - phaseStartedAt;
+      currentPhase = next; phaseStartedAt = now;
+    };
+    try {
+      // Deletion can be the first RPC after a deploy, or for a registered conversation
+      // that never started. Upgrade its schema before reading any runtime tables.
+      this.ensureAgentRuntimeSchema();
+      counts.runs = this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_runs`[0]!.count;
+      counts.traces = this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_call_traces`[0]!.count;
+      phase('stop_runs');
+      this.#deleted = true;
+      await this.ctx.storage.put('account-deleted', true);
+      const runs = this.sql<RunRow>`SELECT * FROM agent_runs`;
+      this.sql`UPDATE agent_runs SET status = 'cancelled', phase = 'cancelled', draft_json = null, updated_at = ${Date.now()}
+        WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
+      // Cancel every fiber before touching D1, even if settlement is unavailable.
+      await Promise.all(runs.filter(run => !isTerminal(run.status))
+        .map(run => this.cancelRunFiber(run.id, 'Account deleted.')));
+      await Promise.allSettled([...this.#activeRuns]);
+      phase('settle_credits');
+      for (const run of runs) await this.settleRun(run.id);
+      phase('stop_memory');
+      // Stop memory work. The drain is bounded by the updater's wall-clock deadline even if
+      // a provider ignores abort. Then close usage recording and report what was observed.
+      this.#memoryAbort?.abort(new Error('Account deleted.'));
+      await this.#memoryDrain;
+      this.sql`UPDATE agent_memory_jobs SET status = 'skipped', outcome = 'account_deleted', updated_at = ${Date.now()}
+        WHERE status IN ('pending', 'running')`;
+      this.#memoryUsageClosed = true;
+      phase('settle_memory_costs');
+      if (!await this.settleMemoryCosts()) throw new Error('Memory cost settlement is unavailable. Retry account deletion.');
+      // Abort propagates to provider and model calls. Drain tool promises before
+      // removing evidence so a late completion cannot recreate private data.
+      phase('drain_evidence');
+      await Promise.allSettled([...this.#inFlightEvidence.values()]);
+      phase('revoke_traces');
+      this.traceManager.revokePayloads();
+      await this.traceManager.publishPending();
+      if (this.traceManager.hasPending) throw new Error('Trace revocation is unavailable. Retry account deletion.');
+      phase('delete_files');
+      await this.sessionStore.delete();
+      phase('clear_local_state');
+      this.sessionStore.search.clearHistory();
+      for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
+        'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_packet_operations', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
+        'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox']) {
+        this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+      }
+      // SDK snapshots contain run identifiers only, but clear those too.
+      this.sql`DELETE FROM cf_agents_fibers`;
+      for (const schedule of this.getSchedules()) await this.cancelSchedule(schedule.id);
+      completed = true;
+    } finally {
+      phaseMs[currentPhase] = Date.now() - phaseStartedAt;
+      // Counts and timings only. Worker telemetry supplies the object/trace IDs.
+      console.info({ event: 'agent_account_cleanup', outcome: completed ? 'completed' : 'failed',
+        phase: currentPhase, durationMs: Date.now() - startedAt, counts, phaseMs });
     }
-    // SDK snapshots contain run identifiers only, but clear those too.
-    this.sql`DELETE FROM cf_agents_fibers`;
-    for (const schedule of this.getSchedules()) await this.cancelSchedule(schedule.id);
   }
 
   private prepareResearchContext(context: ResearchContext): ResearchContext {
