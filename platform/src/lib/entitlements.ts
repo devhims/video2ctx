@@ -1,6 +1,5 @@
 import type { Plan } from '../types';
 import { ApiError, now } from './http';
-import { signupAllowanceSql } from './signup-credits';
 
 export interface Entitlements {
   plan: Plan;
@@ -24,14 +23,12 @@ export interface CreditEnv {
 }
 
 export async function entitlements(env: CreditEnv, userId: string): Promise<Entitlements> {
-  const row = await env.DB.prepare(`SELECT b.plan, ${signupAllowanceSql} AS onboarding_credits
-    FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id WHERE u.id=?`)
-    .bind(userId).first<{ plan: Plan; onboarding_credits: number | null }>();
+  const row = await env.DB.prepare('SELECT plan FROM billing_accounts WHERE user_id = ?')
+    .bind(userId).first<{ plan: Plan }>();
   const plan = row?.plan === 'builder' ? 'builder' : 'starter';
   return {
     plan,
-    includedCredits: plan === 'builder' ? Number(env.BUILDER_MONTHLY_CREDITS)
-      : row?.onboarding_credits ?? Number(env.STARTER_ONBOARDING_CREDITS),
+    includedCredits: Number(plan === 'builder' ? env.BUILDER_MONTHLY_CREDITS : env.STARTER_ONBOARDING_CREDITS),
     creditGrant: plan === 'builder' ? 'billing-cycle' : 'onboarding',
     projectLimit: Number(plan === 'builder' ? env.BUILDER_PROJECT_LIMIT : env.STARTER_PROJECT_LIMIT),
     monitorLimit: Number(plan === 'builder' ? env.BUILDER_MONITOR_LIMIT : env.STARTER_MONITOR_LIMIT),

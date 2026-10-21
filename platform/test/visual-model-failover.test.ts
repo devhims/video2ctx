@@ -114,3 +114,42 @@ it.each(['frames', 'storyboard'] as const)('%s allows active output, fallback an
     expect(vi.getTimerCount()).toBe(0);
   }
 });
+
+describe('configured visual model', () => {
+  const kimi = 'accounts/fireworks/models/kimi-k3';
+  const kimiEnv = { ...env, AGENT_VISUAL_MODEL: 'kimi-k3' } as unknown as Env;
+  const output = { findings: [{ observation: 'Two colored boxes are visible.', timestampsMs: [1000] }], sharedFindings: [], warnings: [] };
+  const analyzeFrames = (state: ModelFailoverState) => createFrameAnalyst(createAgentModel(kimiEnv, 'visual', 'low', { model_role: 'visual_analyst' }, state))({
+    signal: new AbortController().signal, modelCallId: 'frames', focus: 'Describe the boxes',
+    frames: { videoId: 'abcdefghijk', frames: [{ imageBase64: images[0]!, timestampMs: 1000, mimeType: 'image/jpeg', width: 200, height: 100 }],
+      failures: [], meta: { partial: false, warnings: [] } } });
+
+  it('fails over to DeepSeek through the run-wide switch, which a restored run keeps', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const requests: Array<{ model: string; reasoning_effort?: string; service_tier?: string }> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); requests.push(body);
+      if (body.model === kimi) return new Promise(() => {});
+      return sseResponse(body.model, JSON.stringify(output));
+    });
+    const events: string[] = [];
+    const state: ModelFailoverState = { fallback: false, onDiagnostic: event => events.push(event.event) };
+    const first = analyzeFrames(state);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await first).toEqual(output);
+    expect(requests.map(request => request.model)).toEqual([kimi, deepseek]);
+    expect(requests[0]).toMatchObject({ reasoning_effort: 'low', service_tier: 'priority' });
+    // One switch for the run: the persisted fallback event and every later role agree.
+    expect(state.fallback).toBe(true);
+    expect(events).toContain('fallback');
+    await generateText({ model: createAgentModel(kimiEnv, 'visual', 'low', { model_role: 'agent_core' }, state), prompt: 'continue' });
+    expect(requests.at(-1)!.model).toBe(deepseek);
+    // A run restored from that event starts visual analysis on the backup instead of the stalled model.
+    const restored: ModelFailoverState = { fallback: events.includes('fallback') };
+    expect(await analyzeFrames(restored)).toEqual(output);
+    expect(requests.at(-1)!.model).toBe(deepseek);
+    expect(requests.filter(request => request.model === kimi)).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

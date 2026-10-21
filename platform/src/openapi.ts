@@ -1635,6 +1635,34 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/onboarding': {
+      put: {
+        tags: ['Account'],
+        operationId: 'saveOnboardingAnswers',
+        summary: 'Save the signed-in account onboarding answers',
+        description: 'Records which coding agents the account uses and, optionally, what it is building. Answering again replaces the earlier answers. Browser-session only.',
+        security: browserSessionSecurity,
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['agents'],
+          additionalProperties: false,
+          properties: {
+            agents: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 5,
+              uniqueItems: true,
+              items: { type: 'string', enum: ['claude-code', 'codex', 'cursor', 'opencode', 'other'] },
+            },
+            goal: { type: ['string', 'null'], maxLength: 500 },
+          },
+        }),
+        responses: {
+          '204': { description: 'Answers saved.' },
+          ...standardErrors,
+        },
+      },
+    },
     '/v1/usage': {
       get: {
         tags: ['Billing'],

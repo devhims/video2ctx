@@ -7,7 +7,9 @@ import type { WebhookSubscriptionUpdatedPayload } from '@polar-sh/sdk/models/com
 import type { CreditEnv } from './entitlements';
 import { ApiError, now, sha256 } from './http';
 import { paymentReceipt, refundReconciliationStatements } from './credit-continuity';
-import { signupAllowanceSql } from './signup-credits';
+
+// Refunds retain the standard balance reset, independent of temporary signup offers.
+const REFUND_STARTER_CREDITS = 1000;
 
 interface BillingAccountRow {
   plan: 'starter' | 'builder';
@@ -59,7 +61,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
   const row = await env.DB.prepare(`
     SELECT b.plan,b.status,b.has_payment_history,b.provider_customer_id,
       b.provider_subscription_id,b.cancel_at_period_end,b.current_period_start,b.current_period_end,
-      COALESCE(c.available_credits,0) AS credit_balance, ${signupAllowanceSql} AS onboarding_credits,
+      COALESCE(c.available_credits,0) AS credit_balance,
       EXISTS (SELECT 1 FROM billing_subscription_states WHERE user_id=u.id
         AND status IN ('incomplete','past_due','unpaid')) AS needs_attention,
       EXISTS (SELECT 1 FROM credit_ledger WHERE user_id=u.id
@@ -70,7 +72,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     FROM user u LEFT JOIN billing_accounts b ON b.user_id=u.id
       LEFT JOIN credit_accounts c ON c.user_id=u.id WHERE u.id=?
   `).bind(userId).first<BillingAccountRow & {
-    credit_balance: number; needs_attention: number; credits_ready: number; onboarding_credits: number | null;
+    credit_balance: number; needs_attention: number; credits_ready: number;
   }>();
   const plan = row?.plan === 'builder' ? 'builder' : 'starter';
   const needsBillingAttention = row?.needs_attention === 1;
@@ -78,8 +80,7 @@ export async function getBillingSummary(env: CreditEnv, userId: string): Promise
     plan,
     status: row?.status ?? 'inactive',
     creditBalance: row?.credit_balance ?? 0,
-    includedCredits: plan === 'builder' ? Number(env.BUILDER_MONTHLY_CREDITS)
-      : row?.onboarding_credits ?? Number(env.STARTER_ONBOARDING_CREDITS),
+    includedCredits: Number(plan === 'builder' ? env.BUILDER_MONTHLY_CREDITS : env.STARTER_ONBOARDING_CREDITS),
     cancelAtPeriodEnd: row?.cancel_at_period_end === 1,
     currentPeriodStart: row?.current_period_start ?? null,
     currentPeriodEnd: row?.current_period_end ?? null,
@@ -326,7 +327,7 @@ export async function applyRefundedOrder(env: PaymentWebhookEnv, payload: Webhoo
     return;
   }
 
-  const starterCredits = Number(env.STARTER_ONBOARDING_CREDITS);
+  const starterCredits = REFUND_STARTER_CREDITS;
   const subscription = order.subscription;
   const eventAt = payload.timestamp.getTime();
   const state: BillingState = {
@@ -362,7 +363,7 @@ async function reconcileDeletedRefund(
   await env.DB.batch([
     ...refundReconciliationStatements(env.DB, {
       orderId: payload.data.id, userId, customerId,
-      eventAt: payload.timestamp.getTime(), starterCredits: Number(env.STARTER_ONBOARDING_CREDITS),
+      eventAt: payload.timestamp.getTime(), starterCredits: REFUND_STARTER_CREDITS,
     }),
     refundEventStatement(env.DB, eventId, payload.data.id, await eventFingerprint(payload)),
   ]);

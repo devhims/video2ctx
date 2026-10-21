@@ -6,7 +6,7 @@ class CreditDatabase {
   prepare(sql: string) {
     this.queries.push(sql);
     return { bind: () => ({ first: async () => {
-      if (sql.includes('AS onboarding_credits')) return { plan: this.plan, onboarding_credits: 1000 };
+      if (sql.includes('SELECT plan FROM billing_accounts')) return { plan: this.plan };
       if (sql.includes('SELECT available_credits AS balance FROM credit_accounts')) return { balance: this.balance };
       throw new Error('Unexpected credit query');
     } }) };

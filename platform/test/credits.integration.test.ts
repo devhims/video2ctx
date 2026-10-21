@@ -9,7 +9,6 @@ import { Hono } from 'hono';
 import type { App } from '../src/types';
 import { meterOperation } from '../src/lib/metering';
 import { getBillingSummary } from '../src/lib/billing';
-import { signupGrant } from '../src/lib/signup-credits';
 import {
   creditBalance,
   entitlements,
@@ -22,7 +21,7 @@ import {
 
 const env = {
   DB: workerEnv.DB,
-  STARTER_ONBOARDING_CREDITS: '1000',
+  STARTER_ONBOARDING_CREDITS: '5000',
   BUILDER_MONTHLY_CREDITS: '10000',
   STARTER_PROJECT_LIMIT: '3',
   STARTER_MONITOR_LIMIT: '1',
@@ -61,7 +60,6 @@ describe('credit queries on D1', () => {
     expect(await env.DB.prepare('SELECT available_credits FROM credit_accounts WHERE user_id=?').bind(id).first('available_credits')).toBe(5000);
     expect(await operationCount(id, 'onboarding:v1', 'grant')).toBe(1);
     await addCredits(id, -5000, 'spend-signup-credits');
-    expect(await signupGrant(env.DB, id)).toBe(5000);
     expect(await entitlements(env, id)).toMatchObject({ includedCredits: 5000 });
     expect(await getBillingSummary(env, id)).toMatchObject({ includedCredits: 5000, creditBalance: 0 });
     const tracked = trackRoundTrips(env.DB);
@@ -188,16 +186,11 @@ describe('credit queries on D1', () => {
     await applyD1Migrations(db, migrationEnv.TEST_MIGRATIONS);
     expect((await db.prepare('SELECT * FROM credit_ledger ORDER BY id').all()).results).toEqual(before.results);
     expect(await creditBalance({ ...env, DB: db }, 'empty')).toBe(0);
-    // Applying the launch migration must leave historical allowances and spent balances intact.
-    expect(await entitlements({ ...env, DB: db }, 'empty')).toMatchObject({ includedCredits: 1000 });
-    expect(await getBillingSummary({ ...env, DB: db }, 'empty')).toMatchObject({ includedCredits: 1000, creditBalance: 0 });
+    // The launch migration preserves existing balances and only changes new signup grants.
     await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES ('launch-user','Launch','launch@migration.test',0,0)").run();
-    expect(await signupGrant(db, 'launch-user')).toBe(5000);
     expect(await creditBalance({ ...env, DB: db }, 'launch-user')).toBe(5000);
     await db.prepare("DELETE FROM user WHERE id='launch-user'").run();
     await db.prepare("INSERT INTO user (id,name,email,createdAt,updatedAt) VALUES ('returning-launch','Launch','launch@migration.test',0,0)").run();
-    expect(await signupGrant(db, 'returning-launch')).toBeNull();
-    expect(await entitlements({ ...env, DB: db }, 'returning-launch')).toMatchObject({ includedCredits: 0 });
     expect(await creditBalance({ ...env, DB: db }, 'returning-launch')).toBe(5000);
   });
 

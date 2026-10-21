@@ -1,0 +1,272 @@
+/* First-visit onboarding, laid over the dashboard as it loads underneath. */
+.backdrop {
+  --out: cubic-bezier(0.23, 1, 0.32, 1);
+  --press: 140ms;
+  --control: 200ms;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: clamp(1rem, 4vw, 2.5rem);
+  overflow-y: auto;
+  background: var(--color-dashboard-overlay);
+  backdrop-filter: blur(.6rem);
+  color: var(--color-dashboard-ink);
+  color-scheme: dark;
+  font-family: var(--font-dashboard-body);
+}
+
+.card {
+  width: min(31rem, 100%);
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  border: 1px solid var(--color-dashboard-rule);
+  border-radius: var(--radius-dashboard-lg);
+  background: var(--color-dashboard-surface);
+  box-shadow: var(--shadow-dashboard-modal);
+}
+
+.card[data-wide='true'] { width: min(58rem, 100%); }
+
+/* Seen once per account, so a short entrance is in budget. */
+.step { animation: enter 320ms var(--out) both; }
+
+@keyframes enter {
+  from { opacity: 0; transform: translateY(.375rem); }
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -.04em;
+}
+
+.brand img { border-radius: var(--radius-dashboard-sm); }
+
+.eyebrow {
+  margin: 2rem 0 .6rem;
+  color: var(--color-dashboard-muted);
+  font: 560 .66rem var(--font-dashboard-mono);
+}
+
+.step h2 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 1.75rem);
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+  text-wrap: balance;
+}
+
+.step h2:focus { outline: none; }
+
+.lede {
+  margin: .6rem 0 1.75rem;
+  color: var(--color-dashboard-ink-soft);
+  font-size: .875rem;
+  line-height: 1.6;
+}
+
+.agents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .6rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent {
+  display: flex;
+  min-height: 3rem;
+  padding: 0 1rem;
+  border: 1px solid var(--color-dashboard-rule-strong);
+  border-radius: var(--radius-dashboard-md);
+  background: var(--color-dashboard-paper);
+  cursor: pointer;
+  transition: border-color var(--control) var(--out), background-color var(--control) var(--out);
+}
+
+.agent:last-child { grid-column: 1 / -1; }
+.agent b { font-size: .85rem; font-weight: 560; }
+
+.agent[data-checked='true'] {
+  border-color: var(--color-dashboard-accent);
+  background: var(--color-dashboard-accent-soft);
+}
+
+.agent:has(input:focus-visible) {
+  outline: 2px solid var(--color-dashboard-focus);
+  outline-offset: 2px;
+}
+
+.goal {
+  display: block;
+  width: 100%;
+  min-height: 7rem;
+  padding: .85rem 1rem;
+  resize: vertical;
+  border: 1px solid var(--color-dashboard-rule-strong);
+  border-radius: var(--radius-dashboard-md);
+  background: var(--color-dashboard-paper);
+  color: var(--color-dashboard-ink);
+  font: 400 .9rem/1.55 var(--font-dashboard-body);
+  transition: border-color var(--control) var(--out);
+}
+
+.goal::placeholder { color: var(--color-dashboard-muted); opacity: 1; }
+.goal:focus-visible { outline: none; border-color: var(--color-dashboard-focus); }
+
+.actions {
+  display: flex;
+  gap: .6rem;
+  margin-top: 1.75rem;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  min-height: 2.875rem;
+  padding: 0 1.25rem;
+  border-radius: var(--radius-dashboard-pill);
+  cursor: pointer;
+  transition: transform var(--press) var(--out), background-color var(--control) var(--out), border-color var(--control) var(--out);
+}
+
+.primary {
+  flex: 1;
+  border: 0;
+  background: var(--color-dashboard-accent);
+  color: var(--color-dashboard-accent-ink);
+  font-size: .85rem;
+  font-weight: 650;
+}
+
+.secondary {
+  border: 1px solid var(--color-dashboard-rule-strong);
+  background: transparent;
+  color: var(--color-dashboard-ink);
+  font-size: .82rem;
+  font-weight: 620;
+}
+
+.primary:active:not(:disabled),
+.secondary:active { transform: scale(.97); }
+.primary:disabled { opacity: .45; cursor: not-allowed; }
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.skip:focus-visible,
+.back:focus-visible,
+.prompt:focus-visible {
+  outline: 2px solid var(--color-dashboard-focus);
+  outline-offset: 2px;
+}
+
+.skip,
+.back {
+  padding: .25rem;
+  border: 0;
+  background: none;
+  color: var(--color-dashboard-muted);
+  font-size: .75rem;
+  cursor: pointer;
+  transition: color var(--control) var(--out);
+}
+
+.skip { display: block; margin: 1rem auto 0; }
+.back { margin-left: -.25rem; }
+
+/* Final step: the explanation beside the prompt. */
+.done {
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: center;
+}
+
+.intro .brand { margin-bottom: 2rem; }
+
+.panel {
+  display: grid;
+  gap: .6rem;
+  min-width: 0;
+}
+
+.promptHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-dashboard-muted);
+  font-size: .7rem;
+  font-weight: 560;
+}
+
+.prompt {
+  max-height: 18rem;
+  margin: 0 0 .4rem;
+  padding: 1rem 1.1rem;
+  overflow: auto;
+  border: 1px solid var(--color-dashboard-rule);
+  border-radius: var(--radius-dashboard-md);
+  background: var(--color-dashboard-paper);
+  color: var(--color-dashboard-ink-soft);
+  font: 400 .72rem/1.65 var(--font-dashboard-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.copyStatus {
+  margin: 0;
+  color: var(--color-dashboard-warning);
+  font-size: .72rem;
+  line-height: 1.5;
+}
+
+.copyStatus:empty { display: none; }
+
+.credits {
+  margin: .4rem 0 0;
+  color: var(--color-dashboard-muted);
+  font-size: .72rem;
+  text-align: center;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .agent:hover { border-color: var(--color-dashboard-muted); }
+  .agent[data-checked='true']:hover { border-color: var(--color-dashboard-accent-hover); }
+  .primary:hover:not(:disabled) { background: var(--color-dashboard-accent-hover); }
+  .secondary:hover { border-color: var(--color-dashboard-muted); }
+  .skip:hover,
+  .back:hover { color: var(--color-dashboard-ink); }
+}
+
+@media (max-width: 760px) {
+  .done { grid-template-columns: 1fr; }
+  .intro .brand { margin-bottom: 1.5rem; }
+  .prompt { max-height: 14rem; }
+}
+
+@media (max-width: 420px) {
+  .agents { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step { animation: none; }
+}

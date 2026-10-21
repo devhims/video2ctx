@@ -19,7 +19,7 @@
     "EMAIL_REPLY_TO": "support@video2ctx.dev",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
-    "STARTER_ONBOARDING_CREDITS": "1000",
+    "STARTER_ONBOARDING_CREDITS": "5000",
     "BUILDER_MONTHLY_CREDITS": "10000",
     "STARTER_PROJECT_LIMIT": "3",
     "STARTER_MONITOR_LIMIT": "1",
@@ -53,6 +53,8 @@
     "AGENT_FINALIZER_PROVIDER": "fireworks",
     "AGENT_FINALIZER_MODEL": "glm-5p3-flash",
     "AGENT_FINALIZER_REASONING_EFFORT": "medium",
+    // Frame and storyboard analysts. An empty value keeps GLM Flash; both fail over to DeepSeek.
+    "AGENT_VISUAL_MODEL": "kimi-k3",
     // All authenticated users with data access can use the Agent.
     "AGENT_ACCESS_MODE": "all",
     "AGENT_MAX_VIDEO_SECONDS": "7200",

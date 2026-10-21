@@ -23,7 +23,7 @@ const env = {
   DB: workerEnv.DB,
   POLAR_BUILDER_PRODUCT_ID: 'builder-product',
   BUILDER_MONTHLY_CREDITS: '10000',
-  STARTER_ONBOARDING_CREDITS: '1000',
+  STARTER_ONBOARDING_CREDITS: '5000',
 } satisfies PaymentWebhookEnv;
 
 describe('Polar payment queries on D1', () => {

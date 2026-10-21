@@ -18,7 +18,7 @@
     "EMAIL_REPLY_TO": "support@video2ctx.dev",
     "AI_GATEWAY_ID": "all-things-youtube",
     "PUBLIC_SEARCH_INSTANCE": "youtube-public",
-    "STARTER_ONBOARDING_CREDITS": "1000",
+    "STARTER_ONBOARDING_CREDITS": "5000",
     "BUILDER_MONTHLY_CREDITS": "10000",
     "STARTER_PROJECT_LIMIT": "3",
     "STARTER_MONITOR_LIMIT": "1",

@@ -40,12 +40,11 @@ describe('welcome email', () => {
 });
 
 describe('welcome email queueing', () => {
-  function welcomeEnv(send = vi.fn(async () => undefined), credits: number | null = 5000) {
+  function welcomeEnv(send = vi.fn(async () => undefined)) {
     return {
       env: {
         APP_ORIGIN: 'https://www.video2ctx.dev',
-        DB: { prepare: () => ({ bind: () => ({ first: async () => credits }) }) },
-        STARTER_ONBOARDING_CREDITS: '1000',
+        STARTER_ONBOARDING_CREDITS: '5000',
         WELCOME_EMAIL_FROM: 'himanshu@notify.video2ctx.dev',
         EMAIL_TASKS: { send },
       } as unknown as Env,
@@ -80,12 +79,6 @@ describe('welcome email queueing', () => {
     await queueWelcomeEmail(env, { id: 'user-2', email: 'link@customer.test', name: '' });
 
     expect((send.mock.calls[0] as unknown as [Record<string, any>])[0].subject).toBe('Welcome to video2ctx');
-  });
-
-  test('does not advertise a new gift to a returning account', async () => {
-    const { env, send } = welcomeEnv(undefined, null);
-    expect(await queueWelcomeEmail(env, { id: 'returning', email: 'returning@customer.test', name: 'Ari' })).toBe(false);
-    expect(send).not.toHaveBeenCalled();
   });
 
   test('skips test accounts', async () => {

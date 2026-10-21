@@ -249,7 +249,6 @@ test('queues the sign-in link through the branded template', async () => {
 
 function welcomeAuthEnv() {
   return {
-    DB: { prepare: () => ({ bind: () => ({ first: async () => 5000 }) }) },
     AUTH_BASE_URL: 'http://localhost:3000',
     APP_ORIGIN: 'http://localhost:3000',
     BETTER_AUTH_SECRET: 'test-secret-that-is-long-enough-for-tests',

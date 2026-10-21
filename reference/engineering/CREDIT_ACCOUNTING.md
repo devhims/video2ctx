@@ -67,26 +67,18 @@ they have spent their allowance. Existing adjustments count toward this one-time
 catch-up. The unique ledger operation prevents an old Worker from granting twice
 during rollout. Retain the trigger on Worker rollback.
 
-Migration `0027_launch_signup_credits.sql` changes new signup grants to 5,000 for
-the Product Hunt launch offer. It changes only the signup trigger, with no
-backfill or date check. Existing grants and balances remain unchanged. The
-grant metadata records its allowance and `product-hunt-launch-2026` offer ID.
-Account displays and welcome messages read the recorded allowance. Returning
-accounts receive their carryover, without another gift or grant email.
-`STARTER_ONBOARDING_CREDITS` stays at 1,000 for legacy fallback and refund policy.
-Builder top-ups, refund resets, and per-operation credit prices are unchanged.
+Migration `0028_launch_signup_credits.sql` changes the signup trigger from 1,000
+to 5,000 credits. It has no backfill or date check. Existing balances and returning
+account carryovers remain unchanged. `STARTER_ONBOARDING_CREDITS` is also 5,000
+for the current Starter offer and welcome email. Refund resets remain 1,000.
 
-### Ending the launch offer
-
-The offer ends through a separate PR. Add a new migration restoring 1,000 for
-future signups, leaving existing grants intact. Restore the hero's standard copy:
-"Get started for free" and "1,000 credits · No card required". Remove the Product
-Hunt navbar badge and mobile menu link, and restore the standard pricing, FAQ,
-demo and closing copy.
-The standard welcome toast remains in `web/lib/welcome-toast.ts` and is selected
-from the account's recorded grant, so existing launch users retain accurate messages.
-The advertised launch week is October 21 through 28, 2026. There is deliberately
-no scheduled expiry, countdown, or automatic copy change.
+End the launch week manually with a new migration restoring 1,000 for future
+signups, and reset the configuration and launch copy in the same PR. Keep existing
+balances intact. The standard hero copy is "Get started for free" and "1,000
+credits · No card required". Restore the welcome description to "1,000 free credits
+are in your account. Can't wait to see what you build." Remove the Product Hunt
+navbar badge and mobile menu link, and restore the pricing, FAQ, demo, and closing
+copy. There is no scheduled expiry or automatic copy change.
 
 ## Manual credits
 

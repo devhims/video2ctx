@@ -905,22 +905,69 @@ for (const search of ['', '?checkout=cancelled']) test(`checkout confirmation do
   } finally { await account.clear(); }
 });
 
-for (const grant of [1000, 5000]) test(`signup welcome celebration reflects the recorded ${grant}-credit grant`, async ({ page }) => {
-  const account = await accountScenario(page, { responses: {
-    '/v1/usage': { body: { plan: 'starter', creditBalance: 321, includedCredits: grant, creditGrant: 'onboarding' } },
-  } });
-  try {
-    await page.goto('/dashboard/settings?welcome=1');
-    const title = grant === 5000 ? 'Your $10 launch gift is ready!' : 'Welcome to video2ctx, Fixture!';
-    const toast = page.locator('[data-sonner-toast]').filter({ hasText: title });
-    await expect(toast).toBeVisible();
-    await expect(toast).toContainText(`${grant.toLocaleString('en-US')} free credits`);
-    await expect(page.locator('body > [data-confetti]')).toHaveCount(1);
-    await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
-    await expect(page).toHaveURL(/\/dashboard\/settings$/);
-    await page.reload();
-    await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
-  } finally { await account.clear(); }
+test('signup welcome celebration still works after sharing confetti with checkout', async ({ page }) => {
+  let saves = 0;
+  await page.route('**/api/platform/v1/onboarding', route => { saves++; return route.fulfill({ status: 204 }); });
+  await page.goto('/dashboard/settings?welcome=1');
+  const welcome = page.locator('[data-sonner-toast]').filter({ hasText: 'Welcome to video2ctx, Fixture!' });
+  await expect(page.getByRole('dialog', { name: 'Which coding agents do you use?' })).toBeVisible();
+  await expect(welcome).toHaveCount(0);
+  await page.getByRole('button', { name: 'Skip for now' }).click();
+  await expect(welcome).toBeVisible();
+  await expect(welcome).toContainText("Your $10 launch gift is ready. We've added 5,000 free credits to your account.");
+  await expect(page.locator('body > [data-confetti]')).toHaveCount(1);
+  await expect(page.getByRole('dialog', { name: 'Welcome to Builder!' })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/dashboard\/settings$/);
+  expect(saves).toBe(0);
+});
+
+test('signup onboarding saves the answers and hands over a setup prompt before the welcome', async ({ page }) => {
+  const saved: unknown[] = [];
+  await page.route('**/api/platform/v1/onboarding', route => { saved.push(route.request().postDataJSON()); return route.fulfill({ status: 204 }); });
+  await page.goto('/dashboard/settings?welcome=1');
+
+  const agents = page.getByRole('dialog', { name: 'Which coding agents do you use?' });
+  const next = agents.getByRole('button', { name: 'Continue' });
+  await expect(next).toBeDisabled();
+  await agents.getByText('Claude Code', { exact: true }).click();
+  await agents.getByText('Codex', { exact: true }).click();
+  await next.click();
+
+  await expect(page.getByRole('dialog', { name: 'What are you building?' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'What you are building' })).toBeFocused();
+  await page.keyboard.type('A digest of new conference talks');
+  await page.getByRole('button', { name: 'Generate setup prompt' }).click();
+
+  const ready = page.getByRole('dialog', { name: /all set/ });
+  await expect(ready.getByLabel('Setup prompt')).toContainText("npx skills add devhims/video2ctx --skill '*' -a claude-code -a codex -g -y");
+  await expect(ready.getByLabel('Setup prompt')).toContainText('A digest of new conference talks');
+  await expect.poll(() => saved).toEqual([{ agents: ['claude-code', 'codex'], goal: 'A digest of new conference talks' }]);
+
+  // Steps focus their heading, which is not tabbable. Tabbing from it in either direction stays in the dialog.
+  await expect(ready.getByRole('heading', { name: /all set/ })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(ready.getByRole('button', { name: 'Go to dashboard' })).toBeFocused();
+  await ready.getByRole('heading', { name: /all set/ }).focus();
+  await page.keyboard.press('Tab');
+  await expect(ready.getByRole('button', { name: '← Change answers' })).toBeFocused();
+
+  // Going back to the agents keeps keyboard focus contained too.
+  await ready.getByRole('button', { name: '← Change answers' }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(agents.getByRole('heading', { name: 'Which coding agents do you use?' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(agents.getByRole('button', { name: 'Skip for now' })).toBeFocused();
+
+  // Generating again with the same answers does not save them twice.
+  await next.click();
+  await page.getByRole('button', { name: 'Generate setup prompt' }).click();
+  await expect(page.getByRole('dialog', { name: /all set/ })).toBeVisible();
+  expect(saved).toHaveLength(1);
+
+  await page.getByRole('button', { name: 'Go to dashboard' }).click();
+  await expect(page.getByRole('dialog', { name: /all set/ })).toHaveCount(0);
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Welcome to video2ctx, Fixture!' })).toBeVisible();
+  await expect(page).toHaveURL(/\/dashboard\/settings$/);
 });
 
 test('settings retries only the failed card and keeps mutations on a return visit', async ({ page }) => {

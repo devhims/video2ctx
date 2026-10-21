@@ -23,6 +23,6 @@ BEGIN
       ELSE 5000 END,
     CASE WHEN EXISTS (SELECT 1 FROM deleted_accounts WHERE email=lower(trim(NEW.email)))
       THEN '{"kind":"returning-account"}'
-      ELSE '{"plan":"starter","kind":"onboarding","allowance":5000,"offer":"product-hunt-launch-2026"}' END,
+      ELSE '{"plan":"starter","kind":"onboarding","allowance":5000}' END,
     CAST(strftime('%s','now') AS INTEGER)*1000;
 END;
