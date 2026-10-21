@@ -32,6 +32,7 @@ import {
   monitorIntervalMinutes,
 } from '../../lib/monitor-scheduler';
 import { confirmEmailAlerts, getNotificationPreferences, saveNotificationPreferences } from '../../lib/notification-preferences';
+import { parseOnboardingAnswers, saveOnboardingAnswers } from '../../lib/onboarding';
 
 export const sessionRoutes = new Hono<App>();
 
@@ -57,6 +58,7 @@ export const SESSION_ONLY_ROUTE_PATTERNS = [
   '/oauth/youtube/connect',
   '/oauth/youtube',
   '/billing',
+  '/onboarding',
 ] as const;
 
 for (const path of ACCOUNT_ROUTE_PATTERNS) sessionRoutes.use(path, requireAccountPrincipal);
@@ -638,6 +640,11 @@ sessionRoutes.delete('/oauth/youtube', async (c) => {
 
 sessionRoutes.get('/billing', async (c) => {
   return c.json(await getBillingSummary(c.env, requireUser(c).id));
+});
+
+sessionRoutes.put('/onboarding', async (c) => {
+  await saveOnboardingAnswers(c.env, requireUser(c).id, parseOnboardingAnswers(await body(c.req.raw)));
+  return c.body(null, 204);
 });
 
 sessionRoutes.delete('/account', requireSessionPrincipal, async (c) => {
