@@ -24,6 +24,24 @@ test('does not create unsafe links or rewrite code and existing links', () => {
   assert.deepEqual(tree.children[1],original.children[1]);
 });
 
+test('the same timed reference links to the same moment in prose and table cells', () => {
+  const label = (value: string) => ({type:'text' as const,value});
+  const tree: Root = {type:'root',children:[{type:'paragraph',children:[label('Qh2+ [1 · 1:44]. Earlier [1 · 0:58].')]},
+    {type:'table',children:[{type:'tableRow',children:[{type:'tableCell',children:[label('[1 · 1:44]')]}]}]}]};
+  remarkSourceCitations({sources:[{id:'1',title:'Chess puzzle',url:'https://www.youtube.com/watch?v=chessPuzzle'}]})(tree);
+  const links: Array<{url:string;text:string}> = [];
+  const collect = (node: {type:string;url?:string;children?:unknown[]}) => {
+    if (node.type === 'link') links.push({url:node.url!,text:(node.children![0] as {value:string}).value});
+    else for (const child of node.children ?? []) collect(child as {type:string});
+  };
+  collect(tree);
+  assert.deepEqual(links,[
+    {url:'https://www.youtube.com/watch?v=chessPuzzle&t=104s',text:'[1 · 1:44]'},
+    {url:'https://www.youtube.com/watch?v=chessPuzzle&t=58s',text:'[1 · 0:58]'},
+    {url:'https://www.youtube.com/watch?v=chessPuzzle&t=104s',text:'[1 · 1:44]'},
+  ]);
+});
+
 test('a timed reference links to that moment in its video', () => {
   const tree: Root = {type:'root',children:[{type:'paragraph',children:[{type:'text',value:'Land into the wind [1 · 4:53][2 · 1:02:05]. Untimed [1].'}]}]};
   remarkSourceCitations({sources:[
