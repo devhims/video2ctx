@@ -14,7 +14,7 @@ import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provi
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
-import { summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
+import { executeGetVideoComments, summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
 
 function visualGate() {
   let release!: () => void;
@@ -1311,6 +1311,108 @@ test('an unfiltered saved comment read names its page version for continuation',
     const filtered = await store.readEvidence(version, 0, 'opinion 1');
     expect(filtered.packets[0]!.artifacts[0]!.data.collection).toMatchObject({ matchesOnly: true });
     expect(filtered.packets[0]!.artifacts[0]!.data.collection).not.toHaveProperty('pageVersion');
+  }));
+
+/**
+ * Two saved provider pages of 20 top-level comments, 40 in total. Rows are numbered 1 to 40 in
+ * provider order; page 2 holds rows 21 to 40. Each author is one search token, such as reader36.
+ */
+function twoCommentPages() {
+  const row = (number: number) => ({ id: `row-${number}`, author: { name: `reader${number}`, thumbnails: [] },
+    text: `Opinion number ${number}.`, isPinned: false, isHearted: false, replies: [] });
+  const page = (first: number, continuation?: string) => ({ videoId: id, totalCount: 40, replyContinuations: [], meta: transcript().meta,
+    comments: Array.from({ length: 20 }, (_, index) => row(first + index)), ...(continuation ? { continuation } : {}) });
+  return [page(1, 'page-2-token'), page(21)] as const;
+}
+const rowNumbers = (packets: readonly EvidencePacket[]) =>
+  packets.flatMap(packet => packet.excerpts.map(excerpt => Number(excerpt.text.match(/^Opinion number (\d+)\./)?.[1])));
+
+test('two saved comment pages: all 40 rows in order, recoverable in a later turn without a fetch', async () =>
+  within('comment-pages-all-rows', async (store, reopen) => {
+    const [first, second] = twoCommentPages();
+    const p = provider();
+    p.comments = vi.fn(async (_videoId: string, options?: { continuation?: string }) =>
+      ({ cacheStatus: 'miss' as const, value: options?.continuation === 'page-2-token' ? second : first }));
+    const { finalizationEvidenceForModel } = await import('../src/agents/runtime/model-evidence');
+    // Turn 1 follows nextOffset on page 1, then the continuation, then nextOffset on page 2.
+    const run = context(store, sessionProvider(p, store));
+    const read = (input: Parameters<typeof executeGetVideoComments>[0], call: string) => executeGetVideoComments(input, run, call);
+    const page1 = [await read({ videoId: id }, 'p1-0')];
+    const v1 = page1[0]!.assetVersions![0]!;
+    page1.push(await read({ videoId: id, offset: 8, pageVersion: v1 }, 'p1-8'), await read({ videoId: id, offset: 16, pageVersion: v1 }, 'p1-16'));
+    expect(page1[2]!.continuation).toBe('page-2-token');
+    const page2 = [await read({ videoId: id, continuation: 'page-2-token' }, 'p2-0')];
+    const v2 = page2[0]!.assetVersions![0]!;
+    expect(v2).not.toBe(v1);
+    // The reported stop point (8, 8, 4, 8 rows) states exactly what is still unread on page 2.
+    const stop = finalizationEvidenceForModel(page2, 100_000).evidence[0]!;
+    expect(stop.collection!.coverage).toContain(`12 later entries on this saved page are not in this packet. Read offset 8 with pageVersion ${v2}`);
+    expect(page2[0]!.warnings.find(warning => warning.code === 'COMMENT_PAGE_REMAINING')!.message).toContain('comments 1 to 8 of 20');
+    page2.push(await read({ videoId: id, continuation: 'page-2-token', offset: 8, pageVersion: v2 }, 'p2-8'),
+      await read({ videoId: id, continuation: 'page-2-token', offset: 16, pageVersion: v2 }, 'p2-16'));
+    expect(p.comments).toHaveBeenCalledTimes(2);
+    const all = [...page1, ...page2];
+    expect(all.map(packet => packet.excerpts.length)).toEqual([8, 8, 4, 8, 8, 4]);
+    expect(rowNumbers(all)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
+    expect(new Set(all.flatMap(packet => packet.excerpts.map(excerpt => excerpt.text))).size).toBe(40);
+    // The answer model receives every row, and the tail packet says it ends the last page.
+    const handed = finalizationEvidenceForModel(all, 100_000).evidence;
+    expect(handed.flatMap(packet => packet.excerpts ?? [])).toHaveLength(40);
+    expect(handed[2]!.collection!.coverage).toContain('The provider reported a further page.');
+    expect(handed[5]!.collection!.coverage).toContain('This packet starts at page entry 17');
+    expect(handed[5]!.collection!.coverage).toContain('The provider reported no further page.');
+    expect(rowNumbers(page2.slice(-1))).toEqual([37, 38, 39, 40]);
+
+    // A later turn, after reload, recovers early and late original rows by page version only.
+    const later = context(reopen(), sessionProvider(p, reopen()));
+    const early = await executeGetVideoComments({ videoId: id, pageVersion: v1 }, later, 'later-early');
+    const late = await executeGetVideoComments({ videoId: id, offset: 16, pageVersion: v2 }, later, 'later-late');
+    expect(rowNumbers([early])).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(rowNumbers([late])).toEqual([37, 38, 39, 40]);
+    expect(late.excerpts.map(excerpt => excerpt.text)).toEqual(page2[2]!.excerpts.map(excerpt => excerpt.text));
+    expect(late.excerpts[3]!.text).toContain('Author: reader40');
+    expect(p.comments).toHaveBeenCalledTimes(2);
+  }));
+
+test('a saved comment found by search states its page position, page size and further page', async () =>
+  within('comment-search-receipts', async (store, reopen) => {
+    const [first, second] = twoCommentPages();
+    const p = provider();
+    p.comments = vi.fn(async (_videoId: string, options?: { continuation?: string }) =>
+      ({ cacheStatus: 'miss' as const, value: options?.continuation === 'page-2-token' ? second : first }));
+    const v1 = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    const v2 = (await sessionProvider(p, store).comments(id, { continuation: 'page-2-token' })).assetVersions![0]!;
+    const { finalizationEvidenceForModel } = await import('../src/agents/runtime/model-evidence');
+    const hit = async (author: string) => {
+      const found = await reopen().search.searchEvidence(reopen(), author);
+      expect(found.packets).toHaveLength(1);
+      const packet = found.packets[0]!;
+      // The answer model sees short reference labels, so the receipt is the only position it gets.
+      return { packet, coverage: finalizationEvidenceForModel([packet], 100_000).evidence[0]!.collection!.coverage };
+    };
+    // Row 15 of page 2 (row 35 of 40) is not the last row: five later rows remain on its page.
+    const middle = await hit('reader35');
+    expect(middle.packet.excerpts[0]!.id).toBe(`evidence:${v2}:14`);
+    expect(middle.packet.artifacts[0]!.data).toMatchObject({ savedPageCount: 20,
+      collection: { fetchedCount: 20, retainedCount: 1, pageOffset: 14, nextPageOffset: 15, pageVersion: v2, morePages: false, reportedTotal: 40 } });
+    expect(middle.coverage).toContain('The provider page had 20 entries.');
+    expect(middle.coverage).toContain('This packet starts at page entry 15');
+    expect(middle.coverage).toContain(`5 later entries on this saved page are not in this packet. Read offset 15 with pageVersion ${v2}`);
+    expect(middle.coverage).toContain('The provider reported no further page.');
+    expect(middle.coverage).not.toContain('was not recorded');
+    // Row 20 of page 2 is the final saved row.
+    const last = await hit('reader40');
+    expect(last.packet.artifacts[0]!.data.collection).not.toHaveProperty('nextPageOffset');
+    expect(last.coverage).toContain('This packet starts at page entry 20');
+    expect(last.coverage).not.toContain('later entr');
+    expect(last.coverage).toContain('The provider reported no further page.');
+    // A page 1 hit says a further provider page exists, so it is never read as the tail.
+    const early = await hit('reader1');
+    expect(early.packet.excerpts[0]!.id).toBe(`evidence:${v1}:0`);
+    expect(early.packet.artifacts[0]!.data.collection).not.toHaveProperty('pageOffset');
+    expect(early.coverage).toContain('19 later entries on this saved page');
+    expect(early.coverage).toContain('The provider reported a further page.');
+    expect(p.comments).toHaveBeenCalledTimes(2);
   }));
 
 // Durable Object storage is real SQLite, so these cases check the actual unicode61 tokenizer.

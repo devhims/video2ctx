@@ -599,7 +599,15 @@ export class SessionEvidenceStore implements SessionAccess {
     if (!page || !this.has(version)) return { packets: [] };
     const comment = page.comments[position];
     if (!comment) return { packets: [] };
-    const packet = await this.commentPacket(page.asset, [{ comment, position, rawMatch }], [], undefined, { savedPageCount: 1 }, page.current);
+    // The receipt states where this comment sits on its saved page, so one hit is never
+    // mistaken for the page's last entry or for a page with no further provider page.
+    const next = position + 1 < page.comments.length ? position + 1 : undefined;
+    const packet = await this.commentPacket(page.asset, [{ comment, position, rawMatch }], [], undefined, {
+      savedPageCount: page.comments.length,
+      collection: collectionRetrieval({ fetchedCount: page.comments.length, retainedCount: 1, reportedTotal: page.totalCount,
+        continuation: page.continuation, continuationAccepted: true, pageOffset: position, nextPageOffset: next,
+        pageVersion: next !== undefined ? version : undefined }),
+    }, page.current);
     this.savePacket(packet);
     return { packets: [packet] };
   }
@@ -614,7 +622,11 @@ export class SessionEvidenceStore implements SessionAccess {
     const value = await this.read(version);
     if (value === null) return generation !== this.generation() && this.has(version) ? 'interrupted' : undefined;
     const comments = savedComments(value);
-    return comments && { asset, comments, current: this.currentVersions().has(version) };
+    if (!comments) return undefined;
+    const { continuation, totalCount } = value as { continuation?: unknown; totalCount?: unknown };
+    return { asset, comments, current: this.currentVersions().has(version),
+      ...(typeof continuation === 'string' && continuation ? { continuation } : {}),
+      ...(typeof totalCount === 'number' && Number.isInteger(totalCount) && totalCount >= 0 ? { totalCount } : {}) };
   }
   private async savedCommentPage(asset: SessionAsset): Promise<Comment[]> {
     const value = await this.read(asset.version);
@@ -980,7 +992,15 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
   return result;
 }
 
-interface CommentPage { asset: SessionAsset; comments: Comment[]; current: boolean }
+interface CommentPage {
+  asset: SessionAsset;
+  comments: Comment[];
+  current: boolean;
+  /** The provider token for the next page, as saved with this page. */
+  continuation?: string;
+  /** The total the provider header stated when this page was fetched. */
+  totalCount?: number;
+}
 /** Saved comment pages loaded during one search, by version. */
 export interface CommentPageCache {
   pages: Map<string, Promise<CommentPage | 'interrupted' | undefined>>;

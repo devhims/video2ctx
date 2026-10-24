@@ -212,7 +212,8 @@ export class SessionSearch {
         const found = store.has(metadata.version) ? (await store.readSavedComment(metadata.version, metadata.offset ?? 0, firstMatchSpan(row), pages)).packets : [];
         const excerpt = found[0]?.excerpts[0];
         if (found[0] && excerpt) {
-          packets.push({ ...found[0], packetId: `search:${excerpt.id}`, excerpts: [excerpt], artifacts: [] });
+          // The hit packet holds exactly this one comment, so its receipt (page size and position) stays true.
+          packets.push({ ...found[0], packetId: `search:${excerpt.id}`, excerpts: [excerpt] });
           seen.add(row.id);
         }
         continue;
