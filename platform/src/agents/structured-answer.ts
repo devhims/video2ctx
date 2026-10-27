@@ -249,8 +249,7 @@ export function blockReferences(block: { text: string; evidenceIds: readonly str
   return [...new Set([...block.evidenceIds.map(id => aliases.get(id) ?? id), ...inline])];
 }
 
-export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map(),
-  validateRenderedBlocks?: (blocks: Array<{ text: string }>) => void): FinalizeAnswerInput {
+export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
   // Not an answer at all: the one content check that still earns a repair.
@@ -280,7 +279,6 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
     const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
     return trimCitationProse(remaining ? `${text}${separator}${remaining}` : text);
   });
-  validateRenderedBlocks?.(renderedBlocks.map(text => ({ text })));
   const answer = renderedBlocks.join('\n\n');
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,

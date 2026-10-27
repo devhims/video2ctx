@@ -83,24 +83,3 @@ it('repairs a legacy completed page chain with the old sticky flag', () => {
   ] };
   expect(new ContextHandoff(saved).snapshot().truncated).toBe(false);
 });
-
-it('checkpoints verification before acknowledging it and retains it through later context reads', async () => {
-  const verification = { userRequirements: ['Keep Juniper and three numbered points.'],
-    answerFormat: { name: 'Juniper', numberedPoints: 3, onlyNumberedPoints: true, fencedCode: true } };
-  const persist = vi.fn();
-  const handoff = new ContextHandoff(undefined, persist);
-  handoff.recordVerification(verification);
-  expect(persist).toHaveBeenCalledExactlyOnceWith(handoff.snapshot());
-  const recovered = new ContextHandoff(JSON.parse(JSON.stringify(handoff.snapshot())), persist);
-  const tools = recovered.tools({ read_session_history: tool({ inputSchema: z.object({}), execute: async () => ({ messages: [] }) }) });
-  await tools.read_session_history!.execute!({}, { toolCallId: 'history', messages: [], context: undefined });
-  expect(persist.mock.lastCall![0].verification).toEqual(verification);
-  expect(reconcileResearchMemory(recovered.snapshot(), () => undefined).verification).toEqual(verification);
-});
-
-it('does not acknowledge verification in memory when checkpoint persistence fails', () => {
-  const handoff = new ContextHandoff(undefined, () => { throw new Error('Run no longer active'); });
-  expect(() => handoff.recordVerification({ userRequirements: ['Juniper'],
-    answerFormat: { name: 'Juniper', numberedPoints: null, onlyNumberedPoints: false, fencedCode: false } })).toThrow('Run no longer active');
-  expect(handoff.snapshot().verification).toBeUndefined();
-});

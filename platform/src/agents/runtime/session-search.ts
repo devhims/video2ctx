@@ -241,7 +241,7 @@ export class SessionSearch {
     onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void,
     signal: AbortSignal,
     /** History-only routes search messages and memory, never saved source evidence. */
-    options: { evidence?: boolean } = {},
+    options: { evidence?: boolean; runId?: string } = {},
   ): Promise<ToolSet> {
     const check = () => signal.throwIfAborted();
     const base = Session.create(this.history)
@@ -285,7 +285,7 @@ export class SessionSearch {
       });
     return {
       ...(await session.tools()),
-      ...(options.evidence === false ? {} : { read_saved_evidence: createReadSavedEvidenceTool(store, onEvidence, signal) }),
+      ...(options.evidence === false ? {} : { read_saved_evidence: createReadSavedEvidenceTool(store, onEvidence, signal, options.runId) }),
       read_session_history: tool({
         description:
           'Read all persisted session user messages or completed answers chronologically, including failed-run user messages and older turns. For listing messages, paginate until nextOffset is absent. Results may span conversation branches. Source-deleted answers are omitted.',

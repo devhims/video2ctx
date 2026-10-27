@@ -617,6 +617,12 @@ function lastResortDecision(
     })[0] ?? []])].slice(0, 8),
   };
   const needsFreshData = constraints.refreshEvidence || constraints.refreshDynamicData;
+  if (needsFreshData && (constraints.savedOnly || candidates.some(candidate => candidate.skill === 'verify_saved_evidence' && candidate.savedOnly !== false))) {
+    const clarification = { route: 'finalize', responseIntent: 'clarification',
+      reason: 'Routing attempts disagree about saved-only access and fresh retrieval. Ask which sources may be refreshed before retrieving or answering from stale data.', answerDetail: 'standard' };
+    return { decision: classifierDecisionSchema.parse(clarification), method: 'defaults',
+      defaultedFields: Object.keys(clarification) as DefaultedClassificationField[] };
+  }
   const allowed = (route: ClassifierDecision['route'] | undefined) => route && !(route === 'finalize' && needsFreshData) ? route : undefined;
   // A fixed comparison set is researched as one set, not as one inspected video.
   const executable = (route: ClassifierDecision['route']) =>

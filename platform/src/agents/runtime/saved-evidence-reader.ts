@@ -6,7 +6,7 @@ import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video
 import type { SessionEvidenceStore } from './session-evidence';
 import { sha256 } from '../../lib/http';
 
-import { SAVED_EVIDENCE_ARTIFACT, SAVED_EVIDENCE_READ_LIMIT } from './saved-evidence-contract';
+import { SAVED_EVIDENCE_ARTIFACT } from './saved-evidence-contract';
 export { SAVED_EVIDENCE_ARTIFACT, SAVED_EVIDENCE_READ_LIMIT } from './saved-evidence-contract';
 export const readSavedEvidenceInputSchema = z.object({
   assetVersion: z.string().min(1).max(200).describe('Exact version from the session asset inventory. Older saved versions may be read explicitly.'),
@@ -41,7 +41,7 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
       // Split long comments without discarding their tail or changing their words.
       const text = comment.text;
       const suffix = `\nAuthor: ${comment.author.name.slice(0, 200)}\nComment ID: ${comment.id.slice(0, 200)}\nSaved position: ${position.map(index => index + 1).join('.')}`;
-      const searchText = (text + suffix).toLowerCase();
+      const searchText = `${text} ${comment.author.name}`;
       const chunks: EvidencePacket['excerpts'] = [];
       for (let offset = 0; offset < text.length; offset += 1500) {
         commentSearchTexts.push(searchText);
@@ -50,7 +50,7 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
       }
       return chunks;
     });
-  const tokens = request.query?.toLowerCase().match(/[\p{L}\p{N}_]+/gu);
+  const tokens = request.query ? searchWords(request.query) : undefined;
   if (request.query && !tokens?.length) throw new Error('Use at least one word in the saved-evidence query.');
   const selected = new Set<number>();
   for (let index = 0; index < excerpts.length; index++) {
@@ -60,7 +60,8 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
     // Captions can split a phrase across consecutive segments. Comments never mix authors.
     const text = asset.kind === 'comments' ? commentSearchTexts[index]!
       : excerpts.slice(index, index + 3).map(item => item.text).join(' ').toLowerCase();
-    if (tokens && !tokens.every(token => text.includes(token))) continue;
+    const words = tokens ? new Set(searchWords(text)) : undefined;
+    if (tokens && !tokens.every(token => words!.has(token))) continue;
     const radius = tokens && asset.kind === 'transcript' ? 2 : 0;
     for (let neighbor = Math.max(0, index - radius); neighbor <= Math.min(excerpts.length - 1, index + radius); neighbor++) selected.add(neighbor);
   }
@@ -77,7 +78,7 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
   const sourceMeta = (value as Transcript | CommentsPage).meta;
   const coverage = { assetVersion: asset.version, kind: asset.kind, totalExcerpts: excerpts.length,
     selectedExcerpts: matching.length, offset: request.offset, returnedExcerpts: page.length,
-    sourcePartial: sourceMeta.partial,
+    ...(sourceMeta?.partial !== undefined ? { sourcePartial: sourceMeta.partial } : {}),
     ...(asset.kind === 'comments' ? { sourceContinuationAvailable: Boolean((value as CommentsPage).continuation) } : {}),
     ...(nextOffset !== undefined ? { nextOffset } : {}) };
   const packet = evidencePacketSchema.parse({
@@ -87,8 +88,8 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
       url: `https://www.youtube.com/watch?v=${asset.videoId}` }], excerpts: page,
     artifacts: [{ type: SAVED_EVIDENCE_ARTIFACT, data: coverage }], usage: [],
     warnings: [
-      ...sourceMeta.warnings.map(message => ({ code: 'YOUTUBE_PROVIDER_WARNING', message, videoId: asset.videoId })),
-      ...(sourceMeta.partial ? [{ code: 'PARTIAL_SAVED_SOURCE', message: 'The saved source was partial when collected.', videoId: asset.videoId }] : []),
+      ...(sourceMeta?.warnings ?? []).map(message => ({ code: 'YOUTUBE_PROVIDER_WARNING', message, videoId: asset.videoId })),
+      ...(sourceMeta?.partial ? [{ code: 'PARTIAL_SAVED_SOURCE', message: 'The saved source was partial when collected.', videoId: asset.videoId }] : []),
       ...(asset.current ? [] : [{ code: 'SUPERSEDED_SESSION_EVIDENCE',
         message: 'These are original records from an older saved version, not fresh source data.', videoId: asset.videoId }]),
     ],
@@ -101,18 +102,19 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
 }
 
 export function createReadSavedEvidenceTool(store: SessionEvidenceStore,
-  admit: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal) {
-  let calls = 0;
+  admit: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, runId: string = crypto.randomUUID()) {
   return tool({
     description: 'Read or search original SAVED captions/comments by assetVersion. Use for exact quotations, precise passage times, corrections, and comments omitted from summaries. Returns original text with immutable citations; never calls YouTube or an analyst. Query captions with a few distinctive words, then read adjacent times if needed. Page with nextOffset and the same filters. A filtered page does not establish absence from the whole asset.',
     inputSchema: readSavedEvidenceInputSchema,
     execute: async input => {
       signal.throwIfAborted();
-      if (++calls > SAVED_EVIDENCE_READ_LIMIT) throw new Error('Saved-evidence read limit reached. Answer from the passages already read and state remaining gaps.');
+      const remainingReads = store.reserveSavedEvidenceRead(runId);
       const result = await readSavedEvidence(store, input, signal);
       signal.throwIfAborted();
       const packets = admit(result.packets, 'read_saved_evidence') ?? result.packets;
-      return { packets, coverage: result.coverage, remainingReads: Math.max(0, SAVED_EVIDENCE_READ_LIMIT - calls),
+      const outcome = result.coverage.totalExcerpts === 0 ? 'empty' : result.coverage.returnedExcerpts > 0 && packets.length < result.packets.length ? 'withheld' : undefined;
+      if (outcome) store.recordSavedEvidenceOutcome(runId, input.assetVersion, outcome);
+      return { packets, coverage: result.coverage, remainingReads,
         ...(input.query && result.coverage.selectedExcerpts === 0 ? { searchHint: 'No literal match for all query words together. Retry with one distinctive word from the requested wording, without changing its spelling, or page the original. This does not establish that the requested information is absent.' } : {}),
         ...(packets.length < result.packets.length ? { withheld: true, note: 'Saved passages were not admitted to this run. Do not claim to have read them.' } : {}) };
     },
@@ -125,9 +127,14 @@ function flattenComments(comments: Comment[]) {
   while (pending.length) {
     const entry = pending.pop()!;
     entries.push(entry);
-    for (let index = entry.comment.replies.length - 1; index >= 0; index--) {
+    for (let index = (entry.comment.replies?.length ?? 0) - 1; index >= 0; index--) {
       pending.push({ comment: entry.comment.replies[index]!, position: [...entry.position, index] });
     }
   }
   return entries;
+}
+
+/** Treat contractions as words and normalize typographic apostrophes consistently. */
+function searchWords(text: string): string[] {
+  return text.toLowerCase().replace(/[’‘]/g, "'").match(/[\p{L}\p{N}_]+(?:'[\p{L}\p{N}_]+)*/gu) ?? [];
 }
