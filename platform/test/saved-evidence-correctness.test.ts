@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import { readSavedEvidence } from '../src/agents/runtime/saved-evidence-reader';
+import { validateSavedAnswerFormat } from '../src/agents/research/skills/verify-saved-evidence';
 import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -30,6 +31,11 @@ it('reads historical blobs with absent optional metadata and replies', async () 
   const { replies, ...withoutReplies } = comment('Nice tutorial');
   await expect(readSavedEvidence(store({ meta, comments: [withoutReplies] }), { assetVersion: version })).resolves.toMatchObject({ coverage: { returnedExcerpts: 1 } });
 });
+it('accepts nested numbered steps inside three answer blocks', () => {
+  expect(() => validateSavedAnswerFormat([
+    { text: '1. Preparation.' }, { text: '2. Steps:\n   1. preheat\n   2. mix' }, { text: '3. Finish.' },
+  ], { name: null, numberedPoints: 3, onlyNumberedPoints: true, fencedCode: false })).not.toThrow();
+});
 it('clarifies conflicting saved-only and fresh retrieval fallback candidates', async () => {
   let calls = 0;
   const model = new MockLanguageModelV4({ doGenerate: async () => ({
@@ -43,7 +49,7 @@ it('clarifies conflicting saved-only and fresh retrieval fallback candidates', a
   expect('savedOnly' in result && result.savedOnly).toBeFalsy();
   expect('refreshDynamicData' in result && result.refreshDynamicData).toBeFalsy();
 });
-it('preserves supported partial fallback for saved verification', async () => {
+it('preserves partial fallback without explicit formatting and rejects it with constraints', async () => {
   const saved = (await readSavedEvidence(store({ meta, comments: [comment('This saved original passage explains how to keep the soil moist during repotting.')] }), { assetVersion: version })).packets;
   // Raw captions/comments alone deliberately do not qualify for the existing fallback.
   expect(evidenceFallback(saved, 'inspect_video')).toBeNull();
@@ -52,17 +58,19 @@ it('preserves supported partial fallback for saved verification', async () => {
     excerpts: [{ id: 'frame:0', sourceId: 'frame', text: 'The editor shows const x = 1;', startMs: 1000 }],
     artifacts: [{ type: 'youtube_frame_analysis', data: {} }], warnings: [], usage: [] });
   const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
-  for (const mode of ['ordinary', 'saved']) {
+  for (const mode of ['ordinary', 'unconstrained', 'constrained']) {
     const finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, saved, 0));
     const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text', text: 'not json' }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
     const run = runResearchAgentWithModel({ message: 'Recover the saved original.', model, finalizationModel: model,
       decision: { route: 'inspect_video', videoId, useStoryboard: false, ...(mode !== 'ordinary' ? { savedOnly: true, skill: 'verify_saved_evidence' as const } : {}) },
       finalizationDeadlineAt: Date.now() + 60_000, recoveredEvidence: saved, inheritedResolved: true,
+      ...(mode !== 'ordinary' ? { recoveredResearchContext: { reads: [], truncated: false, verification: { userRequirements: ['Recover saved original.'],
+        answerFormat: { name: null, numberedPoints: mode === 'constrained' ? 3 : null, onlyNumberedPoints: false, fencedCode: false } } } } : {}),
       context: { ...identity, signal: new AbortController().signal, provider: {} as any,
         transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: async execution => execution.execute(), finalize },
     });
-    await expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' });
-    expect(finalize).toHaveBeenCalledOnce();
+    if (mode === 'constrained') { await expect(run).rejects.toThrow(); expect(finalize).not.toHaveBeenCalled(); }
+    else { await expect(run).resolves.toMatchObject({ finishReason: 'evidence-fallback' }); expect(finalize).toHaveBeenCalledOnce(); }
   }
 });
 
@@ -83,3 +91,11 @@ it('keeps known source warnings and unknown historical completeness distinct', a
   expect(partial.packets[0]!.warnings.map(warning => warning.message)).toContain('Missing page');
 });
 
+it('still rejects extra top-level points, wrong sequence and headings with nested lists', () => {
+  const format = { name: null, numberedPoints: 3, onlyNumberedPoints: true, fencedCode: false };
+  for (const texts of [
+    ['1. Start', '2. Steps:\n3. Extra point', '3. Finish'],
+    ['1. Start', '3. Steps:\n   1. Nested', '2. Finish'],
+    ['Heading', '1. Start', '2. Steps', '3. Finish'],
+  ]) expect(() => validateSavedAnswerFormat(texts.map(text => ({ text })), format)).toThrow();
+});

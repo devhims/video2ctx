@@ -75,7 +75,10 @@ test.skipIf(!(env as Env & { WATERCOLOR_LIVE?: boolean }).WATERCOLOR_LIVE)(
       expect(ctx.finalize).toHaveBeenCalledOnce();
       const answer = vi.mocked(ctx.finalize).mock.calls[0]![1];
       console.log(JSON.stringify({ evaluation: 'watercolor-saved-originals', decision, toolReads, answer: answer.answer }));
-      console.log(JSON.stringify({ presentation: 'watercolor', currentName: answer.answer.includes('Willow'), numberedPoints: answer.answer.match(/^\s*\d+\.\s/gm)?.length ?? 0 }));
+      expect(answer.answer).toContain('Willow');
+      expect(answer.answer.trim()).toMatch(/^1\.\s/);
+      expect(answer.answer.match(/^\s*\d+\.\s/gm)).toHaveLength(3);
+      expect(answer.answer.trim().split(/\n\s*\n/).every(paragraph => /^\d+\.\s/.test(paragraph))).toBe(true);
       expect(answer.answer).toMatch(/6\s*(?:minutes|min\b)|six minutes/i);
       expect(answer.answer).toMatch(/small(?:er)?[^.!?\n]*(?:less|faster|shorter)|(?:less|faster|shorter)[^.!?\n]*small(?:er)?/i);
       expect(answer.answer).not.toMatch(/https?:\/\/[^\s]*[?&]t=/);
@@ -207,7 +210,7 @@ test('original reads retain nested replies, fence interrupted reads and bound re
     await expect(readSavedEvidence(store, input)).rejects.toThrow('unavailable or deleted');
   }));
 
-test.each([false, true])('exact watercolor follow-up retains original passages after reopening (interrupted: %s)', async interrupted =>
+test.each([false, true])('exact watercolor follow-up retains passages and requirements after reopening (interrupted: %s)', async interrupted =>
   within(`watercolor-exact-followup-${interrupted}`, async (store, reopen) => {
     const { MockLanguageModelV4 } = await import('ai/test');
     const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
@@ -237,17 +240,23 @@ test.each([false, true])('exact watercolor follow-up retains original passages a
     let step = 0;
     const core = new MockLanguageModelV4({ doGenerate: async call => {
       expect(call.tools?.map(tool => tool.name)).not.toContain('get_video_transcript');
-      const read = reads[step++];
-      if (!read && interrupted) throw new Error('Research phase timeout.');
+      const prepare = step++ === 0;
+      if (prepare) expect(call.tools?.map(tool => tool.name)).not.toContain('read_saved_evidence');
+      const read = reads[step - 2];
+      if (!prepare && !read && interrupted) throw new Error('Research phase timeout.');
       return { content: [{ type: 'tool-call', toolCallId: `read-${step}`,
-        toolName: read ? 'read_saved_evidence' : 'complete_research',
-        input: JSON.stringify(read ? { assetVersion: versions.get(read[0]), ...read[1] } : {}) }],
+        toolName: prepare ? 'set_verification_requirements' : read ? 'read_saved_evidence' : 'complete_research',
+        input: JSON.stringify(prepare ? { userRequirements: ['Continue Willow in exactly three short numbered points, without introduction or closing.'],
+          answerFormat: { name: 'Willow', numberedPoints: 3, onlyNumberedPoints: true, fencedCode: false } }
+          : read ? { assetVersion: versions.get(read[0]), ...read[1] } : {}) }],
         finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
     } });
     let finalizerCalled = false;
     const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
       finalizerCalled = true;
       const supplied = JSON.stringify(call.prompt);
+      expect(supplied).toContain('verificationHandoff');
+      expect(supplied).toContain('Continue Willow in exactly three short numbered points');
       for (const phrase of ['use watercolor medium my favorite is', 'of the exercise i tilted my page so the',
         'enough that it still looks wet', 'but not beady once', 'make sure the brush is damp or nearly',
         'dry you can\'t have it soaking wet', 'arches cold pressed', 'quinacridone red', 'alizarin crimson',
@@ -275,7 +284,7 @@ test.each([false, true])('exact watercolor follow-up retains original passages a
       conversationHistory: [{ userMessageId: 'correction', agentMessageId: 'previous-answer', user: watercolorCorrection, assistant: 'I cannot supply exact quotations because only analyst findings were supplied.', resourceIds: [annaId, kelogId] }],
       decision: { route: 'topic_research', comparisonVideoIds: [annaId, kelogId], savedOnly: true, skill: 'verify_saved_evidence',
         useStoryboard: false, numberedItemCount: 3 }, context: ctx });
-    expect(step).toBe(reads.length + 1);
+    expect(step).toBe(reads.length + 2);
     expect(finalizerCalled).toBe(true);
     expect(freshFetch).not.toHaveBeenCalled();
     const answer: ReturnType<typeof buildAgentTurnResult> = await vi.mocked(ctx.finalize).mock.results[0]!.value;
@@ -1843,6 +1852,8 @@ test.each(['empty', 'withheld'] as const)('research can complete with an explici
     await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx,
       message: 'Quote the saved captions without fresh retrieval.',
       decision: { route: 'inspect_video', videoId: id, savedOnly: true, skill: 'verify_saved_evidence', useStoryboard: false },
+      recoveredResearchContext: { reads: [], truncated: false, verification: { userRequirements: ['Quote saved captions.'],
+        answerFormat: { name: null, numberedPoints: null, onlyNumberedPoints: false, fencedCode: false } } },
       inheritedResolved: true, recoveredEvidence: [],
     });
     expect(core.doGenerateCalls).toHaveLength(1);

@@ -157,7 +157,7 @@ sequenceDiagram
 
 Existing source storage and billing remain in place; bounded original reads supplement shortened evidence.
 
-Naming and formatting preferences remain prompt guidance. There is no requirements-recording tool, `answerFormat` checkpoint, generated code-block field or blocking presentation validator in this PR. Supported partial fallback remains available. Citation validation and ordinary structured-answer validation still apply. Required-format enforcement is deferred to a separate draft PR.
+Naming and formatting preferences remain prompt guidance. There is no requirements-recording tool, `answerFormat` checkpoint, generated code-block field or blocking presentation validator in the evidence-recovery PR (#227). Supported partial fallback remains available. Citation validation and ordinary structured-answer validation still apply. Required-format enforcement is deferred to a separate draft PR. See [the deferred proposal](SAVED_ANSWER_FORMAT_DRAFT.md) for its behavior and failure policy.
 
 The exact replays use prior conversation and saved originals, without seeding later answers or post-correction Memory:
 
