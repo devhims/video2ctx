@@ -91,11 +91,18 @@ test('prior transcript analyses cannot exhaust a saved-original verification run
       outputTokens: { total: 10, text: 10, reasoning: 0 } };
     const core = new MockLanguageModelV4({ doGenerate: async call => {
       const current = step++;
-      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
-      else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
-      const toolName = current < 2 ? 'read_saved_evidence' : 'complete_research';
+      if (current === 0) expect(call.tools?.map(tool => tool.name)).toEqual(['set_verification_requirements']);
+      else {
+        expect(call.tools?.map(tool => tool.name)).not.toContain('set_verification_requirements');
+        expect(call.tools?.map(tool => tool.name)).toContain('read_saved_evidence');
+        if (current <= 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
+        else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
+      }
+      const toolName = current === 0 ? 'set_verification_requirements' : current <= 2 ? 'read_saved_evidence' : 'complete_research';
       return { content: [{ type: 'tool-call' as const, toolCallId: `step-${current}`, toolName,
-        input: JSON.stringify(current < 2 ? { assetVersion: versions[current], limit: 1 } : {}) }],
+        input: JSON.stringify(current === 0 ? { userRequirements: ['Recover exact quotes for Rowan.'],
+          answerFormat: { name: 'Rowan', numberedPoints: null, onlyNumberedPoints: false, fencedCode: false } }
+          : current <= 2 ? { assetVersion: versions[current - 1], limit: 1 } : {}) }],
         finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' }, usage, warnings: [] };
     } });
     const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
@@ -116,7 +123,7 @@ test('prior transcript analyses cannot exhaust a saved-original verification run
       context: { runId: crypto.randomUUID(), signal: new AbortController().signal, provider: savedOnlyProvider(), session: store,
         getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
         executeEvidenceTool: async execution => execution.execute(), finalize: finish } });
-    expect(step).toBe(3);
+    expect(step).toBe(4);
     expect(finish).toHaveBeenCalledOnce();
   });
 });
@@ -200,9 +207,15 @@ test.skipIf(!(env as Env & { SAVED_REPLAYS_LIVE?: boolean }).SAVED_REPLAYS_LIVE)
       console.log(JSON.stringify({ replay: scenario.name, decision, calls, answer, citations }));
       for (const call of providerCalls) expect(call).not.toHaveBeenCalled();
       expect(calls.some(call => call.name === 'read_saved_evidence')).toBe(true);
-      // Presentation is diagnostic only in the evidence-recovery PR.
-      console.log(JSON.stringify({ presentation: scenario.name, currentName: answer.includes(scenario.plan),
-        numberedPoints: answer.match(/^\s*\d+\.\s/gm)?.length ?? 0, fencedCode: answer.includes('```') }));
+      expect(calls.filter(call => call.name === 'set_verification_requirements' && !call.error)).toHaveLength(1);
+      expect(calls.find(call => call.name === 'set_verification_requirements' && !call.error)?.input).toMatchObject({
+        answerFormat: { name: scenario.plan, numberedPoints: 3, onlyNumberedPoints: true,
+          fencedCode: scenario.name.startsWith('javascript') },
+      });
+      // Keep presentation failures visible without skipping the source-recovery checks.
+      expect.soft(answer).toContain(scenario.plan);
+      expect.soft(answer.trim()).toMatch(/^1\.\s/);
+      expect.soft(answer.match(/^\s*\d+\.\s/gm)).toHaveLength(3);
       if (scenario.name.startsWith('bicycle')) {
         expect(answer).toContain('15.12'); expect(answer).toContain('7.56'); expect(answer).toContain('1.3');
         expect(answer).toMatch(/pedal/i); expect(answer).toMatch(/tyre|tire|wheel/i);
@@ -242,7 +255,7 @@ test.skipIf(!(env as Env & { SAVED_REPLAYS_LIVE?: boolean }).SAVED_REPLAYS_LIVE)
         // claim about the requested comments; their exact text/authors/citations
         // are independently checked above.
         expect(answer).not.toMatch(/(?:cannot|can't|unable to) (?:name|identify|recover|quote) (?:the )?(?:two (?:requested )?comment(?:er)?s|requested comment(?:er)?s|comment\s*(?:13|17)|@JohnnyPhoenix|@laurelineparis5407)\b/i);
-        expect(answer).toContain('const ui = users.map(user => <h1> {user.username} </h1> )');
+        expect.soft(answer).toMatch(/```(?:jsx|js|javascript)?\s*const ui = users\.map\(user => <h1> \{user\.username\} <\/h1> \)/);
         if (scenario.turn === 3) {
           expect(answer).toContain('Promise.all(requests)');
           expect(answer).toMatch(/lightbulb|light bulb/i);

@@ -1,19 +1,24 @@
 import type { ToolSet } from 'ai';
+import { savedVerificationHandoffSchema } from '../research/skills/verify-saved-evidence';
+import type { z } from 'zod';
 
 export interface ResearchContext {
   reads: Array<{ tool: string; input: unknown; result: unknown }>;
   truncated: boolean;
   budgetTruncated?: boolean;
+  verification?: z.infer<typeof savedVerificationHandoffSchema>;
 }
 
 /** Bounded copies of context research actually read, with tool and query attribution. */
 export class ContextHandoff {
   private readonly reads: Array<{ tool: string; input: unknown; result: unknown }> = [];
+  private verification?: ResearchContext['verification'];
   private characters = 0;
   private budgetTruncated = false;
 
   constructor(saved?: ResearchContext, private readonly persist?: (context: ResearchContext) => void) {
     if (saved) {
+      this.verification = saved.verification === undefined ? undefined : savedVerificationHandoffSchema.parse(saved.verification);
       this.reads.push(...saved.reads);
       this.characters = saved.reads.reduce((sum, read) => sum + JSON.stringify(read).length, 0);
       // Older checkpoints used one flag for both causes. A retained page cursor
@@ -23,6 +28,13 @@ export class ContextHandoff {
           && typeof (read.result as { nextOffset?: number })?.nextOffset === 'number')
           || saved.reads.length >= 20 || this.characters >= 24_000));
     }
+  }
+
+  /** Commit constraints before acknowledging the tool or entering finalization. */
+  recordVerification(value: NonNullable<ResearchContext['verification']>): void {
+    const verification = savedVerificationHandoffSchema.parse(value);
+    this.persist?.({ ...this.snapshot(), verification });
+    this.verification = verification;
   }
 
   tools(tools: ToolSet): ToolSet {
@@ -47,7 +59,7 @@ export class ContextHandoff {
     }));
   }
 
-  snapshot(): ResearchContext { return { reads: [...this.reads], budgetTruncated: this.budgetTruncated,
+  snapshot(): ResearchContext { return { ...(this.verification ? { verification: this.verification } : {}), reads: [...this.reads], budgetTruncated: this.budgetTruncated,
     truncated: this.budgetTruncated || historyHasMissingPages(this.reads) }; }
 }
 
