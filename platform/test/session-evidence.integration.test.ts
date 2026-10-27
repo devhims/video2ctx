@@ -1,16 +1,15 @@
 import { pendingOriginalSources, unreadOriginalSources } from '../src/agents/research/skills/verify-saved-evidence';
-import { watercolorInitialAnswer, watercolorCorrectionAnswer } from './fixtures/watercolor-history';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
-import type { EvidencePacket } from '../src/agents/contracts';
-import type { Comment, Transcript } from 'all-things-youtube';
+import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
+import type { Comment, CommentsPage, Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
 import { remember } from './fixtures/memory';
-import { createCapabilityProvider } from '../src/agents/research/capability-provider';
+import { createCapabilityProvider, savedOnlyProvider } from '../src/agents/research/capability-provider';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
@@ -18,92 +17,9 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
 import { finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
+import { bicycleHistory, gcnCaptions, officialCaptions, gcnAnalysis, officialAnalysis, javascriptComments } from './fixtures/saved-replays';
 import { readSavedEvidence, SAVED_EVIDENCE_READ_LIMIT } from '../src/agents/runtime/saved-evidence-reader';
-import { annaId, kelogId, watercolorTranscript, watercolorInitial, watercolorCorrection, watercolorFollowup } from './fixtures/watercolor-session';
-import { quotedPassages } from './fixtures/quoted-passages';
-
-// Opt-in: AGENT_WATERCOLOR_LIVE=1 FIREWORKS_API_KEY=... vitest run --config
-// vitest.user-account.config.ts test/session-evidence.integration.test.ts -t 'live watercolor'
-// Uses real classification, research and finalization models, with local SQLite/R2
-// and complete original saved captions. It never writes to the production session.
-test.skipIf(!(env as Env & { WATERCOLOR_LIVE?: boolean }).WATERCOLOR_LIVE)(
-  'live watercolor follow-up recovers quotes from saved originals without fresh retrieval', async () =>
-    within('watercolor-live-replay', async (store, reopen) => {
-      const { createAgentModel } = await import('../src/agents/model');
-      const { classifyCapabilityWithModel } = await import('../src/agents/research/capability-router');
-      const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
-      const { savedOnlyProvider } = await import('../src/agents/research/capability-provider');
-      for (const videoId of [annaId, kelogId]) await store.retrieve(`captions:${videoId}`, 'transcript', videoId, false,
-        async () => ({ value: watercolorTranscript(videoId), cacheStatus: 'miss' }), value => ({ language: 'en', segments: value.segments.length, endMs: value.segments.at(-1)?.endMs }));
-      const restored = reopen();
-      const models = { ...env, AGENT_GLM_PROVIDER: 'fireworks', AGENT_TEXT_PROVIDER: 'fireworks',
-        AGENT_TEXT_MODEL: 'glm-5p3-flash', AGENT_FINALIZER_PROVIDER: 'fireworks', AGENT_FINALIZER_MODEL: 'glm-5p3-flash',
-        AGENT_FINALIZER_REASONING_EFFORT: 'medium', AI_GATEWAY_ID: '' } as unknown as Env;
-      const history = [{ userMessageId: 'initial', agentMessageId: 'initial-answer', user: watercolorInitial,
-        assistant: watercolorInitialAnswer,
-        resourceIds: [annaId, kelogId] }, { userMessageId: 'correction', agentMessageId: 'previous-answer', user: watercolorCorrection,
-        assistant: watercolorCorrectionAnswer,
-        resourceIds: [annaId, kelogId] }];
-      const affinity = `watercolor-replay:${crypto.randomUUID()}`;
-      const decision = await classifyCapabilityWithModel({ message: watercolorFollowup, conversationHistory: history,
-        sessionBrief: restored.brief(), model: createAgentModel(models, affinity, 'low', { model_role: 'classifier' }),
-        signal: new AbortController().signal });
-      expect(decision).toMatchObject({ savedOnly: true, skill: 'verify_saved_evidence' });
-      expect(['topic_research', 'inspect_video']).toContain(decision.route);
-      if (decision.route !== 'topic_research' && decision.route !== 'inspect_video') throw new Error('Original reads require research.');
-      const upstream = savedOnlyProvider();
-      const providerCalls = Object.keys(upstream).map(name => vi.spyOn(upstream, name as keyof typeof upstream));
-      const ctx = context(restored, sessionProvider(upstream, restored));
-      const toolReads: Array<{ tool: string; input: unknown }> = [];
-      ctx.traceToolCall = async call => {
-        if (call.name === 'read_saved_evidence') toolReads.push({ tool: call.name, input: call.input });
-        if (call.name === 'final_answer_rejection') console.log(JSON.stringify({ evaluation: 'watercolor-rejected-answer', input: call.input }));
-        return call.execute();
-      };
-      const reads = vi.spyOn(restored, 'readAsset');
-      ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId,
-        conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
-        { userId: 'test', creditsRemaining: 100 }, input, restored.evidence(), 0));
-      await runResearchAgentWithModel({ message: watercolorFollowup, conversationHistory: history, decision, context: ctx,
-        model: createAgentModel(models, affinity, 'medium', { model_role: 'agent_core' }),
-        finalizationModel: createAgentModel(models, affinity, 'medium', { model_role: 'finalizer' }),
-      });
-      expect(reads).toHaveBeenCalled();
-      expect(toolReads.length).toBeGreaterThan(0);
-      expect(toolReads.length).toBeLessThanOrEqual(SAVED_EVIDENCE_READ_LIMIT);
-      for (const call of providerCalls) expect(call).not.toHaveBeenCalled();
-      expect(ctx.finalize).toHaveBeenCalledOnce();
-      const answer = vi.mocked(ctx.finalize).mock.calls[0]![1];
-      console.log(JSON.stringify({ evaluation: 'watercolor-saved-originals', decision, toolReads, answer: answer.answer }));
-      console.log(JSON.stringify({ presentation: 'watercolor', currentName: answer.answer.includes('Willow'), numberedPoints: answer.answer.match(/^\s*\d+\.\s/gm)?.length ?? 0 }));
-      // The elapsed quantity is the same in '6 minutes' and '6-minute interval'.
-      expect(answer.answer).toMatch(/\b(?:6[\s-]*(?:minutes?|min)|six[\s-]+minutes?)\b/i);
-      expect(answer.answer).toMatch(/small(?:er)?[^.!?\n]*(?:less|faster|shorter)|(?:less|faster|shorter)[^.!?\n]*small(?:er)?/i);
-      expect(answer.answer).not.toMatch(/https?:\/\/[^\s]*[?&]t=/);
-      for (const phrase of ['medium', 'gravity', 'not beady', 'nearly dry', 'Arches', 'quinacridone red', 'alizarin crimson']) {
-        expect(answer.answer.toLowerCase()).toContain(phrase.toLowerCase());
-      }
-      const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-      const quotes = quotedPassages(answer.answer).map(normalize);
-      for (const [videoId, from, to, topic] of [
-        [annaId, 374, 390, /medium|drops in your water jar/],
-        [annaId, 415, 440, /gravity|tilted|drying much faster|wet a lot longer/],
-        [kelogId, 295, 299, /not beady/],
-        [kelogId, 496, 504, /nearly dry/],
-      ] as const) {
-        const original = normalize(watercolorTranscript(videoId).segments
-          .filter(segment => segment.startMs >= from * 1000 && segment.startMs <= to * 1000)
-          .map(segment => segment.text).join(' '));
-        expect(quotes.some(quote => topic.test(quote) && original.includes(quote))).toBe(true);
-      }
-      expect(answer.answer).not.toMatch(/(?:cannot|unavailable|no) (?:supply |provide )?(?:precise passage|exact quot|timestamp)/i);
-      const result: ReturnType<typeof buildAgentTurnResult> = await vi.mocked(ctx.finalize).mock.results[0]!.value;
-      for (const [videoId, from, to] of [[annaId, 374, 378], [annaId, 415, 434], [kelogId, 295, 299], [kelogId, 496, 504]] as const) {
-        expect(result.citations.some(citation => citation.videoId === videoId && citation.startMs !== undefined
-          && citation.startMs >= from * 1000 && citation.startMs <= to * 1000)).toBe(true);
-      }
-      console.log(JSON.stringify({ evaluation: 'watercolor-saved-originals', answer: result.answer, citations: result.citations }));
-    }), 240_000);
+import { annaId, kelogId, watercolorTranscript, watercolorCorrection, watercolorFollowup } from './fixtures/watercolor-session';
 
 test('saved original comments include positions 13 and 17 and long tails, with bounded pagination', async () =>
   within('original-comments', async (store, reopen) => {
@@ -1919,3 +1835,111 @@ test('invalid comment time filters never mark a corrupt original unavailable', a
       .rejects.toThrow('Timestamp filters');
     expect(reopen().savedEvidenceReadState('invalid-filter')).toEqual({ attempts: 1, outcomes: [] });
   }));
+
+// Deterministic replays of saved sessions: original reads, caption times and provider-free search.
+const gcnId = 'YhOT5GYUZJw', officialId = 'Ml9Ojbl2uaw', jsId = 'DC471a9qrU4';
+const replayMeta = { source: 'allthingsyoutube' as const, fetchedAt: '2026-10-26T00:00:00Z', partial: false, warnings: [] };
+// Captions and comments come from saved UI previews, not a fresh provider fetch.
+// Preview timestamps have whole-second precision; comment IDs below are fixture IDs.
+function replayTranscript(videoId: string, values: (string | number)[][]): Transcript {
+  const rows = values as [number, string][];
+  return { videoId, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'asr', isTranslatable: true, isDefault: true },
+    segments: rows.map(([seconds, text], index) => ({ text, startMs: seconds * 1000,
+      endMs: (rows[index + 1]?.[0] ?? seconds + 2) * 1000,
+      durationMs: ((rows[index + 1]?.[0] ?? seconds + 2) - seconds) * 1000 })),
+    text: rows.map(row => row[1]).join(' '), meta: replayMeta };
+}
+function replayComments(): CommentsPage {
+  return { videoId: jsId, meta: replayMeta, totalCount: 213, continuation: 'fixture-more-remote-comments',
+    comments: javascriptComments.map(row => ({
+      id: `saved-position-${row.position}`, text: row.text, author: { name: row.author, thumbnails: [] },
+      isPinned: false, isHearted: false, replies: [],
+    })) };
+}
+async function seedReplay(store: SessionEvidenceStore, name: string) {
+  const prior: EvidencePacket[] = [];
+  if (name.startsWith('bicycle')) {
+    for (const [videoId, rows, analysis] of [[gcnId, gcnCaptions, gcnAnalysis], [officialId, officialCaptions, officialAnalysis]] as const) {
+      const saved = await store.retrieve(`captions:${videoId}`, 'transcript', videoId, false,
+        async () => ({ value: replayTranscript(videoId, rows), cacheStatus: 'miss' }), value => ({ segments: value.segments.length }));
+      const packet = evidencePacketSchema.parse({ ...analysis, assetVersions: saved.assetVersions });
+      store.savePacket(packet);
+      prior.push(packet);
+    }
+  } else {
+    await store.retrieve('comments', 'comments', jsId, false,
+      async () => ({ value: replayComments(), cacheStatus: 'miss' }), value => ({ comments: value.comments.length, complete: false }));
+  }
+  return prior;
+}
+
+test('prior transcript analyses cannot exhaust a saved-original verification run before it reads', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('bicycle-prior-budget'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/bicycle-prior-budget/');
+    const prior = await seedReplay(store, 'bicycle');
+    const versions = store.brief().assets.map(asset => asset.version);
+    let step = 0;
+    const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 10, text: 10, reasoning: 0 } };
+    const core = new MockLanguageModelV4({ doGenerate: async call => {
+      const current = step++;
+      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
+      else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
+      const toolName = current < 2 ? 'read_saved_evidence' : 'complete_research';
+      return { content: [{ type: 'tool-call' as const, toolCallId: `step-${current}`, toolName,
+        input: JSON.stringify(current < 2 ? { assetVersion: versions[current], limit: 1 } : {}) }],
+        finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ confidence: 'high', warnings: [],
+        blocks: [{ text: 'Rowan source passages recovered.', evidenceIds: store.evidence().filter(packet => packet.packetId.startsWith('session:original:'))
+          .flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)) }] }) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [],
+    }) });
+    const finish = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
+    await runResearchAgentWithModel({ message: bicycleHistory[3]!.user,
+      conversationHistory: bicycleHistory.slice(0, 3).map((turn, index) => ({ ...turn,
+        userMessageId: `u${index}`, agentMessageId: `a${index}`, resourceIds: [gcnId, officialId] })),
+      decision: { route: 'topic_research', comparisonVideoIds: [gcnId, officialId], researchVideoCount: 2,
+        savedOnly: true, skill: 'verify_saved_evidence', useStoryboard: false },
+      recoveredEvidence: prior, inheritedResolved: true, model: core, finalizationModel: finalizer,
+      context: { runId: crypto.randomUUID(), signal: new AbortController().signal, provider: savedOnlyProvider(), session: store,
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: async execution => execution.execute(), finalize: finish } });
+    expect(step).toBe(3);
+    expect(finish).toHaveBeenCalledOnce();
+  });
+});
+
+test('real saved JavaScript comments 13 and 17 are searchable after reopening, without provider access', async () => {
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('real-js-comments'), async (_instance, state) => {
+    const reopen = () => new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/real-js-comments/');
+    await seedReplay(reopen(), 'javascript');
+    const store = reopen(), assetVersion = store.brief().assets[0]!.version;
+    for (const [query, position] of [['Promise.all', 17], ['imperative declarative', 13]] as const) {
+      const result = await readSavedEvidence(store, { assetVersion, query });
+      const text = result.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text).join('\n');
+      expect(text).toContain(javascriptComments[position - 1]!.text);
+      expect(text).toContain(javascriptComments[position - 1]!.author);
+      expect(result.coverage.totalExcerpts).toBe(20);
+      expect(result.coverage.sourceContinuationAvailable).toBe(true);
+    }
+  });
+});
+
+test('real saved Bicycle passages retain caption times instead of analyst window starts', async () => {
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('real-bicycle-passages'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/real-bicycle-passages/');
+    await seedReplay(store, 'bicycle');
+    for (const [videoId, query, time] of [[officialId, '13 kilometer', 167_000], [officialId, 'gradient 8', 170_000],
+      [gcnId, 'electronic systems', 152_000], [gcnId, 'keep under tension', 173_000]] as const) {
+      const assetVersion = store.brief().assets.find(asset => asset.videoId === videoId)!.version;
+      const result = await readSavedEvidence(store, { assetVersion, query });
+      expect(result.packets[0]!.excerpts.some(excerpt => excerpt.startMs === time)).toBe(true);
+    }
+  });
+});

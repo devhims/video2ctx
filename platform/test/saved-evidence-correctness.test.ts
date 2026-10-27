@@ -1,11 +1,14 @@
-import type { EvidencePacket } from '../src/agents/contracts';
+import type { CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
 import { expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
-import { readSavedEvidence } from '../src/agents/runtime/saved-evidence-reader';
+import { readSavedEvidence, SAVED_EVIDENCE_ARTIFACT } from '../src/agents/runtime/saved-evidence-reader';
 import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { evidenceFallback } from '../src/agents/research/evidence-fallback';
+import type { SessionBrief } from '../src/agents/runtime/session-evidence';
+import { unreadOriginalSources, usesSavedEvidenceVerification } from '../src/agents/research/skills/verify-saved-evidence';
+import { researchTimeoutMs } from '../src/agents/runtime/deadline';
 const version = 'a'.repeat(64), videoId = 'abcdefghijk';
 const meta = { partial: false, warnings: [] };
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -123,4 +126,53 @@ it.each(['ordinary', 'saved'] as const)('%s topic finalization uses the appropri
   });
   expect(finalizer.doGenerateCalls.length).toBeGreaterThan(0);
   expect(finalize).toHaveBeenCalledOnce();
+});
+
+const decision: CapabilityRouteDecision = { route: 'topic_research', savedOnly: true, useStoryboard: false, skill: 'verify_saved_evidence',
+  comparisonVideoIds: ['abcdefghijk', 'lmnopqrstuv'] };
+const brief: SessionBrief = { memories: [], assets: ['abcdefghijk', 'lmnopqrstuv', 'unrelated00'].map((videoId, index) => ({
+  version: `version-${index}`, videoId, kind: 'transcript', collectedAt: 1, current: true, details: {},
+})) };
+
+
+function packet(version: string, original = true): EvidencePacket {
+  return { packetId: version, kind: 'youtube_transcript', assetVersions: [version], sources: [],
+    excerpts: [{ id: version, sourceId: 'source', text: 'A supporting passage.' }], usage: [], warnings: [],
+    artifacts: [{ type: original ? SAVED_EVIDENCE_ARTIFACT : 'youtube_transcript_analysis', data: {} }] };
+}
+
+it('activates original verification for saved-only text research, leaving visual analysis and normal retrieval alone', () => {
+  expect(usesSavedEvidenceVerification(decision)).toBe(true);
+  expect(usesSavedEvidenceVerification({ ...decision, skill: undefined })).toBe(false);
+  expect(usesSavedEvidenceVerification({ ...decision, savedOnly: false })).toBe(false);
+  expect(usesSavedEvidenceVerification({ ...decision, useStoryboard: true })).toBe(false);
+});
+
+it('requires admitted original content from every requested available source, rather than summaries or empty matches', () => {
+  expect(unreadOriginalSources(decision, brief, [packet('version-0', false)])).toEqual(['abcdefghijk', 'lmnopqrstuv']);
+  expect(unreadOriginalSources(decision, brief, [packet('version-0'), { ...packet('version-1'), excerpts: [] }]))
+    .toEqual(['lmnopqrstuv']);
+  expect(unreadOriginalSources(decision, brief, [packet('version-0'), packet('version-1')])).toEqual([]);
+  expect(unreadOriginalSources({ ...decision, useStoryboard: true, visualEvidence: 'required' }, brief, [packet('version-0', false)]))
+    .toEqual(['abcdefghijk', 'lmnopqrstuv']);
+});
+
+it('budgets saved verification for the handoff and original reads without changing ordinary research', () => {
+  expect(researchTimeoutMs(false)).toBe(40_000);
+  expect(researchTimeoutMs(false, true)).toBe(120_000);
+  expect(researchTimeoutMs(true)).toBe(120_000);
+});
+
+it('requires the sole saved source even when classifier recovery omitted its video ID', () => {
+  const single = { ...brief, assets: [brief.assets[0]!] };
+  const unresolved = { ...decision, comparisonVideoIds: undefined };
+  expect(unreadOriginalSources(unresolved, single, [])).toEqual(['abcdefghijk']);
+  expect(unreadOriginalSources(unresolved, single, [packet('version-0')])).toEqual([]);
+});
+
+it('accepts an explicitly read historical version that the session still owns and never requires unrelated sources', () => {
+  const historical: SessionBrief = { ...brief, assets: [...brief.assets, { ...brief.assets[0]!, version: 'old', current: false }] };
+  expect(unreadOriginalSources(decision, historical, [packet('old'), packet('version-1')])).toEqual([]);
+  expect(unreadOriginalSources(decision, brief, [packet('foreign'), packet('version-1')])).toEqual(['abcdefghijk']);
+  expect(unreadOriginalSources({ ...decision, comparisonVideoIds: undefined }, brief, [])).toEqual([]);
 });

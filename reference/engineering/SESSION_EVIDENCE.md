@@ -159,26 +159,9 @@ Existing source storage and billing remain in place; bounded original reads supp
 
 Naming and formatting preferences remain prompt guidance. There is no requirements-recording tool, `answerFormat` checkpoint, generated code-block field or blocking presentation validator in this PR. Supported partial fallback remains available. Citation validation and ordinary structured-answer validation still apply. Required-format enforcement and the numbered-point citation-placement change are deferred to draft PR #228.
 
-The exact replays use prior conversation and saved originals, without seeding later answers or post-correction Memory:
+Deterministic replays of the saved Bicycle and JavaScript sessions run in `session-evidence.integration.test.ts`. They check that research reads originals before completing, that passages keep caption times rather than analyst window starts, and that comments 13 and 17 are searchable after reopening without provider access. Caption times come from whole-second saved previews, and fixture comment IDs are synthetic.
 
-| Replay | Required evidence checks |
-| --- | --- |
-| Watercolor, session `094fc8e9-48b8-4b80-9e67-5a9d5b3df79e` | All four quotations, material and drying corrections, precise caption citations and the six-minute interval. All 201 Anna and 425 kelogsloops caption segments are retained. |
-| Bicycle turn 4, session `cbb8be03-06a6-4cc7-a143-5f6babadcdae` | Both GCN quotations and Official Cycling length/gradient citations at 2:47 and 2:50. |
-| JavaScript turns 4 and 5, session `86ce6c30-b469-4ee2-aa0a-736d5278f59f` | Exact comments 13/17 with authors, visible UI code and corrected frame evidence; turn 5 distinguishes 20 retained comments from eight projected excerpts. |
-| Pothos turn 3, session `14d13508-984c-4e15-b03c-dda929dadb2e` | Packing quotations, both viewer questions and accurately attributed objections. |
-
-All replays require original-reader use, persisted citation packets after store reconstruction and zero fresh provider calls. Naming, point counts and fences are diagnostics only; exact source/code text and citation assertions remain required. Pothos normalizes straight/curly apostrophes. Watercolor permits adjacent quoted caption fragments separated only by citations or whitespace, never by intervening commentary. The JavaScript negative assertion concerns the requested comments, allowing truthful gaps about other unread comments. The Watercolor elapsed-time assertion accepts both “6 minutes” and “6-minute interval”; an initial follow-up replay exposed that equivalent phrasing as a false test failure. Its four quotations were independently checked against the retained captions, and the full live set was rerun.
-
-Caption times come from whole-second saved previews. Fixture comment IDs are synthetic; text, authors and positions are preserved. Pothos exercises original reads before its quotation was subsequently saved into Memory. These are local replays using real Fireworks classification, research and finalization. They do not write production data, simulate a browser reload or establish general model reliability. General claim-to-citation reasoning and correction persistence in Memory remain outside scope.
-
-With the approved data transfer and `FIREWORKS_API_KEY` configured, run from `platform/`:
-
-```sh
-AGENT_WATERCOLOR_LIVE=1 AGENT_SAVED_REPLAYS_LIVE=1 ./node_modules/.bin/vitest run --config vitest.user-account.config.ts test/session-evidence.integration.test.ts test/saved-session-replays.integration.test.ts -t 'live saved replay|live watercolor'
-```
-
-The narrowed PR passes 2,153 unit tests (59 skipped) and 462 Worker integration tests (five opt-in inference tests skipped). All five exact Fireworks replays passed on this evidence-only version. The platform build and documentation checks also passed. Additional regressions cover literal search, metadata labels, legacy fields, conflicting classifier requirements, concurrent durable read budgets, empty/withheld/unavailable completion, permanent versus transient read failures, deletion and cancellation races, active-budget retention, account cleanup, overlapping original packing, saved-topic context budgets and recovery without rereading or recharging. The two presentation-specific inline findings move with the deferred requirements layer. A real Worker/DO test reconstructs finalization inputs from SQLite, preserves original citations and excludes unadmitted/deleted evidence. Thirteen additional boundary regressions pass generated gap answers through the real DO finalizer for inspection and comparison recovery, and reject ordinary routes, pending or foreign outcomes, deleted sources, still-readable originals, admitted content, citations and source artifacts. This models persisted-state reconstruction, not an operating-system process kill.
+The opt-in live Fireworks replays (Watercolor, Bicycle, JavaScript and Pothos) and their fixtures are not part of this PR, because they also score naming and formatting. They are preserved at commit 4951804 for the formatting work in draft #228.
 
 ## Flow
 
