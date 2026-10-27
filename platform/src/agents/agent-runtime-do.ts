@@ -1,3 +1,4 @@
+import { pendingOriginalSources, unreadOriginalSources, usesSavedEvidenceSkill } from './research/skills/verify-saved-evidence';
 import { reconcileResearchMemory, type ResearchContext } from './runtime/context-handoff';
 import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
@@ -951,6 +952,21 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       execute: () => this.performFinalizeRun(runId, toolCallId, input) });
   }
 
+  /** A saved-source limitation may use the uncited context contract only when this
+   * run's persisted read state proves there is no remaining original read to attempt. */
+  private allowsSavedEvidenceGap(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
+    if (!usesSavedEvidenceSkill(decision) || (decision.route !== 'inspect_video' && decision.route !== 'topic_research')
+      || input.intent !== 'context_answer' || input.citations.length
+      || input.artifacts.some(artifact => artifact.type !== 'research_coverage' || artifact.data.reviewedVideos !== 0)
+      || answerCitationIds(input.answer).length) return false;
+    const evidence = this.readEvidencePackets(runId);
+    if (evidence.some(packet => packet.excerpts.length)) return false;
+    const brief = this.sessionStore.brief();
+    const state = this.sessionStore.savedEvidenceReadState(runId);
+    return unreadOriginalSources(decision, brief, evidence).length > 0
+      && pendingOriginalSources(decision, brief, evidence, state).length === 0;
+  }
+
   private async performFinalizeRun(
     runId: string,
     toolCallId: string,
@@ -978,7 +994,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!decision) {
       throw new ApiError(422, 'AGENT_ROUTE_MISSING', 'The agent run has no persisted capability route.');
     }
-    if (!finalIntentMatchesRoute(decision, parsedInput.intent)) {
+    if (!finalIntentMatchesRoute(decision, parsedInput.intent)
+      && !this.allowsSavedEvidenceGap(runId, decision, parsedInput)) {
       throw new ApiError(
         422,
         'AGENT_INTENT_MISMATCH',

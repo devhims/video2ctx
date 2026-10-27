@@ -255,7 +255,7 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
   // Not an answer at all: the one content check that still earns a repair.
   if (fillerOnlyAnswer(input)) throw new z.ZodError([{ code: 'custom', path: ['blocks'],
     message: 'The answer is only a fragment or promise of future work. Answer the request now, or state the concrete missing context. Do not report planned work as completed.' }]);
-  const renderedBlocks = input.blocks.map(block => {
+  const answer = input.blocks.map(block => {
     const declared = new Set(block.evidenceIds.map(id => aliases.get(id) ?? id));
     const placed = new Set<string>();
     // Inline references stay where the model placed them, even when the block did not
@@ -270,16 +270,10 @@ export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSch
       }));
     const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
     // Appending text to the final table row would create an extra cell.
-    if (remaining && endsInCodeBlock(text)) {
-      // Keep citations inside a numbered point, before its code, rather than
-      // introducing an unnumbered Sources paragraph ahead of the whole answer.
-      if (/^\d+[.)][ \t]+/.test(text)) return text.replace(/^[^\n]+/, line => `${line} ${remaining}`);
-      return `Sources: ${remaining}\n\n${text}`;
-    }
+    if (remaining && endsInCodeBlock(text)) return `Sources: ${remaining}\n\n${text}`;
     const separator = /(?:^|\n)\s*\|.*\|\s*(?:\n|$)/.test(text) ? '\n\nSources: ' : ' ';
     return trimCitationProse(remaining ? `${text}${separator}${remaining}` : text);
-  });
-  const answer = renderedBlocks.join('\n\n');
+  }).join('\n\n');
   return finalizeAnswerInputSchema.parse({
     intent: input.intent,
     confidence: input.confidence,
