@@ -249,7 +249,10 @@ test.skipIf(!(env as Env & { SAVED_REPLAYS_LIVE?: boolean }).SAVED_REPLAYS_LIVE)
         }
         expect(answer.replace(/\\([*'!])/g, '$1')).toContain(javascriptComments[16]!.text);
         expect(answer).toMatch(/viewer|commenter/i);
-        expect(answer).not.toMatch(/(?:cannot|can't|unable to) (?:name|identify|recover|quote)/i);
+        // Unread, unrequested comments may remain a real gap. Reject an inability
+        // claim about the requested comments; their exact text/authors/citations
+        // are independently checked above.
+        expect(answer).not.toMatch(/(?:cannot|can't|unable to) (?:name|identify|recover|quote) (?:the )?(?:two (?:requested )?comment(?:er)?s|requested comment(?:er)?s|comment\s*(?:13|17)|@JohnnyPhoenix|@laurelineparis5407)\b/i);
         expect.soft(answer).toMatch(/```(?:jsx|js|javascript)?\s*const ui = users\.map\(user => <h1> \{user\.username\} <\/h1> \)/);
         if (scenario.turn === 3) {
           expect(answer).toContain('Promise.all(requests)');
