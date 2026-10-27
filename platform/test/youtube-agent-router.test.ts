@@ -13,13 +13,38 @@ import {
   finalIntentMatchesRoute,
   resolveCapabilityRoute,
 } from '../src/agents/research/capability-router';
-import { createCapabilityProvider } from '../src/agents/research/capability-provider';
+import { createCapabilityProvider, savedOnlyProvider } from '../src/agents/research/capability-provider';
 import type { ConversationTurn } from '../src/agents/runtime/conversation-memory';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
+  it('derives the saved-only restriction when the classifier selected verification but omitted its flag', async () => {
+    const model = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk',
+      skill: 'verify_saved_evidence', visualEvidence: 'none' });
+    await expect(classifyCapabilityWithModel({ message: 'Recover the exact quote from the saved captions for https://youtu.be/abcdefghijk.', model,
+      signal: new AbortController().signal })).resolves.toMatchObject({
+      route: 'inspect_video', skill: 'verify_saved_evidence', savedOnly: true,
+    });
+  });
+  it('preserves a saved-only classification for the exact watercolor follow-up', async () => {
+    const { watercolorFollowup, annaId, kelogId } = await import('./fixtures/watercolor-session');
+    const model = classifierModel({ route: 'topic_research', savedOnly: true, skill: 'verify_saved_evidence',
+      comparisonVideoIds: [annaId, kelogId], visualEvidence: 'none', numberedItemCount: 3 });
+    await expect(classifyCapabilityWithModel({ message: watercolorFollowup, model,
+      sessionBrief: { memories: [], assets: [annaId, kelogId].map((videoId, index) => ({
+        version: String(index).repeat(64), videoId, kind: 'transcript', current: true, collectedAt: 1, details: {},
+      })) }, signal: new AbortController().signal })).resolves.toMatchObject({
+      route: 'topic_research', savedOnly: true, skill: 'verify_saved_evidence', comparisonVideoIds: [annaId, kelogId], numberedItemCount: 3,
+    });
+  });
+
+  it('blocks every provider operation beneath saved-only session reuse', async () => {
+    for (const operation of Object.values(savedOnlyProvider())) {
+      await expect(operation()).rejects.toThrow('Fresh retrieval is prohibited');
+    }
+  });
   it.each([undefined, null, '', 'unknown', 0, false, {}, []].map(value => ({ value })))(
     'defaults and reports omitted or invalid answer detail on the first response: $value', async ({ value }) => {
       const model = classifierModel({ route: 'topic_research', answerDetail: value, researchBreadth: 'focused',

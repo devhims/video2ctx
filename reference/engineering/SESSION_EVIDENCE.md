@@ -123,6 +123,68 @@ handling and saved-reference publication. Opt-in Fireworks tests use synthetic
 transcripts and chart images with a delayed simulated save. These establish working
 inference and overlap, not a production latency improvement.
 
+## Original saved captions and comments
+
+`read_saved_evidence` reads an immutable session asset version directly. It supports literal-word search, caption time ranges, and offset pagination. Each result contains up to 30 excerpts within a 12,000-character excerpt budget, with selection counts and a continuation offset. Captions retain their original segment times. Comments retain author, comment ID and saved position, including saved replies and long comment tails. Search never combines different comments. It does not call YouTube or an analyst.
+
+Exact-quotation and correction requests use this reader before research completion. Selected original passages remain verbatim in finalization even when a complete analyst summary exists for the same version. A page that cannot fit the prompt is disclosed as omitted, never silently shortened. Immutable excerpt IDs continue to resolve after reopening. These reads use normal evidence admission and per-run asset billing, so rereading the same version does not charge it again in that run.
+
+For saved-only text verification, the classifier selects the runtime skill `verify_saved_evidence`. Its research workflow covers source selection, focused reads, pagination, exact quotes and calculation premises. Before original reads, `set_verification_requirements` records a bounded list of resolved user requirements and a structured answer format. The format contains the latest user-specified name, numbered point count, whether only those points are allowed, and whether code must be fenced. The name must occur in a supplied user message. The finalizer receives this record on normal completion and when the research deadline interrupts the run. It is task context, not source evidence. Saved visual follow-ups carrying the verification skill record the same requirements while retaining their visual tools.
+
+The finalizer constrains the number of blocks when the user requests only numbered points. The application renders sequential list markers from those blocks, preserving their wording and citations. When code fences are required, the model supplies a separate `codeBlocks` array with exact code, language and a zero-based target point. The application inserts fences inside that point, using a delimiter longer than any backticks in the code. These fields are internal to finalization; the public answer format is unchanged.
+
+Before acceptance, the application checks the current name in prose, sequential numbering, absence of extra heading/closing blocks, and nonempty closed code fences when requested. Code contents do not count as answer points or as the note name. Other violations use the existing single repair attempt, with the validation errors repeated next to the latest request. If repair fails, the run reports a failure rather than publishing an unformatted evidence fallback. This enforces the recorded format; it does not prove the model resolved every preference correctly or semantically fulfilled every requested item.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "actorBkg": "#eef2ff", "actorTextColor": "#111827", "signalColor": "#475569", "signalTextColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Store as Saved sources
+    participant Finalizer
+    participant App
+    Agent->>Agent: Record current name and answer format
+    Agent->>Store: Read requested original evidence
+    Agent->>Finalizer: Pass evidence and format requirements
+    Finalizer->>App: Return answer points and exact code
+    App->>App: Render list markers and code fences, then validate
+    opt Format validation fails
+        App->>Finalizer: Request one repair with concrete errors
+        Finalizer->>App: Return corrected answer
+    end
+    App->>Store: Persist only an accepted answer
+```
+
+General discovery and analyst tools are excluded for text verification. Normal completion requires admitted original text from every requested available source, including when the request also retains visual observations. This source-level gate does not prove that every requested claim is supported. Selecting the verification skill implies saved-only access even if the classifier omits that companion flag. The skill permits at most 16 original reads within a 120-second research window. The previous 40-second text window could expire after requirement recording and only two reads. Existing persisted deadlines, model-cost limits and evidence-credit limits remain authoritative; ordinary text research keeps its 40-second window. Deadlines still hand off with explicit missing-source gaps. Queries match every word literally within a comment or nearby captions, without stemming or semantic synonyms. The reader and skill direct the agent to start with one distinctive word from requested wording and simplify empty queries before claiming absence.
+
+The classifier records `savedOnly` when fresh retrieval is prohibited. Research then removes retrieval/discovery tools and uses a rejecting upstream provider beneath session reuse, including for incidental analyst metadata calls. Missing saved assets remain explicit gaps. History-only requests do not expose the original-evidence reader.
+
+The watercolor regression uses the exact final prompt from session `094fc8e9-48b8-4b80-9e67-5a9d5b3df79e` with all 201 Anna and 425 kelogsloops caption segments captured from its saved Transcript previews. It tests reopening, Anna/kelogsloops source switching, delivery of the four requested quotations and material/timing passages to finalization, citation persistence, and zero provider calls. The live replay includes the two actual prior user prompts and answer bodies, including the erroneous claims; it does not seed the final answer or post-answer memory. The scripted model verifies the evidence path; it does not establish live-model answer quality. The fixture records the preview's whole-second timestamps, not an export of the original millisecond timings.
+
+With `FIREWORKS_API_KEY` configured in the shell, run `AGENT_WATERCOLOR_LIVE=1 ./node_modules/.bin/vitest run --config vitest.user-account.config.ts test/session-evidence.integration.test.ts -t 'live watercolor'` from `platform/` for real classification, research and finalization against the same local saved-caption fixture. This opt-in evaluation uses model inference but no YouTube retrieval and does not alter the production session. Without credentials, only the deterministic regression runs.
+
+The 2026-10-27 Fireworks replay passed with the original conversation history and complete saved captions: four exact quotations and supporting passage citations, Willow's three numbered points without an extra closing paragraph, corrected materials and drying advice, and the six-minute experiment interval. Provider-call spies verified zero fresh retrieval. This is a local replay, not a production rollout or a general reliability estimate. A deterministic interrupted-research test also verifies that the recorded requirements reach finalization when research times out.
+
+Additional regressions in `platform/test/saved-session-replays.integration.test.ts` replay Bicycle turn 4 (`cbb8be03-06a6-4cc7-a143-5f6babadcdae`), JavaScript turns 4 and 5 (`86ce6c30-b469-4ee2-aa0a-736d5278f59f`), and Pothos turn 3 (`14d13508-984c-4e15-b03c-dda929dadb2e`). They use the saved originals and prior conversation, retaining the old coarse Bicycle analyses and JavaScript's eight-comment projection plus conflicting visual observations. They do not seed later answers or post-correction Memory. Pothos deliberately tests the original-read route before its quotation was subsequently saved into Memory. Caption timestamps come from whole-second saved previews; fixture comment IDs are synthetic, while text, authors and saved positions are preserved.
+
+These replays exposed three control-flow gaps. Previously analyzed transcripts could exhaust the analyst budget before verification read an original. Classifier recovery could omit the sole saved video's ID and bypass the original-read completion gate. Repeated requirement recording could consume the research deadline. Verification now ignores the separate analyst budget, requires a read for an unambiguous single-source inventory, and exposes requirement recording only until it succeeds. The next phase exposes saved reads and withholds completion until the source gate is satisfied. The source gate still does not infer subjects from an ambiguous multi-video inventory.
+
+With the approved session data transfer and `FIREWORKS_API_KEY` configured, run `AGENT_SAVED_REPLAYS_LIVE=1 ./node_modules/.bin/vitest run --config vitest.user-account.config.ts test/saved-session-replays.integration.test.ts -t 'live saved replay'` from `platform/`. The live suite checks source recovery, citation persistence after store reconstruction, zero provider calls, and retained naming/formatting preferences separately. Presentation assertions remain failures but allow the evidence assertions to run. These local replays do not exercise browser reloads, production Memory updates, or general claim-to-citation correctness.
+
+The final 2026-10-27 Fireworks replays pass all five scenarios, including naming, formatting and source recovery:
+
+| Replay | Verified outcome |
+| --- | --- |
+| Bicycle turn 4 | Rowan, three points, both GCN quotations, and Official Cycling length/gradient citations at 2:47 and 2:50. Five original reads. |
+| JavaScript turn 4 | Juniper, three points, exact fenced UI code, corrected frame observations, and comments 13/17 with their authors. Three original reads. |
+| JavaScript turn 5 | Juniper, three points, fenced code, both comments, and the correction distinguishing 20 retained comments from eight projected excerpts. Three original reads. |
+| Pothos turn 3 | Willow, three points, packing quotations, both viewer questions and accurately attributed objections. Four original reads. |
+| Watercolor follow-up | Willow, three points, all four quotations, corrected materials and drying advice, and the six-minute experiment interval. |
+
+Provider spies confirmed zero fresh retrieval. Original-read citation packets remained available after reconstructing the store. Pothos quote comparisons allow curly-to-straight apostrophe normalization. Watercolor also accepts adjacent quoted caption fragments separated only by citations or whitespace; the combined words must still match a contiguous passage in the saved source. A separate regression rejects joining quotations across intervening commentary. No source-recovery assertions were removed to obtain these results.
+
+The initial build and 412 deterministic tests passed. After integrating with main, the PR branch passed the platform build and 484 deterministic checks (397 focused unit tests and 87 saved-session integration tests). The shared evidence schema lives separately from the reader to avoid an import cycle with transcript analysis; original reads also participate in the current-run saved-read delivery labels. The live checks include real model classification, research and finalization against local saved-session fixtures, not production writes or a browser end-to-end reload. They establish these specific replays, not a general reliability rate. General claim-to-citation matching and correction persistence in Memory remain outside this change.
+
 ## Flow
 
 1. Before classification, original user messages and completed answers are indexed into the SDK Session history. Existing run records remain authoritative for execution and dashboard restoration. Failed-run user messages are included; answers whose evidence was deleted are excluded. Backfill reads changed runs incrementally, and subsequent updates only rewrite changed text. The classifier receives eight completed conversation turns, a compact inventory with coverage and collection times, the indexed message count, and bounded derived memory. It never receives raw transcripts or images through the inventory.

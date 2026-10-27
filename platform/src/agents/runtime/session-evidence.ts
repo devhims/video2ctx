@@ -80,7 +80,7 @@ export interface SessionAccess {
   readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
   searchHistory?(query: string): Promise<{ content: string }[]>;
   /** onEvidence admits found packets and returns those the model may receive. */
-  searchTools?(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }): Promise<ToolSet>;
+  searchTools?(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }): Promise<ToolSet>;
 }
 
 /** Keep model routing context bounded without truncating stored evidence or history. */
@@ -163,7 +163,7 @@ export class SessionEvidenceStore implements SessionAccess {
   searchHistory(query: string) {
     return this.search.searchHistory(query);
   }
-  searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
+  searchTools(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
   async ensureSearchIndexed() {

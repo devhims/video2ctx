@@ -25,6 +25,8 @@ import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/dea
 const classifierDecisionSchema = z.object({
   route: z.enum(['topic_research', 'inspect_video', 'finalize']),
   comparisonVideoIds: comparisonVideoIdsSchema.describe('For a comparison or follow-up on a fixed set of videos, list every subject, including references resolved from earlier turns. These are answer subjects, separate from videoId which selects a new inspection. Omit for comparisons of concepts within one video or open-ended discovery.'),
+  skill: z.enum(['verify_saved_evidence']).optional().describe('Verify saved evidence: use for saved-only original caption/comment reads, exact quotations, precise passage links, or corrections requiring source verification. Omit for broad summaries, fresh retrieval and visual analysis.'),
+  savedOnly: z.boolean().optional().describe('True when the user requires existing saved evidence only or prohibits fresh retrieval. All provider access is disabled for this run; use saved evidence reads and report missing assets.'),
   refreshEvidence: z.boolean().optional().describe('True only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
   refreshDynamicData: z.boolean().optional().describe('True when the user asks for current views, likes, or comments. Refresh metadata, statistics and comments, keeping saved transcripts and images. Choose an executable route. False for historical questions and dashboard context.'),
   responseIntent: z.enum(['context_answer', 'clarification', 'rejected']).optional().describe('Required for finalize: answer using existing context, ask for missing scope, or decline an unsupported request.'),
@@ -121,6 +123,12 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   // Keep the provider schema strict. Normalize a copy only at the acceptance
   // boundary, retaining which fields needed a fallback before the SDK parses them.
   const input = { ...value } as Record<string, unknown>;
+  // This skill is defined as saved-only. Do not let an omitted companion flag
+  // disable its workflow or accidentally re-enable provider retrieval.
+  if (input.skill === 'verify_saved_evidence' && input.savedOnly === undefined) {
+    input.savedOnly = true;
+    defaultedFields.push('savedOnly');
+  }
   if (!answerDetailSchema.safeParse(input.answerDetail).success) {
     input.answerDetail = 'standard';
     defaultedFields.push('answerDetail');
@@ -152,6 +160,8 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
       issue(requirement.required, `${requirement.required} is required when ${Object.entries(requirement.when).map(([key, expected]) => `${key} is ${expected}`).join(' and ')}.`);
     }
   }
+  if (input.savedOnly === true && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('savedOnly', 'Saved-only requests cannot refresh source evidence.');
+  if (input.skill === 'verify_saved_evidence' && input.savedOnly !== true) issue('savedOnly', 'Saved verification requires savedOnly true. Use another workflow for fresh retrieval.');
   if (input.historySelection && input.contextScope === 'video') issue('contextScope', 'History selection requires history or mixed context.');
   if (input.route === 'finalize' && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('route', 'Fresh retrieval requires an executable route.');
   // Run conditional presence checks even when essential base fields failed validation,
@@ -255,6 +265,9 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A saved transcript can support new questions through research or inspection, which must prepare its content before finalization. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. A request to refresh transcripts, images or all source evidence requires an executable route with refreshEvidence true. Requests limited to current statistics or comments use refreshDynamicData true instead.',
       'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without further retrieval or analysis. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. An inventory reference alone does not mean its content is ready for the answer. Finalization cannot search or read saved assets. Choose research or inspection if answering requires reading a stored transcript, analyzing an asset, or loading additional evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
       'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The runtime supplies a bounded chronological history page before finalization, alongside the recent conversation window. Finalization cannot search history, paginate, read assets, or retrieve provider evidence. It must state any history coverage limit. Choose inspect_video or topic_research when source evidence needs reading or analysis; use context_answer only for prepared context. Do not list the messages yourself.',
+      'Select skill verify_saved_evidence for saved-only requests to recover original captions/comments, verify exact quotations or passage links, or correct source claims. This replaces general discovery and analysis with a verification workflow. Omit the skill for broad summaries or visual analysis.',
+      'Set savedOnly true whenever the user prohibits fresh retrieval or asks to use existing saved sources only. Keep this restriction on follow-ups when it remains in force. Missing saved evidence is a gap, never permission to fetch. Use the saved reader instead of transcript retrieval or discovery.',
+      'Requests for exact quotations from original saved captions/comments, precise passage-start links, or explicit original-asset reads require inspect_video or topic_research with the resolved subjects, even if prior summaries discuss the topic. Research can call read_saved_evidence without fetching YouTube. Quoting a source is different from quoting a prior conversation message. Do not route an original-source read directly to finalize.',
       'For every context_answer set contextScope: history for listing, quoting, recalling or correcting conversation messages or preferences; video for claims about video content; mixed only when the requested answer needs both. A video URL inside a quoted earlier message does not require video evidence.',
       'For finalize give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
       'Choose finalize with responseIntent rejected and a brief reason when the task is unrelated to researching, understanding, comparing, or synthesizing YouTube video content. Reject general assistant tasks such as standalone coding, arithmetic, creative writing, bookings, and requests to generate or edit a video. A YouTube link alone does not make an unrelated task supported.',
@@ -547,7 +560,7 @@ const ROUTE_FIELDS = {
   inspect_video: ['videoId', 'comparisonVideoIds'],
   finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
 } as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
-const SHARED_FIELDS = ['answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
+const SHARED_FIELDS = ['skill', 'savedOnly', 'answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
   'visualEvidence', 'visualRequirements'] as const satisfies readonly DefaultedClassificationField[];
 
 function candidateObject(value: unknown): Record<string, unknown> | undefined {
@@ -591,6 +604,7 @@ function lastResortDecision(
   // fresh data needs an executable route, required visuals stay required, and a
   // follow-up comparison keeps both of its subjects.
   const constraints = {
+    savedOnly: candidates.some(candidate => candidate.savedOnly === true),
     refreshEvidence: candidates.some(candidate => candidate.refreshEvidence === true),
     refreshDynamicData: candidates.some(candidate => candidate.refreshDynamicData === true),
     visualsRequired: candidates.some(candidate => candidate.visualEvidence === 'required'),
@@ -628,10 +642,15 @@ function lastResortDecision(
   };
   const applyConstraints = (decision: Record<string, unknown>) => {
     const fill = fillInto(decision);
+    if (constraints.savedOnly) {
+      fill('savedOnly', true);
+      fill('refreshEvidence', undefined);
+      fill('refreshDynamicData', undefined);
+    }
     if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
     if (decision.route !== 'finalize') {
-      if (constraints.refreshEvidence) fill('refreshEvidence', true);
-      if (constraints.refreshDynamicData) fill('refreshDynamicData', true);
+      if (constraints.refreshEvidence && !constraints.savedOnly) fill('refreshEvidence', true);
+      if (constraints.refreshDynamicData && !constraints.savedOnly) fill('refreshDynamicData', true);
       if (constraints.visualsRequired || decision.visualEvidence === 'required') {
         fill('visualEvidence', 'required');
         if (decision.visualRequirements === undefined) fill('visualRequirements', constraints.visualRequirements);

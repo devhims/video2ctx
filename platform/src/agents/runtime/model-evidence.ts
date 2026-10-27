@@ -3,6 +3,7 @@ import { storyboardManifestSchema } from '../providers/youtube/storyboard';
 import { framesSchema } from '../../lib/youtube-frames-contract';
 import { transcriptFactsSchema, transcriptSourceContextSchema } from './transcript-grounding';
 import { z } from 'zod';
+import { SAVED_EVIDENCE_ARTIFACT, savedEvidenceCoverageSchema } from './saved-evidence-contract';
 import {
   agentWarningSchema,
   evidenceExcerptSchema,
@@ -106,6 +107,7 @@ export const modelEvidencePacketSchema = z.object({
     operation: z.enum(['image_analysis', 'transcript_analysis', 'retrieval', 'saved_read', 'inherited']),
     note: z.string().min(1).max(300),
   }).optional(),
+  savedEvidence: savedEvidenceCoverageSchema.optional(),
   warnings: z.array(agentWarningSchema).max(MODEL_WARNINGS),
 });
 
@@ -145,6 +147,11 @@ export function transcriptAwaitsAnalysis(packet: Pick<EvidencePacket, 'artifacts
  * remains the source of truth for billing, recovery, and citation validation.
  */
 export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePacket {
+  const original = packet.artifacts.find(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT);
+  if (original) return modelEvidencePacketSchema.parse({
+    packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
+    excerpts: packet.excerpts, savedEvidence: savedEvidenceCoverageSchema.parse(original.data), warnings: packet.warnings,
+  });
   // Single-video inspection is read directly by the main model, including on recovery/finalization.
   if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
     return modelEvidencePacketSchema.parse({
@@ -372,6 +379,11 @@ function packEvidence(
       add(packet);
       continue;
     }
+    if (packet.savedEvidence) {
+      // Selected originals are exact quote inputs. Never silently shorten or sample them.
+      omitted.push({ packetId: source.packetId, kind: source.kind, entriesRetained: source.excerpts.length });
+      continue;
+    }
     if (packet.collection) {
       const fitted = fitCollectionPacket(source, fits);
       if (fitted) add(fitted);
@@ -423,13 +435,14 @@ export function projectEvidencePacketsForModel(
 ): { evidence: ModelEvidencePacket[]; omitted?: OmittedEvidenceNotice; omittedPackets: OmittedModelEvidence[] } {
   const projected = packets.map(packet => ({ source: packet, packet: evidencePacketForModel(packet) }));
   const prioritized = [
+    ...projected.filter(({ packet }) => packet.savedEvidence),
     ...projected.filter(({ packet }) => packet.transcriptAnalysis),
-    ...projected.filter(({ packet }) => !packet.transcriptAnalysis),
+    ...projected.filter(({ packet }) => !packet.transcriptAnalysis && !packet.savedEvidence),
   ];
   const unreserved = packEvidence(prioritized, options.maxCharacters);
   if (!unreserved.omitted.length) return { evidence: unreserved.evidence, omittedPackets: [] };
   // Reserve the largest minimal notice any omitted subset could need, then repack.
-  const collections = projected.filter(({ packet }) => packet.collection);
+  const collections = projected.filter(({ packet }) => packet.collection || packet.savedEvidence);
   const reserve = serializedLength(omittedNotice(
     collections.map(({ source }) => ({ packetId: source.packetId, kind: source.kind, entriesRetained: source.excerpts.length })), 0));
   const packed = packEvidence(prioritized, Math.max(0, options.maxCharacters - reserve));
@@ -544,7 +557,7 @@ const TRANSCRIPT_ANALYSIS_TOOLS = new Set(['analyze_video_transcript']);
 const IMAGE_ANALYSIS_ARTIFACTS = new Set(['youtube_frame_analysis', 'youtube_storyboard_analysis']);
 const TRANSCRIPT_ANALYSIS_ARTIFACTS = new Set(['youtube_transcript_analysis']);
 /** Deliveries a model of this run asked for. Other sources load earlier evidence automatically. */
-const EXPLICIT_READ_SOURCES = new Set(['search_context', 'read_prior_evidence', 'read_session_evidence']);
+const EXPLICIT_READ_SOURCES = new Set(['search_context', 'read_prior_evidence', 'read_session_evidence', 'read_saved_evidence']);
 
 /**
  * The operation this turn performed for a packet. Anything without a current record is inherited.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
+import { SAVED_EVIDENCE_ARTIFACT } from '../src/agents/runtime/saved-evidence-reader';
 import {
   evidencePacketForModel,
   finalizationEvidenceForModel,
@@ -7,6 +8,23 @@ import {
 } from '../src/agents/runtime/model-evidence';
 
 describe('agent model evidence', () => {
+  it('keeps original quote pages alongside same-version analysis without shortening or sampling', () => {
+    const analysis = { ...transcriptPacket(), assetVersions: ['saved-version'] };
+    const original = { ...analysis, packetId: 'original-page',
+      excerpts: Array.from({ length: 12 }, (_, index) => ({ ...analysis.excerpts[0]!,
+        id: `original:${index}`, text: 'Original caption '.repeat(90) + `tail ${index}` })),
+      artifacts: [{ type: SAVED_EVIDENCE_ARTIFACT, data: { assetVersion: 'saved-version', kind: 'transcript',
+        totalExcerpts: 201, selectedExcerpts: 12, offset: 0, returnedExcerpts: 12 } }] };
+    const result = finalizationEvidenceForModel([analysis, original], 40_000);
+    const page = result.evidence.find(packet => packet.savedEvidence)!;
+    expect(page.excerpts?.map(excerpt => excerpt.text)).toEqual(original.excerpts.map(excerpt => excerpt.text));
+    expect(result.fullIds.get(page.excerpts![11]!.id)).toBe('original:11');
+    expect(result.evidence.some(packet => packet.transcriptAnalysis)).toBe(true);
+    const tight = finalizationEvidenceForModel([analysis, original], 2000);
+    expect(tight.evidence.some(packet => packet.savedEvidence)).toBe(false);
+    expect(tight.complete).toBe(false);
+    expect(tight.missingInputs).toContainEqual(expect.objectContaining({ reason: 'prompt_evidence_cut', packetId: 'original-page' }));
+  });
   it('preserves every direct transcript excerpt through recovery and finalization', () => {
     const packet = transcriptPacket();
     packet.artifacts = [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: true } }];

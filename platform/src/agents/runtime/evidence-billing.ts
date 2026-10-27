@@ -17,6 +17,7 @@ import type { SessionAssetKind } from './session-evidence';
 export type EvidenceChargeSource =
   | 'tool'
   | 'read_session_evidence'
+  | 'read_saved_evidence'
   | 'search_context'
   | 'comparison_preload'
   | 'recovery_restore'
