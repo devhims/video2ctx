@@ -457,7 +457,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const activeToolNames = toolNames.map(name => name === FINALIZE_ANSWER_TOOL_NAME ? completionTool : name);
   const contextHandoff = new ContextHandoff(options.recoveredResearchContext, options.persistResearchContext);
   let researchComplete = false;
-  let verificationHandoff: z.infer<typeof savedVerificationHandoffSchema> | undefined;
+  let verificationHandoff = contextHandoff.snapshot().verification;
   const verificationTools: ToolSet = needsVerificationHandoff ? {
     set_verification_requirements: tool({
       description: 'Start saved verification by recording the current task and active user preferences. Call once before reading sources so these requirements survive a research timeout.',
@@ -467,7 +467,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         if (name && ![...(options.conversationHistory ?? []).map(turn => turn.user), options.message].some(message => message.includes(name))) {
           throw new Error('The answer name must be copied from a USER message, not an assistant answer or source. Use null when no name was requested.');
         }
-        verificationHandoff = input;
+        contextHandoff.recordVerification(input);
+        verificationHandoff = contextHandoff.snapshot().verification;
         return { status: 'requirements_recorded', next: 'Read the missing saved evidence, then complete research.' };
       },
     }),
@@ -1208,7 +1209,8 @@ async function runUnifiedFinalizer(options: {
       // A likely unit error is qualified where it appears, not only in the notes.
       for (const [index, block] of output.blocks.entries()) block.text = markUnitMismatches(block.text, figures.filter(figure => figure.blockIndex === index));
       validationStage = 'rendered_answer';
-      const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds);
+      const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds,
+        blocks => validateSavedAnswerFormat(blocks, answerFormat));
       input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
         packet.warnings.filter(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED'))]);
       // A history-only answer carries no source content, so incidental subjects need no citations.

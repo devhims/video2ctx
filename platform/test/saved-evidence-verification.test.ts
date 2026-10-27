@@ -65,9 +65,10 @@ it('activates original verification for saved-only text research, leaving visual
 });
 
 it.each([
-  ['missing current name', false, false], ['extra heading', false, false], ['unfenced code', false, false],
-  ['missing current name', true, false], ['missing current name', false, true],
-] as const)('checks %s before publishing a saved follow-up (visual=%s, repair fails=%s)', async (failure, visual, repairFails) => {
+  ['missing current name', false, false, false], ['extra heading', false, false, false], ['unfenced code', false, false, false],
+  ['missing current name', true, false, false], ['missing current name', false, true, false],
+  ['missing current name', false, true, true],
+] as const)('checks %s before publishing a saved follow-up (visual=%s, repair fails=%s, resumed=%s)', async (failure, visual, repairFails, resumed) => {
   const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
     userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
   const saved: EvidencePacket = { packetId: 'frames', kind: 'youtube_frames',
@@ -102,6 +103,8 @@ it.each([
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
   } });
   const run = runResearchAgentWithModel({ model: core, finalizationModel: finalizer,
+    ...(resumed ? { finalizationDeadlineAt: Date.now() + 60_000, recoveredResearchContext: { reads: [], truncated: false,
+      verification: { userRequirements: ['Juniper, three points and fenced code.'], answerFormat } } } : {}),
     message: 'Continue the latest card with exactly three numbered points, no introduction or closing section. Keep the code fenced.',
     conversationHistory: [{ userMessageId: 'u1', agentMessageId: 'a1', user: 'Call this card Cedar.', assistant: 'Cedar.', resourceIds: [] },
       { userMessageId: 'u2', agentMessageId: 'a2', user: 'Rename the card Juniper.', assistant: 'Cedar.', resourceIds: [] }],
@@ -120,7 +123,8 @@ it.each([
   await run;
   expect(finalizer.doGenerateCalls).toHaveLength(2);
   expect(finish).toHaveBeenCalledOnce();
-  expect(finish.mock.calls[0]![1].answer).toContain('1. Juniper');
+  expect(finish.mock.calls[0]![1].answer).toMatch(/^1\. Juniper/);
+  expect(finish.mock.calls[0]![1].answer).not.toMatch(/^Sources:/m);
 });
 
 it('requires admitted original content from every requested available source, rather than summaries or empty matches', () => {
