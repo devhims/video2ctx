@@ -76,7 +76,8 @@ test.skipIf(!(env as Env & { WATERCOLOR_LIVE?: boolean }).WATERCOLOR_LIVE)(
       const answer = vi.mocked(ctx.finalize).mock.calls[0]![1];
       console.log(JSON.stringify({ evaluation: 'watercolor-saved-originals', decision, toolReads, answer: answer.answer }));
       console.log(JSON.stringify({ presentation: 'watercolor', currentName: answer.answer.includes('Willow'), numberedPoints: answer.answer.match(/^\s*\d+\.\s/gm)?.length ?? 0 }));
-      expect(answer.answer).toMatch(/6\s*(?:minutes|min\b)|six minutes/i);
+      // The elapsed quantity is the same in '6 minutes' and '6-minute interval'.
+      expect(answer.answer).toMatch(/\b(?:6[\s-]*(?:minutes?|min)|six[\s-]+minutes?)\b/i);
       expect(answer.answer).toMatch(/small(?:er)?[^.!?\n]*(?:less|faster|shorter)|(?:less|faster|shorter)[^.!?\n]*small(?:er)?/i);
       expect(answer.answer).not.toMatch(/https?:\/\/[^\s]*[?&]t=/);
       for (const phrase of ['medium', 'gravity', 'not beady', 'nearly dry', 'Arches', 'quinacridone red', 'alizarin crimson']) {
@@ -1806,7 +1807,7 @@ test.each(['empty', 'withheld', 'no-match'] as const)('saved %s read has honest 
     expect(reopen().savedEvidenceReadState('outcome-run').outcomes).toEqual([]);
   }));
 
-test.each(['empty', 'withheld'] as const)('research can complete with an explicit %s gap after recovery', async reason =>
+test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete with an explicit %s gap after recovery', async reason =>
   within(`original-gap-finalization-${reason}`, async (store, reopen) => {
     const { MockLanguageModelV4 } = await import('ai/test');
     const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
@@ -1814,6 +1815,9 @@ test.each(['empty', 'withheld'] as const)('research can complete with an explici
     if (reason === 'empty') value.segments = [];
     const raw = await store.retrieve('captions', 'transcript', id, false,
       async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    if (reason === 'unavailable') {
+      vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new SyntaxError('corrupt saved JSON'));
+    }
     const runId = crypto.randomUUID();
     const tools = await store.searchTools(packets => reason === 'withheld' ? [] : packets,
       new AbortController().signal, { runId });
@@ -1848,4 +1852,70 @@ test.each(['empty', 'withheld'] as const)('research can complete with an explici
     expect(core.doGenerateCalls).toHaveLength(1);
     expect(ctx.finalize).toHaveBeenCalledOnce();
     expect(freshFetch).not.toHaveBeenCalled();
+  }));
+
+
+test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavailable %s original releases the gate across recovery', async mode =>
+  within(`original-unavailable-${mode}`, async (store, reopen, sql) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({ endMs: 5600 }));
+    const assetVersion = raw.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
+    if (mode === 'missing') await env.RESEARCH.delete(key);
+    if (mode === 'json') await env.RESEARCH.put(key, '{invalid json');
+    if (mode === 'shape') await env.RESEARCH.put(key, JSON.stringify({ segments: 'broken' }));
+    const reading = mode === 'duration'
+      ? new SessionEvidenceStore(sql, env.RESEARCH, `test-session/original-unavailable-${mode}/`, undefined, undefined, undefined, 1)
+      : store;
+    const tools = await reading.searchTools(packets => packets, new AbortController().signal, { runId: 'unavailable-run' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
+      .resolves.toMatchObject({ packets: [], unavailable: true, remainingReads: 15 });
+    const restored = reopen();
+    const state = restored.savedEvidenceReadState('unavailable-run');
+    expect(state).toEqual({ attempts: 1, outcomes: [{ assetVersion, reason: 'unavailable' }] });
+    const decision = { route: 'inspect_video' as const, videoId: id, savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
+    expect(pendingOriginalSources(decision, restored.brief(), [], state)).toEqual([]);
+    expect(unreadOriginalSources(decision, restored.brief(), [])).toEqual([id]);
+  }));
+
+
+test.each(['transient', 'invalid-query', 'invalid-range', 'cancelled', 'deleted'] as const)(
+  '%s read does not become a permanent source failure', async mode =>
+  within(`original-nonterminal-${mode}`, async (store, reopen) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    const controller = new AbortController();
+    if (mode === 'transient') vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new Error('Temporary R2 failure'));
+    if (mode === 'cancelled' || mode === 'deleted') vi.spyOn(store, 'readAsset').mockImplementationOnce(async () => {
+      if (mode === 'cancelled') controller.abort(new Error('Cancelled'));
+      else await store.delete(assetVersion);
+      throw new SyntaxError('Late decode failure');
+    });
+    const tools = await store.searchTools(packets => packets, controller.signal, { runId: 'nonterminal' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion,
+      ...(mode === 'invalid-query' ? { query: '!!!' } : {}),
+      ...(mode === 'invalid-range' ? { startMs: 20, endMs: 10 } : {}),
+    }, { toolCallId: 'read', messages: [], context: {} })).rejects.toThrow();
+    expect(reopen().savedEvidenceReadState('nonterminal')).toEqual({ attempts: 1, outcomes: [] });
+    if (mode === 'transient') {
+      const recovered = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'nonterminal' });
+      await expect(recovered.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
+        .resolves.toMatchObject({ coverage: { returnedExcerpts: 1 }, remainingReads: 14 });
+    }
+  }));
+
+
+test('invalid comment time filters never mark a corrupt original unavailable', async () =>
+  within('original-comment-invalid-filter', async (store, reopen, sql) => {
+    const value = { comments: [{ id: 'comment', text: 'saved comment', author: { name: 'Alice' } }] };
+    const raw = await store.retrieve('comments', 'comments', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
+    await env.RESEARCH.put(key, '{broken');
+    const tools = await store.searchTools(packets => packets, new AbortController().signal, { runId: 'invalid-filter' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
+      .rejects.toThrow('Timestamp filters');
+    expect(reopen().savedEvidenceReadState('invalid-filter')).toEqual({ attempts: 1, outcomes: [] });
   }));

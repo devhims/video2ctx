@@ -934,7 +934,8 @@ async function runUnifiedFinalizer(options: {
   const currentDurationNotice = () => options.decision.route === 'inspect_video' || options.decision.route === 'topic_research'
     ? durationLimitNotice(options.toolFailures, options.evidence, options.decision.route === 'inspect_video'
       ? [options.decision.videoId] : comparisonVideoIds) : '';
-  const evidenceBudget = comparisonVideoIds.length ? 160_000
+  const evidenceBudget = usesSavedEvidenceSkill(options.decision) ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS
+    : comparisonVideoIds.length ? 160_000
     : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepared = finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds,
     options.context.evidenceRunRecords?.(options.evidence.map(packet => packet.packetId)));
@@ -1036,7 +1037,6 @@ async function runUnifiedFinalizer(options: {
           'Prefer current assets over superseded versions unless the user asks for a historical comparison. A failed refresh does not make an old snapshot fresh; retain its collection time and explain the failure.',
           'Packets with savedEvidence contain selected original captions or comments, not analyst paraphrases. Use their exact text for requested quotations. Put supporting references only in each block\'s evidenceIds array; the application renders precise passage links from segment startMs. Do not put asset IDs, excerpt IDs, startMs/endMs fields, millisecond values or hand-written timestamp URLs into the prose. Preserve source identity. Do not claim timestamps or captions are absent when these packets supply them. A quote spanning several segments must cite those segments; do not guess corrected brand spellings from noisy captions. Coverage describes a selected page, not a complete transcript review.',
           'The current user message can correct earlier memory. Prefer explicit current corrections over old context.',
-          'When continuing a named plan, use its latest user-specified name within the requested answer format. Preserve the latest formatting constraints from conversation history, including numbered-point counts and requests for no introduction or closing section.',
           'Session memory is an index, not proof. Use the supplied stored evidence for factual video claims. Inventory counts do not establish visual content. Stored context gathering has already finished. This answer call cannot use tools, retrieve new sources or request another inspection. State any remaining evidence gap without inventing facts.',
           'Return only the answer fields in the schema. Session memory is maintained separately after the answer is accepted.',
           'Ground factual claims about videos in the supplied persisted evidence. Use conversation history to discuss and correct earlier statements.',

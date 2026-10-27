@@ -1,3 +1,4 @@
+import type { EvidencePacket } from '../src/agents/contracts';
 import { expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import { readSavedEvidence } from '../src/agents/runtime/saved-evidence-reader';
@@ -83,3 +84,43 @@ it('keeps known source warnings and unknown historical completeness distinct', a
   expect(partial.packets[0]!.warnings.map(warning => warning.message)).toContain('Missing page');
 });
 
+
+
+it.each(['ordinary', 'saved'] as const)('%s topic finalization uses the appropriate evidence budget and scoped prompt', async mode => {
+  const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
+  const packets: EvidencePacket[] = Array.from({ length: 10 }, (_, page) => ({
+    packetId: `page:${page}`, kind: 'youtube_transcript', assetVersions: [version],
+    sources: [{ id: 'source', provider: 'youtube', kind: 'transcript', videoId }],
+    excerpts: Array.from({ length: 6 }, (_, i) => ({ id: `caption:${page}:${i}`, sourceId: 'source',
+      text: `distinct-page-${page} ${'Original saved caption. '.repeat(60)}`, startMs: (page * 6 + i) * 1000 })),
+    artifacts: [{ type: 'saved_original_evidence', data: { assetVersion: version, kind: 'transcript',
+      totalExcerpts: 60, selectedExcerpts: 6, offset: page * 6, returnedExcerpts: 6 } }], warnings: [], usage: [],
+  }));
+  const core = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'complete', toolName: 'complete_research', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+    const prompt = JSON.stringify(call.prompt);
+    expect(prompt).not.toContain('When continuing a named plan, use its latest');
+    if (mode === 'saved') {
+      expect(prompt).toContain('distinct-page-9');
+      expect(prompt).not.toContain('prompt_evidence_cut');
+    } else {
+      expect(prompt).not.toContain('distinct-page-9');
+      expect(prompt).toContain('prompt_evidence_cut');
+    }
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [],
+      blocks: [{ text: 'The original saved caption supports this answer.', evidenceIds: ['ref_1'] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const finalize = vi.fn(async (_id, input) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 }, input, packets, 0));
+  await runResearchAgentWithModel({ message: 'Quote the saved captions.', model: core, finalizationModel: finalizer,
+    decision: { route: 'topic_research', useStoryboard: false, ...(mode === 'saved' ? { savedOnly: true, skill: 'verify_saved_evidence' as const } : {}) },
+    finalizationDeadlineAt: Date.now() + 60_000, recoveredEvidence: packets, inheritedResolved: true,
+    context: { ...identity, signal: new AbortController().signal, provider: {} as any,
+      transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: async execution => execution.execute(), finalize },
+  });
+  expect(finalizer.doGenerateCalls.length).toBeGreaterThan(0);
+  expect(finalize).toHaveBeenCalledOnce();
+});

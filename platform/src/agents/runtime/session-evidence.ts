@@ -63,7 +63,7 @@ export interface SessionBrief {
   assets: SessionAsset[];
   memories: SessionMemory[];
 }
-export interface SavedEvidenceReadState { attempts: number; outcomes: Array<{ assetVersion: string; reason: 'empty' | 'withheld' }> }
+export interface SavedEvidenceReadState { attempts: number; outcomes: Array<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }> }
 export interface SessionAccess {
   savedEvidenceReadState?(runId: string): SavedEvidenceReadState;
   brief(): SessionBrief;
@@ -831,13 +831,13 @@ export class SessionEvidenceStore implements SessionAccess {
     if (!row) throw new Error('Saved-evidence read limit reached. Answer from the passages already read and state remaining gaps.');
     return SAVED_EVIDENCE_READ_LIMIT - row.attempts;
   }
-  recordSavedEvidenceOutcome(runId: string, assetVersion: string, reason: 'empty' | 'withheld'): void {
+  recordSavedEvidenceOutcome(runId: string, assetVersion: string, reason: 'empty' | 'withheld' | 'unavailable'): void {
     if (!this.has(assetVersion)) return;
     this.sql.exec('INSERT OR REPLACE INTO session_original_read_outcomes VALUES (?, ?, ?)', runId, assetVersion, reason);
   }
   savedEvidenceReadState(runId: string): SavedEvidenceReadState {
     const attempts = this.sql.exec<{ attempts: number }>('SELECT attempts FROM session_original_reads WHERE run_id=?', runId).toArray()[0]?.attempts ?? 0;
-    const outcomes = this.sql.exec<{ assetVersion: string; reason: 'empty' | 'withheld' }>(
+    const outcomes = this.sql.exec<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }>(
       'SELECT asset_version AS assetVersion, reason FROM session_original_read_outcomes WHERE run_id=?', runId).toArray()
       .filter(outcome => this.has(outcome.assetVersion));
     return { attempts, outcomes };

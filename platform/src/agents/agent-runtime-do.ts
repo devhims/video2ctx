@@ -347,6 +347,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     this.sessionStore.queueCleanup(previews);
     await this.sessionStore.delete(version);
+    this.pruneSavedReadState();
     await this.traceManager.publishPending();
     return {deleted:true};
   }
@@ -402,6 +403,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   ): Promise<AgentRunReceipt | AgentRunRejection> {
     this.ensureAgentRuntimeSchema();
     if (this.#deleted) throw new Error('Account deletion is in progress.');
+    this.pruneSavedReadState();
     const parsedRequest = agentRequestSchema.parse(request);
     const parsedAdmission = agentAdmissionSchema.parse(admission);
     const identity = queuedIdentity ? queuedRunIdentitySchema.parse(queuedIdentity) : undefined;
@@ -1059,6 +1061,15 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
   }
 
+  /** Terminal runs cannot resume research. Keep counters for every active/recoverable run. */
+  private pruneSavedReadState(): void {
+    // Initialize the session tables even on a first request or a legacy conversation.
+    void this.sessionStore;
+    for (const table of ['session_original_reads', 'session_original_read_outcomes'])
+      this.ctx.storage.sql.exec(`DELETE FROM ${table} WHERE run_id IN
+        (SELECT id FROM agent_runs WHERE status IN ('completed', 'failed', 'cancelled'))`);
+  }
+
   private async settleRun(runId: string): Promise<void> {
     const run = this.readRun(runId);
     if (!run || !isTerminal(run.status) || run.billing_settled) return;
@@ -1418,7 +1429,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.sessionStore.search.clearHistory();
       for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
         'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_packet_operations', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
-        'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox']) {
+        'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox', 'session_original_reads', 'session_original_read_outcomes']) {
         this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
       }
       // SDK snapshots contain run identifiers only, but clear those too.

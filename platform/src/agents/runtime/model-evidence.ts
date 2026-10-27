@@ -107,7 +107,8 @@ export const modelEvidencePacketSchema = z.object({
     operation: z.enum(['image_analysis', 'transcript_analysis', 'retrieval', 'saved_read', 'inherited']),
     note: z.string().min(1).max(300),
   }).optional(),
-  savedEvidence: savedEvidenceCoverageSchema.optional(),
+  // Counts describe the original read. Reused IDs point to exact excerpts already in this context.
+  savedEvidence: savedEvidenceCoverageSchema.extend({ reusedExcerptIds: z.array(z.string()).optional() }).optional(),
   warnings: z.array(agentWarningSchema).max(MODEL_WARNINGS),
 });
 
@@ -361,20 +362,36 @@ function appendedLength(selectedLength: number, selectedCount: number, candidate
   return selectedLength + serializedLength(candidate) + (selectedCount ? 1 : 0);
 }
 
+/** Deduplicate only identical immutable originals, including source identity and span. */
+function originalExcerptKey(packet: ModelEvidencePacket, excerpt: z.infer<typeof evidenceExcerptSchema>): string {
+  return JSON.stringify([packet.savedEvidence?.assetVersion, packet.assetVersions, packet.sources, excerpt]);
+}
+
 function packEvidence(
   prioritized: ReadonlyArray<{ source: EvidencePacket; packet: ModelEvidencePacket }>,
   maxCharacters: number,
 ): { evidence: ModelEvidencePacket[]; omitted: OmittedModelEvidence[] } {
   const selected: ModelEvidencePacket[] = [];
   const omitted: OmittedModelEvidence[] = [];
+  const originalExcerpts = new Set<string>();
   let selectedLength = serializedLength(selected);
   const fits = (candidate: ModelEvidencePacket) => appendedLength(selectedLength, selected.length, candidate) <= maxCharacters;
   const add = (candidate: ModelEvidencePacket) => {
     selectedLength = appendedLength(selectedLength, selected.length, candidate);
     selected.push(candidate);
+    if (candidate.savedEvidence) for (const excerpt of candidate.excerpts ?? [])
+      originalExcerpts.add(originalExcerptKey(candidate, excerpt));
   };
 
-  for (const { source, packet } of prioritized) {
+  for (const { source, packet: original } of prioritized) {
+    let packet = original;
+    if (original.savedEvidence) {
+      const reused = (original.excerpts ?? []).filter(excerpt => originalExcerpts.has(originalExcerptKey(original, excerpt)));
+      if (reused.length) packet = { ...original,
+        excerpts: original.excerpts!.filter(excerpt => !originalExcerpts.has(originalExcerptKey(original, excerpt))),
+        savedEvidence: { ...original.savedEvidence, reusedExcerptIds: reused.map(excerpt => excerpt.id) },
+      };
+    }
     if (fits(packet)) {
       add(packet);
       continue;
@@ -662,9 +679,21 @@ export function finalizationEvidenceForModel(
   for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);
   // Identify actual handoff inputs lost to the prompt budget or subject filter.
   // Normal model projection is intentional; additional reduction is a gap.
+  const suppliedOriginals = new Set(projected.flatMap(packet => packet.savedEvidence
+    ? (packet.excerpts ?? []).map(excerpt => originalExcerptKey(packet, excerpt)) : []));
   for (const packet of compact) {
     const expected = evidencePacketForModel(packet);
-    const actual = projected.find(item => item.packetId === packet.packetId);
+    let actual = projected.find(item => item.packetId === packet.packetId);
+    if (actual?.savedEvidence?.reusedExcerptIds && expected.savedEvidence) {
+      const { reusedExcerptIds, ...coverage } = actual.savedEvidence;
+      // Reconstruct only excerpts whose exact source/version/text/span is actually supplied.
+      // An omitted earlier page can never satisfy a reference or hide a budget gap.
+      const supplied = new Set((actual.excerpts ?? []).map(excerpt => originalExcerptKey(actual!, excerpt)));
+      const reused = new Set(reusedExcerptIds);
+      actual = { ...actual, savedEvidence: coverage, excerpts: (expected.excerpts ?? []).filter(excerpt =>
+        supplied.has(originalExcerptKey(expected, excerpt))
+        || (reused.has(excerpt.id) && suppliedOriginals.has(originalExcerptKey(expected, excerpt)))) };
+    }
     if (JSON.stringify(expected) !== JSON.stringify(actual)) {
       missingInputs.push({ reason: 'prompt_evidence_cut', packetId: packet.packetId, assetVersions: packet.assetVersions });
     }

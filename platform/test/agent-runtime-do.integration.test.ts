@@ -406,6 +406,8 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
     await instance.getSessionAssets(conversationId,userId);
     (instance as unknown as {syncSessionHistory():void}).syncSessionHistory();
     instance.sql`INSERT INTO session_run_generations VALUES (${runId},0)`;
+    instance.sql`INSERT INTO session_original_reads VALUES (${runId}, 3)`;
+    instance.sql`INSERT INTO session_original_read_outcomes VALUES (${runId}, 'orphan-version', 'unavailable')`;
   });
   await runtime.deleteAccountData();
   expect(await runtime.getRun(runId)).toBeNull();
@@ -418,7 +420,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });
@@ -2416,5 +2418,25 @@ test('resumed saved verification restores admitted originals without rereading o
     expect(internal.readEvidencePackets('unrelated-run')).toEqual([]);
     await instance.deleteSessionAssets(conversationId, userId, version);
     expect(internal.readEvidencePackets(runId)).toEqual([]);
+  });
+});
+
+
+test('clearing saved evidence prunes terminal read bookkeeping without replenishing active limits', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('original-read-retention', 'running');
+  await runInDurableObject(runtime, async instance => {
+    await instance.getSessionAssets(conversationId, userId);
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,
+      turn_ordinal,message,status,phase,credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
+      VALUES ('terminal',${userId},${conversationId},'old-user','old-agent',0,'old prompt','completed','completed',5000,0,0,0)`;
+    instance.sql`INSERT INTO session_original_reads VALUES (${runId},16), ('terminal',4)`;
+    instance.sql`INSERT INTO session_original_read_outcomes VALUES ('terminal','orphan','unavailable')`;
+  });
+  await runtime.deleteSessionAssets(conversationId, userId);
+  await runInDurableObject(runtime, async instance => {
+    expect(instance.sql`SELECT * FROM session_original_reads`).toEqual([{ run_id: runId, attempts: 16 }]);
+    expect(instance.sql`SELECT * FROM session_original_read_outcomes`).toEqual([]);
+    const internal = instance as unknown as { sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore };
+    expect(() => internal.sessionStore.reserveSavedEvidenceRead(runId)).toThrow('read limit');
   });
 });
