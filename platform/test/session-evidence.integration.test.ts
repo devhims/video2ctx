@@ -2179,3 +2179,15 @@ test('an unreadable older source reaches the finalizer as a gap outside the veri
     expect(supplied.contextIncomplete).toBe(true);
     expect(supplied.missingInputs).toContainEqual(expect.objectContaining({ reason: 'saved_original_unavailable', assetVersion: broken, videoId: 'badvideo002' }));
   }));
+
+test('a word longer than a chunk is never indexed as its own suffix', async () =>
+  within('comment-index-long-word', async (store, reopen, sql) => {
+    // One 3,010-character token: its "lighthouse" ending lies two chunks past where the word starts.
+    const page = commentPage(2, index => index === 0 ? `${'x'.repeat(3000)}lighthouse` : 'A real lighthouse keeper.');
+    page.comments.forEach(comment => { comment.author.name = 'Reader'; });
+    const version = await saveComments(store, page);
+    const chunks = sql.exec<{ search_text: string }>('SELECT search_text FROM session_original_segments WHERE version=? AND entry=0 ORDER BY position', version).toArray();
+    expect(chunks.map(chunk => chunk.search_text.trim())).toEqual([`${'x'.repeat(3000)}lighthouse reader`, 'reader', 'reader']);
+    const found = await searchSavedEvidence(reopen(), { query: 'lighthouse' });
+    expect(found.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([`saved:${version}:comment:1:0`]);
+  }));

@@ -197,10 +197,12 @@ function commentPositionsMatching(sql: SqlStorage, version: string, words: reado
 function chunkWords(text: string, start: number, end: number): string {
   const word = (index: number) => index >= 0 && index < text.length && /[\p{L}\p{N}_'’‘]/u.test(text[index]!);
   let from = start;
-  if (word(start - 1)) while (from < end && word(from)) from++;
+  // A word carried over from the previous chunk belongs to that chunk, however far it runs.
+  if (word(start - 1)) while (word(from)) from++;
+  if (from >= end) return '';
   let to = Math.min(end, text.length);
   while (word(to - 1) && word(to)) to++;
-  return text.slice(from, Math.max(from, to));
+  return text.slice(from, to);
 }
 
 function positionsMatching(sql: SqlStorage, version: string, match: string): number[] {
