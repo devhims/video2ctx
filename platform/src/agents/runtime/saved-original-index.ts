@@ -143,6 +143,13 @@ export function selectSavedOriginals(sql: SqlStorage, version: string, total: nu
   return { matching: matching.length, page };
 }
 
+/** Indexed versions containing the first query word; per-version selection applies the full match rules. */
+export function savedOriginalVersionsMatching(sql: SqlStorage, words: readonly string[]): string[] {
+  if (!words.length) return [];
+  return sql.exec<{ version: string }>(`SELECT DISTINCT s.version FROM session_original_fts f
+    JOIN session_original_segments s ON s.id = f.rowid WHERE session_original_fts MATCH ?`, phrase(words[0]!)).toArray().map(row => row.version);
+}
+
 /**
  * Words for a saved-evidence query, normalized exactly like indexed text. Apostrophes are
  * removed rather than split on, so "don't" is one word and never matches a stray "t".

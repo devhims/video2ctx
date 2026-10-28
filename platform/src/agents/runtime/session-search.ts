@@ -3,7 +3,7 @@ import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore } from './session-evidence';
-import { firstMatchSpan, matchMarkers, type MatchMarkers } from './search-highlight';
+import { matchMarkers, type MatchMarkers } from './search-highlight';
 import { withVisualProvenanceWarning } from './model-evidence';
 import { createReadSavedEvidenceTool } from './saved-evidence-reader';
 
@@ -42,12 +42,14 @@ export class SessionSearch {
     sql.exec(
       'CREATE VIRTUAL TABLE IF NOT EXISTS session_context_fts USING fts5(id UNINDEXED, owner UNINDEXED, scope UNINDEXED, content, metadata UNINDEXED)',
     );
-    sql.exec('CREATE TABLE IF NOT EXISTS session_search_assets (version TEXT PRIMARY KEY)');
+    // Saved captions and comments are searched through the segment index read by read_saved_evidence.
+    // Sessions created before that move still hold their old rows here; remove them once.
+    if (sql.exec(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_search_assets'`).toArray().length) {
+      sql.exec('DROP TRIGGER IF EXISTS session_search_asset_delete');
+      sql.exec(`DELETE FROM session_context_fts WHERE owner LIKE 'asset:%'`);
+      sql.exec('DROP TABLE session_search_assets');
+    }
     // Source-table triggers make deletion and memory corrections atomic with index maintenance.
-    sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_asset_delete AFTER DELETE ON session_assets BEGIN
-      DELETE FROM session_context_fts WHERE owner='asset:' || OLD.version;
-      DELETE FROM session_search_assets WHERE version=OLD.version;
-    END`);
     sql.exec(`CREATE TRIGGER IF NOT EXISTS session_search_packet_delete AFTER DELETE ON session_packets BEGIN
       DELETE FROM session_context_fts WHERE owner='packet:' || OLD.packet_id;
     END`);
@@ -59,7 +61,7 @@ export class SessionSearch {
       INSERT INTO session_context_fts (id,owner,scope,content,metadata)
       VALUES (NEW.id,'memory:' || NEW.id,'memory',json_extract(NEW.memory_json,'$.topic') || ' ' || json_extract(NEW.memory_json,'$.text'),NEW.memory_json);
     END`);
-    // Existing memory and packets are small SQLite records. Raw transcripts backfill lazily, one asset at a time.
+    // Existing memory and packets are small SQLite records.
     sql.exec(`INSERT INTO session_context_fts (id,owner,scope,content,metadata)
       SELECT id,'memory:' || id,'memory',json_extract(memory_json,'$.topic') || ' ' || json_extract(memory_json,'$.text'),memory_json
       FROM session_memories m WHERE NOT EXISTS (SELECT 1 FROM session_context_fts WHERE owner='memory:' || m.id)`);
@@ -138,18 +140,6 @@ export class SessionSearch {
     this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
     for (const excerpt of packet.excerpts) this.insert(excerpt.id, owner, 'evidence', excerpt.text, { packetId: id });
   }
-  indexTranscript(version: string, excerpts: EvidencePacket['excerpts']) {
-    this.indexAsset(version, excerpts.map(excerpt => excerpt.text));
-  }
-  /** Index one saved asset by entry position. Row IDs equal the saved-read citation IDs. */
-  indexAsset(version: string, texts: readonly string[], extra: { kind?: 'comments' } = {}) {
-    const owner = `asset:${version}`;
-    this.sql.exec('DELETE FROM session_context_fts WHERE owner=?', owner);
-    texts.forEach((text, index) =>
-      this.insert(`evidence:${version}:${index}`, owner, 'evidence', text, { version, offset: index, ...extra }),
-    );
-    this.sql.exec('INSERT OR IGNORE INTO session_search_assets VALUES (?)', version);
-  }
   private insert(id: string, owner: string, scope: string, content: string, metadata: unknown) {
     this.sql.exec(
       'INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES (?, ?, ?, ?, ?)',
@@ -166,13 +156,15 @@ export class SessionSearch {
     if (!tokens.length) return [];
     // Exclusions apply before the limit, so excluded rows can never fill the top 20.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
-    // A comment packet repeats entries of its saved page. Once that page is indexed, its rows
-    // represent every comment, so the packet copies must not take result slots before the limit.
-    // Packets whose page is not indexed, such as unreadable legacy pages, stay searchable.
+    // A raw caption or comment packet copies entries of a saved original. Once that original has a
+    // ready segment index, read_saved_evidence owns its text, so the copies are not search results.
+    // Packets whose original is not indexed, such as unreadable legacy pages, stay searchable.
     // The bare packet_id comparison uses its primary key rather than scanning every packet per row.
     const duplicates = scope === 'evidence' ? ` AND NOT EXISTS (SELECT 1 FROM session_packets p
-      WHERE owner LIKE 'packet:%' AND p.packet_id = substr(owner, 8) AND json_extract(p.packet_json,'$.kind')='youtube_comments'
-      AND EXISTS (SELECT 1 FROM json_each(p.versions_json) v WHERE v.value IN (SELECT version FROM session_search_assets)))` : '';
+      WHERE owner LIKE 'packet:%' AND p.packet_id = substr(owner, 8)
+      AND json_extract(p.packet_json,'$.kind') IN ('youtube_comments','youtube_transcript')
+      AND NOT EXISTS (SELECT 1 FROM json_each(p.packet_json,'$.artifacts') a WHERE json_extract(a.value,'$.type')='youtube_transcript_analysis')
+      AND EXISTS (SELECT 1 FROM json_each(p.versions_json) v WHERE v.value IN (SELECT version FROM session_original_assets WHERE status='ready')))` : '';
     const markers = matchMarkers();
     return this.sql
       .exec<SearchRow>(
@@ -196,35 +188,13 @@ export class SessionSearch {
       return record ? [JSON.parse(record.memory_json)] : [];
     });
   }
+  /** Saved analysis and other session findings. Exact captions and comments are read with read_saved_evidence. */
   async searchEvidence(store: SessionEvidenceStore, query: string) {
-    await store.ensureSearchIndexed();
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
-    // Long transcripts indexed before the length limit existed are left out of the query itself.
-    // Their index rows stay, so raising the limit makes them searchable again without reindexing.
-    const excluded = store.overLimitTranscriptVersions().map((version) => `asset:${version}`);
-    // One parsed page and asset record per version for this search; availability is rechecked per hit.
-    const pages = store.commentPageCache();
-    for (const row of this.matches('evidence', query, excluded)) {
+    for (const row of this.matches('evidence', query)) {
       if (seen.has(row.id)) continue;
-      const metadata = JSON.parse(row.metadata) as { version?: string; offset?: number; packetId?: string; kind?: string };
-      if (metadata.kind === 'comments' && metadata.version) {
-        // A comment hit is shown around the matched terms, which may lie past one excerpt's length.
-        const found = store.has(metadata.version) ? (await store.readSavedComment(metadata.version, metadata.offset ?? 0, firstMatchSpan(row), pages)).packets : [];
-        const excerpt = found[0]?.excerpts[0];
-        if (found[0] && excerpt) {
-          packets.push({ ...found[0], packetId: `search:${excerpt.id}`, excerpts: [excerpt], artifacts: [] });
-          seen.add(row.id);
-        }
-        continue;
-      }
-      const found = metadata.version
-        // Backstop for a version that crossed the limit between the query and this read.
-        ? store.has(metadata.version) && !store.transcriptOverLimit(metadata.version)
-          ? (await store.readEvidence(metadata.version, metadata.offset)).packets
-          : []
-        : store.evidenceForCitations([row.id]);
-      for (const packet of found) {
+      for (const packet of store.evidenceForCitations([row.id])) {
         if (packet.assetVersions?.some((version) => !store.has(version))) continue;
         const excerpts = packet.excerpts.filter((excerpt) => excerpt.id === row.id);
         if (!excerpts.length) continue;
@@ -271,7 +241,7 @@ export class SessionSearch {
       .withContext('evidence', {
         provider: {
           get: async () =>
-            'Search transcript passages, every saved comment on fetched comment pages, and saved visual analysis across session assets. Queries match all words, for example an author name. Results contain version-specific citation IDs; older versions are labelled.',
+            'Search saved analysis across session assets: transcript and visual analysis, metadata and other findings. Queries match all words. Results contain version-specific citation IDs; older versions are labelled. For exact captions or comments, use read_saved_evidence; omit its assetVersion to search every saved original.',
           search: async (query) => {
             check();
             const found = await this.searchEvidence(store, query);

@@ -3,7 +3,8 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
-import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexState, selectSavedOriginals, writeSavedOriginalIndex,
+import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexState, savedOriginalVersionsMatching, selectSavedOriginals, writeSavedOriginalIndex,
+  SAVED_ORIGINAL_INDEX_FORMAT,
   type SavedOriginalIndexState, type SavedOriginalQuery } from './saved-original-index';
 import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
@@ -174,39 +175,6 @@ export class SessionEvidenceStore implements SessionAccess {
   searchTools(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean; runId?: string }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
-  async ensureSearchIndexed() {
-    const generation = this.generation();
-    const rows = this.sql
-      .exec<{ version: string; video_id: string; details_json: string }>(
-        `SELECT version, kind, video_id, details_json FROM session_assets WHERE kind IN ('transcript','comments')
-      AND version NOT IN (SELECT version FROM session_search_assets)`,
-      )
-      .toArray() as { version: string; kind: SessionAssetKind; video_id: string; details_json: string }[];
-    for (const { version, kind, video_id: videoId, details_json: details } of rows) {
-      // Over-limit transcripts saved before the limit existed stay out of the search index.
-      if (this.overLimit({ kind, videoId, details: JSON.parse(details) })) continue;
-      const value = await this.read(version);
-      if (generation !== this.generation())
-        throw new Error('Session evidence changed during indexing. Retry the search.');
-      if (!value) continue;
-      if (kind === 'transcript') this.indexTranscript(version, value as Transcript);
-      else {
-        // Index every saved comment by its whole body and author, never a shortened excerpt.
-        const comments = savedComments(value);
-        if (comments) this.search.indexAsset(version, comments.map(commentSearchText), { kind: 'comments' });
-      }
-    }
-  }
-  private indexTranscript(version: string, transcript: Transcript) {
-    this.search.indexTranscript(
-      version,
-      completeTranscriptEvidence(
-        transcript.videoId,
-        transcript.segments,
-        `youtube:transcript:${transcript.videoId}`,
-      ).excerpts,
-    );
-  }
   generation() {
     return this.sql
       .exec<{ generation: number }>('SELECT generation FROM session_evidence_state WHERE id=1')
@@ -333,14 +301,6 @@ export class SessionEvidenceStore implements SessionAccess {
     const row = this.sql.exec<{ kind: SessionAssetKind; video_id: string; details_json: string }>(
       'SELECT kind, video_id, details_json FROM session_assets WHERE version=?', version).toArray()[0];
     return row ? this.overLimit({ kind: row.kind, videoId: row.video_id, details: JSON.parse(row.details_json) }) : undefined;
-  }
-  /** Saved transcripts over the limit, from stored metadata only. Empty when no limit is set. */
-  overLimitTranscriptVersions(): string[] {
-    if (this.maxVideoSeconds === undefined) return [];
-    return this.sql.exec<{ version: string; video_id: string; details_json: string }>(
-      `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'`).toArray()
-      .filter((row) => this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
-      .map((row) => row.version);
   }
   /** The same check for whatever version a reuse key currently points to. */
   transcriptOverLimitForKey(key: string): VideoTooLongError | undefined {
@@ -578,52 +538,6 @@ export class SessionEvidenceStore implements SessionAccess {
     this.savePacket(packet);
     return { packets: [packet], nextOffset: slice.nextOffset };
   }
-  /**
-   * A per-search cache of saved comment pages. Versions are content-addressed and never
-   * change, so a parsed page stays valid for as long as its own version exists.
-   */
-  commentPageCache(): CommentPageCache {
-    return { pages: new Map() };
-  }
-  /**
-   * One saved comment for a search hit, shown around the span search reported as `rawMatch`.
-   * A hit whose own page was deleted or is unreadable returns no packet. A read interrupted
-   * by deleting another asset or memory is retried, so that deletion never drops this hit;
-   * if the session keeps changing, the search fails with a retry message instead.
-   */
-  async readSavedComment(version: string, position: number, rawMatch: MatchSpan | undefined, cache?: CommentPageCache) {
-    const load = () => {
-      const loading = this.loadCommentPage(version);
-      cache?.pages.set(version, loading);
-      return loading;
-    };
-    let page = await (cache?.pages.get(version) ?? load());
-    for (let attempt = 1; page === 'interrupted' && attempt < COMMENT_PAGE_READ_ATTEMPTS; attempt += 1) page = await load();
-    if (page === 'interrupted') {
-      cache?.pages.delete(version);
-      throw new Error('Session evidence changed during the search. Retry the search.');
-    }
-    // Never serve a page from memory after its own version is deleted.
-    if (!page || !this.has(version)) return { packets: [] };
-    const comment = page.comments[position];
-    if (!comment) return { packets: [] };
-    const packet = await this.commentPacket(page.asset, [{ comment, position, rawMatch }], [], undefined, { savedPageCount: 1 }, page.current);
-    this.savePacket(packet);
-    return { packets: [packet] };
-  }
-  /**
-   * The parsed page, undefined when it is not a readable comment page, or 'interrupted' when
-   * another deletion fenced the read while this version still exists.
-   */
-  private async loadCommentPage(version: string): Promise<CommentPage | 'interrupted' | undefined> {
-    const asset = this.brief().assets.find((item) => item.version === version);
-    if (asset?.kind !== 'comments') return undefined;
-    const generation = this.generation();
-    const value = await this.read(version);
-    if (value === null) return generation !== this.generation() && this.has(version) ? 'interrupted' : undefined;
-    const comments = savedComments(value);
-    return comments && { asset, comments, current: this.currentVersions().has(version) };
-  }
   private async savedCommentPage(asset: SessionAsset): Promise<Comment[]> {
     const value = await this.read(asset.version);
     const comments = value === null ? undefined : savedComments(value);
@@ -793,7 +707,6 @@ export class SessionEvidenceStore implements SessionAccess {
             Date.now(),
           );
           this.linkCatalog(version, reference);
-          if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
           this.indexSavedOriginal(version, kind, videoId, result.value, true);
           this.alias(key, version);
         });
@@ -822,7 +735,6 @@ export class SessionEvidenceStore implements SessionAccess {
       const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
       if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
       this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
-      if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
       this.indexSavedOriginal(version, kind, videoId, result.value);
       this.alias(key, version);
       return { ...result, assetVersions: [version] };
@@ -837,14 +749,49 @@ export class SessionEvidenceStore implements SessionAccess {
     if (indexed) return indexed;
     const asset = this.assetInfo(version);
     if (asset?.kind !== 'transcript' && asset?.kind !== 'comments') return null;
-    const generation = this.generation();
-    const value = await this.read(version);
-    if (value === null || generation !== this.generation() || !this.has(version)) return null;
-    // A concurrent first read may have indexed it while this one waited.
-    const raced = savedOriginalIndexState(this.sql, version);
-    if (raced) return raced;
-    this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
-    return savedOriginalIndexState(this.sql, version) ?? null;
+    // A deletion elsewhere fences an in-flight read. Retry while this version still exists, so an
+    // unrelated deletion never hides it; if the session keeps changing, ask for a retry instead.
+    for (let attempt = 0; attempt < SAVED_ORIGINAL_READ_ATTEMPTS; attempt++) {
+      const generation = this.generation();
+      const value = await this.read(version);
+      if (!this.has(version)) return null;
+      if (generation !== this.generation()) continue;
+      if (value === null) return null;
+      // A concurrent first read may have indexed it while this one waited.
+      const raced = savedOriginalIndexState(this.sql, version);
+      if (raced) return raced;
+      this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
+      return savedOriginalIndexState(this.sql, version) ?? null;
+    }
+    throw new Error('Saved evidence changed during the read. Retry the request.');
+  }
+  /**
+   * Index every saved caption and comment version that predates the index, so a search across
+   * all originals covers them. Returns versions that could not be read, so coverage gaps are explicit.
+   */
+  async ensureSavedOriginalsIndexed(): Promise<string[]> {
+    const missing = this.sql.exec<{ version: string }>(`SELECT version FROM session_assets WHERE kind IN ('transcript','comments')
+      AND version NOT IN (SELECT version FROM session_original_assets WHERE format=?) ORDER BY created_at, version`,
+    SAVED_ORIGINAL_INDEX_FORMAT).toArray();
+    const unavailable: string[] = [];
+    for (const { version } of missing) {
+      if (this.transcriptOverLimit(version)) continue;
+      let state: SavedOriginalIndexState | null;
+      try { state = await this.savedOriginalIndex(version); }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        state = null;
+      }
+      // A version deleted meanwhile is simply gone, not an unreadable source.
+      if (state?.status !== 'ready' && this.has(version)) unavailable.push(version);
+    }
+    // Sources recorded as unreadable on an earlier search remain gaps on every later one.
+    const unreadable = this.sql.exec<{ version: string }>(`SELECT o.version FROM session_original_assets o
+      JOIN session_assets a ON a.version = o.version WHERE o.status='unreadable' ORDER BY a.created_at, o.version`).toArray();
+    return [...new Set([...unavailable, ...unreadable.map(row => row.version)])];
+  }
+  savedOriginalVersionsMatching(words: readonly string[]) {
+    return savedOriginalVersionsMatching(this.sql, words);
   }
   searchSavedOriginal(version: string, total: number, query: SavedOriginalQuery) {
     return selectSavedOriginals(this.sql, version, total, query);
@@ -1038,13 +985,8 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
   return result;
 }
 
-interface CommentPage { asset: SessionAsset; comments: Comment[]; current: boolean }
-/** Saved comment pages loaded during one search, by version. */
-export interface CommentPageCache {
-  pages: Map<string, Promise<CommentPage | 'interrupted' | undefined>>;
-}
-/** Reads of one comment page per hit, so a burst of unrelated deletions cannot drop it silently. */
-const COMMENT_PAGE_READ_ATTEMPTS = 3;
+/** First reads of one saved original, so a burst of unrelated deletions cannot hide it silently. */
+const SAVED_ORIGINAL_READ_ATTEMPTS = 3;
 
 /** Comments of a saved provider page, or undefined for an unexpected payload. */
 function savedComments(value: unknown): Comment[] | undefined {

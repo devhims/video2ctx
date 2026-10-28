@@ -4,6 +4,7 @@ import type { EvidencePacket } from '../src/agents/contracts';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
+import { searchSavedEvidence } from '../src/agents/runtime/saved-evidence-reader';
 import type { SessionEvidenceStore } from '../src/agents/runtime/session-evidence';
 import {
   RunEvidenceLedger,
@@ -632,9 +633,9 @@ test('search reading a newly pinned transcript before tool completion must not c
     } as unknown as AgentToolContext;
     const running = executeGetVideoTranscript({ videoId: VIDEO }, context, 'pending-transcript');
     await vi.waitFor(() => expect(version).toBeDefined());
-    const found = await store.search.searchEvidence(store, 'Distinct transcript passage');
+    const found = await searchSavedEvidence(store, { query: 'Distinct transcript passage' });
     expect(found.packets.length).toBeGreaterThan(0);
-    internals.deliverEvidence(runId!, 'search_context', found.packets);
+    internals.deliverEvidence(runId!, 'read_saved_evidence', found.packets);
     release();
     await running;
     const charges = internals.sql<{ credits: number }>`SELECT credits FROM agent_evidence_charges WHERE run_id = ${runId!}`;
