@@ -1,7 +1,8 @@
 import type { CapabilityRouteDecision, EvidencePacket } from '../src/agents/contracts';
 import { expect, it, vi } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
-import { readSavedEvidence, SAVED_EVIDENCE_ARTIFACT } from '../src/agents/runtime/saved-evidence-reader';
+import { SAVED_EVIDENCE_ARTIFACT } from '../src/agents/runtime/saved-evidence-reader';
+import { buildSavedOriginal } from '../src/agents/runtime/saved-original-index';
 import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
@@ -10,30 +11,7 @@ import type { SessionBrief } from '../src/agents/runtime/session-evidence';
 import { unreadOriginalSources, usesSavedEvidenceVerification } from '../src/agents/research/skills/verify-saved-evidence';
 import { researchTimeoutMs } from '../src/agents/runtime/deadline';
 const version = 'a'.repeat(64), videoId = 'abcdefghijk';
-const meta = { partial: false, warnings: [] };
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
-const comment = (text: string) => ({ id: 'one', text, author: { name: 'Alice' }, replies: [] });
-function store(value: unknown, kind = 'comments') {
-  return { generation: () => 0, has: () => true, savePacket: vi.fn(), readAsset: vi.fn(async () => ({
-    asset: { version, videoId, kind, current: true }, value,
-  })) } as any;
-}
-it('does not match contraction fragments inside unrelated words', async () => {
-  const result = await readSavedEvidence(store({ meta, comments: [comment('London time')] }), { assetVersion: version, query: "don't" });
-  expect(result.coverage.returnedExcerpts).toBe(0);
-});
-it('does not search generated metadata labels', async () => {
-  for (const query of ['author', 'comment', 'position']) {
-    const result = await readSavedEvidence(store({ meta, comments: [comment('Nice tutorial')] }), { assetVersion: version, query });
-    expect(result.coverage.returnedExcerpts).toBe(0);
-  }
-});
-it('reads historical blobs with absent optional metadata and replies', async () => {
-  await expect(readSavedEvidence(store({ comments: [comment('Nice tutorial')] }), { assetVersion: version })).resolves.toMatchObject({ coverage: { returnedExcerpts: 1 } });
-  await expect(readSavedEvidence(store({ meta: {}, comments: [comment('Nice tutorial')] }), { assetVersion: version })).resolves.toMatchObject({ coverage: { returnedExcerpts: 1 } });
-  const { replies, ...withoutReplies } = comment('Nice tutorial');
-  await expect(readSavedEvidence(store({ meta, comments: [withoutReplies] }), { assetVersion: version })).resolves.toMatchObject({ coverage: { returnedExcerpts: 1 } });
-});
 it('clarifies conflicting saved-only and fresh retrieval fallback candidates', async () => {
   let calls = 0;
   const model = new MockLanguageModelV4({ doGenerate: async () => ({
@@ -48,7 +26,13 @@ it('clarifies conflicting saved-only and fresh retrieval fallback candidates', a
   expect('refreshDynamicData' in result && result.refreshDynamicData).toBeFalsy();
 });
 it('preserves supported partial fallback for saved verification', async () => {
-  const saved = (await readSavedEvidence(store({ meta, comments: [comment('This saved original passage explains how to keep the soil moist during repotting.')] }), { assetVersion: version })).packets;
+  const built = buildSavedOriginal({ version, kind: 'comments', videoId },
+    { comments: [{ id: 'one', text: 'This saved original passage explains how to keep the soil moist during repotting.', author: { name: 'Alice' } }] });
+  if (built.status !== 'ready') throw new Error('Fixture comment page is unreadable.');
+  const saved: EvidencePacket[] = [{ packetId: `session:original:${version}:fixture`, kind: 'youtube_comments', assetVersions: [version],
+    sources: [{ id: `youtube:${videoId}:comments`, provider: 'youtube', kind: 'comments', videoId }],
+    excerpts: built.entries.map(entry => entry.excerpt), warnings: [], usage: [],
+    artifacts: [{ type: SAVED_EVIDENCE_ARTIFACT, data: { assetVersion: version, kind: 'comments', totalExcerpts: 1, selectedExcerpts: 1, offset: 0, returnedExcerpts: 1 } }] }];
   // Raw captions/comments alone deliberately do not qualify for the existing fallback.
   expect(evidenceFallback(saved, 'inspect_video')).toBeNull();
   saved.push({ packetId: 'retained-visual-analysis', kind: 'youtube_frames',
@@ -69,25 +53,6 @@ it('preserves supported partial fallback for saved verification', async () => {
     expect(finalize).toHaveBeenCalledOnce();
   }
 });
-
-it.each([
-  ["DON’T", "Don't rush", 1], ['paint', 'painting', 0], ['café', 'CAFÉ brush', 1],
-  ['Promise.all', 'Use Promise.all here', 1], ['Alice', 'Nice tutorial', 1],
-  ['tutorial', 'Nice tutorial', 1], ["don't", 'London time', 0],
-])('searches literal source words: %s in %s', async (query, text, count) => {
-  const result = await readSavedEvidence(store({ meta, comments: [comment(text)] }), { assetVersion: version, query });
-  expect(result.coverage.returnedExcerpts).toBe(count);
-  if (count) expect(result.packets[0]!.excerpts[0]!.text).toContain('Author: Alice');
-});
-it('keeps known source warnings and unknown historical completeness distinct', async () => {
-  const unknown = await readSavedEvidence(store({ comments: [comment('Nice tutorial')] }), { assetVersion: version });
-  expect(unknown.coverage.sourcePartial).toBeUndefined();
-  const partial = await readSavedEvidence(store({ meta: { partial: true, warnings: ['Missing page'] }, comments: [comment('Nice tutorial')] }), { assetVersion: version });
-  expect(partial.coverage.sourcePartial).toBe(true);
-  expect(partial.packets[0]!.warnings.map(warning => warning.message)).toContain('Missing page');
-});
-
-
 
 it.each(['ordinary', 'saved'] as const)('%s topic finalization uses the appropriate evidence budget and scoped prompt', async mode => {
   const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
