@@ -67,13 +67,13 @@ test('saved reads enforce ownership, admission, cancellation and history-only to
     const admit = vi.fn(() => []);
     const controller = new AbortController();
     const tools = await store.searchTools(admit, controller.signal);
-    const execute = tools.read_saved_evidence!.execute!;
+    const execute = tools.search_originals!.execute!;
     expect(await execute(input, options)).toMatchObject({ packets: [], withheld: true });
     expect(admit).toHaveBeenCalledWith(expect.any(Array), 'read_saved_evidence');
     controller.abort();
     await expect(execute(input, options)).rejects.toThrow();
     const history = await store.searchTools(admit, new AbortController().signal, { evidence: false });
-    expect(history.read_saved_evidence).toBeUndefined();
+    expect(history.search_originals).toBeUndefined();
     const empty = await readSavedEvidence(store, { ...input, query: 'absent phrase' });
     expect(empty.coverage).toMatchObject({ selectedExcerpts: 0, returnedExcerpts: 0 });
     expect(empty.packets[0]!.excerpts).toEqual([]);
@@ -116,9 +116,9 @@ test('original reads retain nested replies, fence interrupted reads and bound re
     expect(write).not.toHaveBeenCalled();
     interrupted.mockRestore();
     const tools = await store.searchTools(() => undefined, new AbortController().signal);
-    for (let index = 0; index < SAVED_EVIDENCE_READ_LIMIT; index++) await tools.read_saved_evidence!.execute!(input,
+    for (let index = 0; index < SAVED_EVIDENCE_READ_LIMIT; index++) await tools.search_originals!.execute!(input,
       { toolCallId: `read-${index}`, messages: [], context: {} });
-    await expect(tools.read_saved_evidence!.execute!(input,
+    await expect(tools.search_originals!.execute!(input,
       { toolCallId: 'over-limit', messages: [], context: {} })).rejects.toThrow('read limit');
     await store.delete(input.assetVersion);
     await expect(readSavedEvidence(store, input)).rejects.toThrow('unavailable or deleted');
@@ -157,7 +157,7 @@ test.each([false, true])('exact watercolor follow-up retains original passages a
       const read = reads[step++];
       if (!read && interrupted) throw new Error('Research phase timeout.');
       return { content: [{ type: 'tool-call', toolCallId: `read-${step}`,
-        toolName: read ? 'read_saved_evidence' : 'complete_research',
+        toolName: read ? 'search_originals' : 'complete_research',
         input: JSON.stringify(read ? { assetVersion: versions.get(read[0]), ...read[1] } : {}) }],
         finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
     } });
@@ -226,8 +226,8 @@ test('watercolor follow-up reads original medium captions with precise citations
     const restored = reopen();
     const received: EvidencePacket[] = [];
     const tools = await restored.searchTools(packets => { received.push(...packets); }, new AbortController().signal);
-    expect(tools.read_saved_evidence, 'Exact quotation requests need an original-asset reader').toBeDefined();
-    const result = await tools.read_saved_evidence!.execute!(
+    expect(tools.search_originals, 'Exact quotation requests need an original-asset reader').toBeDefined();
+    const result = await tools.search_originals!.execute!(
       { assetVersion: saved.assetVersions![0]!, query: 'watercolor medium' },
       { toolCallId: 'watercolor-read', messages: [], context: {} },
     );
@@ -849,7 +849,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
     );
     const received: EvidencePacket[] = [];
     const tools = await store.searchTools((packets) => { received.push(...packets); }, new AbortController().signal);
-    expect(Object.keys(tools).sort()).toEqual(['read_saved_evidence', 'read_session_history', 'search_context']);
+    expect(Object.keys(tools).sort()).toEqual(['read_session_history', 'search_context', 'search_originals']);
     const options = { toolCallId: 'search', messages: [], context: {} };
     const run = async (label: string, query: string) =>
       JSON.parse(String(await tools.search_context!.execute!({ label, query }, options)));
@@ -861,14 +861,14 @@ test('searchable context uses Session tools, follows memory corrections and remo
     );
     expect(await run('memory', 'enterprise')).toEqual([]);
     expect((await run('memory', 'team pricing'))[0].text).toBe('Focus on team pricing.');
-    // Saved captions belong to read_saved_evidence; search_context does not return raw copies of them.
-    expect((await run('evidence', 'clear sentence')).packets).toEqual([]);
-    const originals = await tools.read_saved_evidence!.execute!({ query: 'clear sentence' }, options) as { packets: EvidencePacket[] };
+    // Saved captions belong to search_originals; search_context does not return raw copies of them.
+    expect((await run('analysis', 'clear sentence')).packets).toEqual([]);
+    const originals = await tools.search_originals!.execute!({ query: 'clear sentence' }, options) as { packets: EvidencePacket[] };
     expect(originals.packets).toHaveLength(1);
     expect(received).toHaveLength(1);
     await store.delete(packet.assetVersions![0]);
     expect(await run('memory', 'opening')).toEqual([]);
-    expect((await tools.read_saved_evidence!.execute!({ query: 'clear' }, options) as { packets: EvidencePacket[] }).packets).toEqual([]);
+    expect((await tools.search_originals!.execute!({ query: 'clear' }, options) as { packets: EvidencePacket[] }).packets).toEqual([]);
     store.deleteMemory('context:focus');
     expect(await run('memory', 'team pricing')).toEqual([]);
   }));
@@ -950,7 +950,7 @@ test.each([true, false])(
               type: 'tool-call',
               toolCallId: `core-${coreCalls}`,
               // With a finalizer configured, research ends with complete_research.
-              toolName: coreCalls++ === 0 ? 'read_saved_evidence' : 'complete_research',
+              toolName: coreCalls++ === 0 ? 'search_originals' : 'complete_research',
               input: JSON.stringify(coreCalls === 1 ? { query: 'clear opening' } : {}),
             },
           ],
@@ -970,7 +970,7 @@ test.each([true, false])(
                     type: 'tool-call',
                     toolCallId: 'lookup',
                     toolName: 'search_context',
-                    input: JSON.stringify({ label: 'evidence', query: 'clear opening' }),
+                    input: JSON.stringify({ label: 'analysis', query: 'clear opening' }),
                   },
                 ]
               : [
@@ -1662,7 +1662,7 @@ test('saved read attempts survive reopening, failures and concurrent tool instan
     const input = { assetVersion: raw.assetVersions![0]! };
     const options = { toolCallId: 'repeated-call', messages: [], context: {} };
     const make = async (s: SessionEvidenceStore, runId = 'same-run') =>
-      (await s.searchTools(() => undefined, new AbortController().signal, { runId })).read_saved_evidence!.execute!;
+      (await s.searchTools(() => undefined, new AbortController().signal, { runId })).search_originals!.execute!;
     const first = await make(store);
     await expect(first({ assetVersion: 'missing' }, options)).rejects.toThrow('unavailable');
     for (let index = 0; index < 14; index++) await first(input, options);
@@ -1689,7 +1689,7 @@ test.each(['empty', 'withheld', 'no-match'] as const)('saved %s read has honest 
     const decision = { route: 'inspect_video' as const, videoId: id, savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
     const tools = await store.searchTools(packets => mode === 'withheld' ? [] : packets,
       new AbortController().signal, { runId: 'outcome-run' });
-    const result = await tools.read_saved_evidence!.execute!({ assetVersion, ...(mode === 'no-match' ? { query: 'absentliteralword' } : {}) },
+    const result = await tools.search_originals!.execute!({ assetVersion, ...(mode === 'no-match' ? { query: 'absentliteralword' } : {}) },
       { toolCallId: 'read', messages: [], context: {} }) as { packets: EvidencePacket[] };
     const restored = reopen();
     const state = restored.savedEvidenceReadState('outcome-run');
@@ -1722,7 +1722,7 @@ test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete 
     const runId = crypto.randomUUID();
     const tools = await store.searchTools(packets => reason === 'withheld' ? [] : packets,
       new AbortController().signal, { runId });
-    await tools.read_saved_evidence!.execute!({ assetVersion: raw.assetVersions![0]! },
+    await tools.search_originals!.execute!({ assetVersion: raw.assetVersions![0]! },
       { toolCallId: 'original', messages: [], context: {} });
     const restored = reopen();
     const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -1770,7 +1770,7 @@ test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavai
       ? new SessionEvidenceStore(sql, env.RESEARCH, `test-session/original-unavailable-${mode}/`, undefined, undefined, undefined, 1)
       : store;
     const tools = await reading.searchTools(packets => packets, new AbortController().signal, { runId: 'unavailable-run' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
+    await expect(tools.search_originals!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
       .resolves.toMatchObject({ packets: [], unavailable: true, remainingReads: 15 });
     const restored = reopen();
     const state = restored.savedEvidenceReadState('unavailable-run');
@@ -1796,14 +1796,14 @@ test.each(['transient', 'invalid-query', 'invalid-range', 'cancelled', 'deleted'
       throw new SyntaxError('Late decode failure');
     });
     const tools = await store.searchTools(packets => packets, controller.signal, { runId: 'nonterminal' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion,
+    await expect(tools.search_originals!.execute!({ assetVersion,
       ...(mode === 'invalid-query' ? { query: '!!!' } : {}),
       ...(mode === 'invalid-range' ? { startMs: 20, endMs: 10 } : {}),
     }, { toolCallId: 'read', messages: [], context: {} })).rejects.toThrow();
     expect(reopen().savedEvidenceReadState('nonterminal')).toEqual({ attempts: 1, outcomes: [] });
     if (mode === 'transient') {
       const recovered = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'nonterminal' });
-      await expect(recovered.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
+      await expect(recovered.search_originals!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
         .resolves.toMatchObject({ coverage: { returnedExcerpts: 1 }, remainingReads: 14 });
     }
   }));
@@ -1818,7 +1818,7 @@ test('invalid comment time filters never mark a corrupt original unavailable', a
     const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
     await env.RESEARCH.put(key, '{broken');
     const tools = await store.searchTools(packets => packets, new AbortController().signal, { runId: 'invalid-filter' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
+    await expect(tools.search_originals!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
       .rejects.toThrow('Timestamp filters');
     expect(reopen().savedEvidenceReadState('invalid-filter')).toEqual({ attempts: 1, outcomes: [] });
   }));
@@ -1872,9 +1872,9 @@ test('prior transcript analyses cannot exhaust a saved-original verification run
       outputTokens: { total: 10, text: 10, reasoning: 0 } };
     const core = new MockLanguageModelV4({ doGenerate: async call => {
       const current = step++;
-      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
+      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['search_originals']);
       else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
-      const toolName = current < 2 ? 'read_saved_evidence' : 'complete_research';
+      const toolName = current < 2 ? 'search_originals' : 'complete_research';
       return { content: [{ type: 'tool-call' as const, toolCallId: `step-${current}`, toolName,
         input: JSON.stringify(current < 2 ? { assetVersion: versions[current], limit: 1 } : {}) }],
         finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' }, usage, warnings: [] };
@@ -2002,7 +2002,7 @@ test('assets saved before the index are indexed once on first read, and deletion
     expect(sql.exec("SELECT COUNT(*) AS count FROM session_original_fts WHERE session_original_fts MATCH 'mix'").one().count).toBe(0);
   }));
 
-// Tool roles: read_saved_evidence owns original captions and comments, including search across them.
+// Tool roles: search_originals owns original captions and comments, including search across them.
 async function saveCaptions(store: SessionEvidenceStore, videoId: string, text: string, refresh = false) {
   return (await store.retrieve(`captions:${videoId}`, 'transcript', videoId, refresh,
     async () => ({ value: { ...transcript(text), videoId }, cacheStatus: 'miss' as const }), () => ({}))).assetVersions![0]!;
@@ -2014,7 +2014,7 @@ test('a search across saved originals is bounded, current-first, and counts as o
     for (const videoId of videos) await saveCaptions(store, videoId, `Gold medal ceremony number ${videoId}.`);
     const options = { toolCallId: 'search', messages: [], context: {} };
     const tools = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'bounded-search' });
-    const result = await tools.read_saved_evidence!.execute!({ query: 'gold medals' }, options) as
+    const result = await tools.search_originals!.execute!({ query: 'gold medals' }, options) as
       { packets: EvidencePacket[]; search: Record<string, number>; remainingReads: number; moreSources?: string };
     expect(result.packets).toHaveLength(6);
     expect(result.search).toMatchObject({ matchedSources: 8, returnedSources: 6, omittedSources: 2 });
@@ -2056,7 +2056,7 @@ test('a search across saved originals records withheld sources and keeps transcr
     expect(context.packets.map(packet => packet.excerpts[0]!.text)).toEqual(['The analyst notes a lighthouse metaphor.']);
     // Originals withheld by the run's credit reserve become an explicit gap for that source.
     const tools = await reopen().searchTools(() => [], new AbortController().signal, { runId: 'withheld-search' });
-    const result = await tools.read_saved_evidence!.execute!({ query: 'lighthouse' }, { toolCallId: 'search', messages: [], context: {} }) as
+    const result = await tools.search_originals!.execute!({ query: 'lighthouse' }, { toolCallId: 'search', messages: [], context: {} }) as
       { packets: EvidencePacket[]; withheld?: boolean };
     expect(result).toMatchObject({ packets: [], withheld: true });
     expect(reopen().savedEvidenceReadState('withheld-search')).toEqual({ attempts: 1, outcomes: [{ assetVersion: version, reason: 'withheld' }] });

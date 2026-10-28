@@ -52,7 +52,7 @@ export function ensureSavedOriginalSchema(sql: SqlStorage): void {
   END`);
 }
 
-/** The exact excerpts read_saved_evidence returns, with the text each one is searched by. */
+/** The exact excerpts search_originals returns, with the text each one is searched by. */
 export function buildSavedOriginal(asset: { version: string; kind: SavedOriginalKind; videoId: string }, value: unknown): SavedOriginalBuild {
   if (!(asset.kind === 'transcript' ? captionShape : commentsShape).safeParse(value).success)
     return { status: 'unreadable', reason: 'Saved source data has an unreadable caption or comment structure.' };

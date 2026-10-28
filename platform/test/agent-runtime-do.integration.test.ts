@@ -2358,7 +2358,7 @@ test('resumed saved verification restores admitted originals without rereading o
     const core = new MockLanguageModelV4({ doGenerate: async () => {
       const index = step++;
       return { content: [{ type: 'tool-call', toolCallId: `recovery-${index}`,
-        toolName: ['read_saved_evidence', 'complete_research'][index]!,
+        toolName: ['search_originals', 'complete_research'][index]!,
         input: JSON.stringify([{ assetVersion: version }, {}][index]) }],
         finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
     } });

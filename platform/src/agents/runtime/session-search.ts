@@ -42,7 +42,7 @@ export class SessionSearch {
     sql.exec(
       'CREATE VIRTUAL TABLE IF NOT EXISTS session_context_fts USING fts5(id UNINDEXED, owner UNINDEXED, scope UNINDEXED, content, metadata UNINDEXED)',
     );
-    // Saved captions and comments are searched through the segment index read by read_saved_evidence.
+    // Saved captions and comments are searched through the segment index read by search_originals.
     // Sessions created before that move still hold their old rows here; remove them once.
     if (sql.exec(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_search_assets'`).toArray().length) {
       sql.exec('DROP TRIGGER IF EXISTS session_search_asset_delete');
@@ -157,7 +157,7 @@ export class SessionSearch {
     // Exclusions apply before the limit, so excluded rows can never fill the top 20.
     const excluded = excludedOwners.length ? ` AND owner NOT IN (${excludedOwners.map(() => '?').join(',')})` : '';
     // A raw caption or comment packet copies entries of a saved original. Once that original has a
-    // ready segment index, read_saved_evidence owns its text, so the copies are not search results.
+    // ready segment index, search_originals owns its text, so the copies are not search results.
     // Packets whose original is not indexed, such as unreadable legacy pages, stay searchable.
     // The bare packet_id comparison uses its primary key rather than scanning every packet per row.
     const duplicates = scope === 'evidence' ? ` AND NOT EXISTS (SELECT 1 FROM session_packets p
@@ -188,7 +188,7 @@ export class SessionSearch {
       return record ? [JSON.parse(record.memory_json)] : [];
     });
   }
-  /** Saved analysis and other session findings. Exact captions and comments are read with read_saved_evidence. */
+  /** Saved analysis and other session findings. Exact captions and comments are read with search_originals. */
   async searchEvidence(store: SessionEvidenceStore, query: string) {
     const packets: EvidencePacket[] = [];
     const seen = new Set<string>();
@@ -238,10 +238,10 @@ export class SessionSearch {
         },
       });
     const session = options.evidence === false ? base : base
-      .withContext('evidence', {
+      .withContext('analysis', {
         provider: {
           get: async () =>
-            'Search saved analysis across session assets: transcript and visual analysis, metadata and other findings. Queries match all words. Results contain version-specific citation IDs; older versions are labelled. For exact captions or comments, use read_saved_evidence; omit its assetVersion to search every saved original.',
+            'Search saved analysis across session assets: transcript and visual analysis, metadata and other findings. Queries match all words. Results contain version-specific citation IDs; older versions are labelled. For exact captions or comments, use search_originals; omit its assetVersion to search every saved original.',
           search: async (query) => {
             check();
             const found = await this.searchEvidence(store, query);
@@ -255,7 +255,7 @@ export class SessionSearch {
       });
     return {
       ...(await session.tools()),
-      ...(options.evidence === false ? {} : { read_saved_evidence: createReadSavedEvidenceTool(store, onEvidence, signal, options.runId) }),
+      ...(options.evidence === false ? {} : { search_originals: createReadSavedEvidenceTool(store, onEvidence, signal, options.runId) }),
       read_session_history: tool({
         description:
           'Read all persisted session user messages or completed answers chronologically, including failed-run user messages and older turns. For listing messages, paginate until nextOffset is absent. Results may span conversation branches. Source-deleted answers are omitted.',
