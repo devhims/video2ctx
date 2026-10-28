@@ -3,6 +3,8 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
+import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexState, selectSavedOriginals, writeSavedOriginalIndex,
+  type SavedOriginalIndexState, type SavedOriginalQuery } from './saved-original-index';
 import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
 import type { Comment, Transcript } from 'all-things-youtube';
@@ -160,6 +162,7 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_reads (run_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL)');
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_read_outcomes (run_id TEXT NOT NULL, asset_version TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (run_id, asset_version))');
+    ensureSavedOriginalSchema(sql);
     this.search = new SessionSearch(sql);
   }
   readHistory(offset = 0, role?: 'user' | 'assistant') {
@@ -791,6 +794,7 @@ export class SessionEvidenceStore implements SessionAccess {
           );
           this.linkCatalog(version, reference);
           if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
+          this.indexSavedOriginal(version, kind, videoId, result.value, true);
           this.alias(key, version);
         });
         return { ...result, verifiedImages, assetVersions: [version] };
@@ -819,9 +823,38 @@ export class SessionEvidenceStore implements SessionAccess {
       if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
       this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
       if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
+      this.indexSavedOriginal(version, kind, videoId, result.value);
       this.alias(key, version);
       return { ...result, assetVersions: [version] };
     });
+  }
+  /**
+   * The segment index for a saved caption or comment version. Assets saved before the index
+   * existed are loaded from storage once and indexed; every later read uses SQLite only.
+   */
+  async savedOriginalIndex(version: string): Promise<SavedOriginalIndexState | null> {
+    const indexed = savedOriginalIndexState(this.sql, version);
+    if (indexed) return indexed;
+    const asset = this.assetInfo(version);
+    if (asset?.kind !== 'transcript' && asset?.kind !== 'comments') return null;
+    const generation = this.generation();
+    const value = await this.read(version);
+    if (value === null || generation !== this.generation() || !this.has(version)) return null;
+    // A concurrent first read may have indexed it while this one waited.
+    const raced = savedOriginalIndexState(this.sql, version);
+    if (raced) return raced;
+    this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
+    return savedOriginalIndexState(this.sql, version) ?? null;
+  }
+  searchSavedOriginal(version: string, total: number, query: SavedOriginalQuery) {
+    return selectSavedOriginals(this.sql, version, total, query);
+  }
+  private indexSavedOriginal(version: string, kind: SessionAssetKind, videoId: string, value: unknown, inTransaction = false) {
+    if (kind !== 'transcript' && kind !== 'comments') return;
+    const built = buildSavedOriginal({ version, kind, videoId }, value);
+    const write = () => writeSavedOriginalIndex(this.sql, version, built);
+    if (inTransaction || !this.atomic) write();
+    else this.atomic(write);
   }
   /** Reserve synchronously before I/O. Failed and repeated reads consume attempts too. */
   reserveSavedEvidenceRead(runId: string): number {

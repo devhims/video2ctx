@@ -105,12 +105,12 @@ test('original reads retain nested replies, fence interrupted reads and bound re
     expect(result.packets[0]!.excerpts[0]!.text).toContain('Comment ID: reply-1');
     expect(result.packets[0]!.excerpts[0]!.text).toContain('Saved position: 1.1');
     const controller = new AbortController();
-    const read = store.readAsset.bind(store);
+    const search = store.searchSavedOriginal.bind(store);
     const write = vi.spyOn(store, 'savePacket');
-    const interrupted = vi.spyOn(store, 'readAsset').mockImplementation(async version => {
-      const asset = await read(version);
+    const interrupted = vi.spyOn(store, 'searchSavedOriginal').mockImplementation((...args) => {
+      const found = search(...args);
       controller.abort();
-      return asset;
+      return found;
     });
     await expect(readSavedEvidence(store, input, controller.signal)).rejects.toThrow();
     expect(write).not.toHaveBeenCalled();
@@ -389,6 +389,16 @@ function transcript(text = 'A clear opening sentence.', partial = false): Transc
     meta: { source: 'allthingsyoutube', fetchedAt: '2026-09-19T00:00:00Z', partial, warnings: [] },
   };
 }
+/** Simulate an asset saved before the segment index existed. */
+function forgetSavedOriginalIndex(sql: SqlStorage, version: string) {
+  sql.exec('DELETE FROM session_original_segments WHERE version=?', version);
+  sql.exec('DELETE FROM session_original_assets WHERE version=?', version);
+}
+async function saveComments(store: SessionEvidenceStore, value: unknown, key = 'comments') {
+  return (await store.retrieve(key, 'comments', id, false, async () => ({ value, cacheStatus: 'miss' as const }), () => ({}))).assetVersions![0]!;
+}
+const indexedComment = (text: string) => ({ id: 'one', text, author: { name: 'Alice', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] });
+
 function within(
   name: string,
   fn: (store: SessionEvidenceStore, reopen: () => SessionEvidenceStore, sql: SqlStorage) => Promise<void>,
@@ -1724,7 +1734,7 @@ test.each(['empty', 'withheld', 'no-match'] as const)('saved %s read has honest 
   }));
 
 test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete with an explicit %s gap after recovery', async reason =>
-  within(`original-gap-finalization-${reason}`, async (store, reopen) => {
+  within(`original-gap-finalization-${reason}`, async (store, reopen, sql) => {
     const { MockLanguageModelV4 } = await import('ai/test');
     const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
     const value = transcript();
@@ -1732,7 +1742,8 @@ test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete 
     const raw = await store.retrieve('captions', 'transcript', id, false,
       async () => ({ value, cacheStatus: 'miss' }), () => ({}));
     if (reason === 'unavailable') {
-      vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new SyntaxError('corrupt saved JSON'));
+      forgetSavedOriginalIndex(sql, raw.assetVersions![0]!);
+      vi.spyOn(store, 'read').mockRejectedValueOnce(new SyntaxError('corrupt saved JSON'));
     }
     const runId = crypto.randomUUID();
     const tools = await store.searchTools(packets => reason === 'withheld' ? [] : packets,
@@ -1777,6 +1788,7 @@ test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavai
       async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({ endMs: 5600 }));
     const assetVersion = raw.assetVersions![0]!;
     const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
+    if (mode !== 'duration') forgetSavedOriginalIndex(sql, assetVersion);
     if (mode === 'missing') await env.RESEARCH.delete(key);
     if (mode === 'json') await env.RESEARCH.put(key, '{invalid json');
     if (mode === 'shape') await env.RESEARCH.put(key, JSON.stringify({ segments: 'broken' }));
@@ -1797,13 +1809,14 @@ test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavai
 
 test.each(['transient', 'invalid-query', 'invalid-range', 'cancelled', 'deleted'] as const)(
   '%s read does not become a permanent source failure', async mode =>
-  within(`original-nonterminal-${mode}`, async (store, reopen) => {
+  within(`original-nonterminal-${mode}`, async (store, reopen, sql) => {
     const raw = await store.retrieve('captions', 'transcript', id, false,
       async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
     const assetVersion = raw.assetVersions![0]!;
     const controller = new AbortController();
-    if (mode === 'transient') vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new Error('Temporary R2 failure'));
-    if (mode === 'cancelled' || mode === 'deleted') vi.spyOn(store, 'readAsset').mockImplementationOnce(async () => {
+    forgetSavedOriginalIndex(sql, assetVersion);
+    if (mode === 'transient') vi.spyOn(store, 'read').mockRejectedValueOnce(new Error('Temporary R2 failure'));
+    if (mode === 'cancelled' || mode === 'deleted') vi.spyOn(store, 'read').mockImplementationOnce(async () => {
       if (mode === 'cancelled') controller.abort(new Error('Cancelled'));
       else await store.delete(assetVersion);
       throw new SyntaxError('Late decode failure');
@@ -1943,3 +1956,74 @@ test('real saved Bicycle passages retain caption times instead of analyst window
     }
   });
 });
+
+// Segment index: originals are searched in SQLite with stemming, never reread from R2.
+test.each([
+  ["DON’T", "Don't rush", 1], ['paint', 'painting', 1], ['mix', 'mixing your own greens', 1], ['lube', 'I lubed it yesterday', 1],
+  ['anna', "Anna's palette", 1], ['café', 'CAFÉ brush', 1], ['Promise.all', 'Use Promise.all here', 1], ['Alice', 'Nice tutorial', 1],
+  ['tutorial', 'Nice tutorial', 1], ["don't", 'London time', 0], ['t', "Don't rush", 0],
+] as const)('saved comment search: %s in %s', async (query, text, count) =>
+  within(`original-words-${query}-${count}`, async store => {
+    const assetVersion = await saveComments(store, { meta: transcript().meta, comments: [indexedComment(text)] });
+    const result = await readSavedEvidence(store, { assetVersion, query });
+    expect(result.coverage.returnedExcerpts).toBe(count);
+    if (count) expect(result.packets[0]!.excerpts[0]!.text).toContain('Author: Alice');
+  }));
+
+test('saved comment search ignores attribution labels and keeps historical completeness', async () =>
+  within('original-labels-history', async store => {
+    const plain = await saveComments(store, { comments: [indexedComment('Nice tutorial')] });
+    for (const query of ['author', 'comment', 'position'])
+      expect((await readSavedEvidence(store, { assetVersion: plain, query })).coverage.returnedExcerpts).toBe(0);
+    const unknown = await readSavedEvidence(store, { assetVersion: plain });
+    expect(unknown.coverage).toMatchObject({ returnedExcerpts: 1 });
+    expect(unknown.coverage.sourcePartial).toBeUndefined();
+    const { replies: _replies, ...withoutReplies } = indexedComment('No replies here');
+    const legacy = await saveComments(store, { meta: {}, comments: [withoutReplies] }, 'legacy-comments');
+    expect((await readSavedEvidence(store, { assetVersion: legacy })).coverage.returnedExcerpts).toBe(1);
+    const partial = await saveComments(store, { meta: { partial: true, warnings: ['Missing page'] }, comments: [indexedComment('Partial page')] }, 'partial-comments');
+    const read = await readSavedEvidence(store, { assetVersion: partial });
+    expect(read.coverage.sourcePartial).toBe(true);
+    expect(read.packets[0]!.warnings.map(warning => warning.message)).toContain('Missing page');
+  }));
+
+test('saved captions are indexed on save and paged without touching storage', async () =>
+  within('original-index-no-storage', async (store, reopen, sql) => {
+    const value = transcript();
+    value.segments = ['you want to lube it', 'every hundred miles or so', 'and wipe off the excess', 'then shift through the gears', 'mixing your own greens']
+      .map((text, index) => ({ text, startMs: index * 3000, endMs: index * 3000 + 3000, durationMs: 3000 }));
+    const raw = await store.retrieve('captions', 'transcript', id, false, async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_segments WHERE version=?', assetVersion).one().count).toBe(5);
+    // The blob is gone: every read below must come from SQLite.
+    await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key);
+    const restored = reopen();
+    const storage = vi.spyOn(restored, 'read');
+    // Words split across consecutive captions still match, with two captions of context either side.
+    const split = await readSavedEvidence(restored, { assetVersion, query: 'lube hundred' });
+    expect(split.packets[0]!.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 3000, 6000]);
+    expect((await readSavedEvidence(restored, { assetVersion, query: 'lube gears' })).coverage.selectedExcerpts).toBe(0);
+    expect((await readSavedEvidence(restored, { assetVersion, query: 'mix' })).packets[0]!.excerpts.at(-1)!.text).toBe('mixing your own greens');
+    const timed = await readSavedEvidence(restored, { assetVersion, startMs: 6000, endMs: 9000 });
+    expect(timed.packets[0]!.excerpts.map(excerpt => excerpt.text)).toEqual(['every hundred miles or so', 'and wipe off the excess', 'then shift through the gears']);
+    const paged = await readSavedEvidence(restored, { assetVersion, limit: 2, offset: 2 });
+    expect(paged.coverage).toMatchObject({ totalExcerpts: 5, selectedExcerpts: 5, returnedExcerpts: 2, nextOffset: 4 });
+    expect(paged.packets[0]!.excerpts[0]!.id).toBe(`saved:${assetVersion}:caption:2`);
+    expect(storage).not.toHaveBeenCalled();
+  }));
+
+test('assets saved before the index are indexed once on first read, and deletion removes the index', async () =>
+  within('original-index-backfill', async (store, reopen, sql) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false, async () => ({ value: transcript('Mixing greens slowly'), cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    forgetSavedOriginalIndex(sql, assetVersion);
+    const restored = reopen();
+    const storage = vi.spyOn(restored, 'read');
+    expect((await readSavedEvidence(restored, { assetVersion, query: 'mix' })).coverage.returnedExcerpts).toBe(1);
+    expect((await readSavedEvidence(restored, { assetVersion, query: 'greens' })).coverage.returnedExcerpts).toBe(1);
+    expect(storage).toHaveBeenCalledOnce();
+    await restored.delete(assetVersion);
+    expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_segments').one().count).toBe(0);
+    expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_assets').one().count).toBe(0);
+    expect(sql.exec("SELECT COUNT(*) AS count FROM session_original_fts WHERE session_original_fts MATCH 'mix'").one().count).toBe(0);
+  }));
