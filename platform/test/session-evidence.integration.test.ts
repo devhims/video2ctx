@@ -1354,8 +1354,7 @@ test('searches every saved comment by full body and author, and pins later reads
     const janine = await searchSavedEvidence(reopen(), { query: 'Janine' });
     expect(janine.packets[0]!.excerpts[0]!.text).toContain('Author: Janine');
     const tail = await searchSavedEvidence(reopen(), { query: 'objection tilted' });
-    const passage = tail.packets[0]!.excerpts[0]!;
-    expect(passage.text).toContain('final objection concerns the tilted board');
+    const passage = tail.packets[0]!.excerpts.find(excerpt => excerpt.text.includes('final objection concerns the tilted board'))!;
     expect(passage.id.startsWith(`saved:${version}:comment:11:`)).toBe(true);
     expect(passage.text).toContain('Author: Janine');
     // The whole path to the answer model: saved originals reach it unshortened, with the author.
@@ -1566,15 +1565,13 @@ test.each([
 ])('saved comment search follows the real tokenizer: %s', async (_name, early, late, query) =>
   within(`comment-search-tokenizer-${query}`, async (store) => {
     const page = commentPage(1, () => `${early}${'Padding words here. '.repeat(160)}${late}`);
-    // The author is searchable from every chunk; keep it free of the query so only the body decides.
-    page.comments[0]!.author.name = 'Reader';
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
     await sessionProvider(p, store).comments(id);
     const found = await searchSavedEvidence(store, { query });
     expect(found.packets).toHaveLength(1);
-    expect(found.packets[0]!.excerpts[0]!.text).toContain(late.trim());
-    expect(found.packets[0]!.excerpts[0]!.text).toContain('Author: Reader');
+    expect(found.packets[0]!.excerpts.map(excerpt => excerpt.text).join('')).toContain(late.trim());
+    expect(found.packets[0]!.excerpts[0]!.text).toContain('Author: Viewer 1');
   }));
 
 test('an author-only comment match shows the comment start with its author', async () =>
@@ -2080,33 +2077,34 @@ test('an unreadable older source stays a reported gap on every search', async ()
   }));
 
 // Comments: each word is indexed once, in the chunk where it starts; matching chunks come first.
-test('a long comment indexes each word once and returns the chunk containing the match first', async () =>
+test('a long comment is indexed once and a match returns its chunks in order', async () =>
   within('comment-index-once', async (store, reopen, sql) => {
-    // "lighthouse" starts at 1,496 and crosses the 1,500-character chunk boundary; "keeper" starts in chunk 1.
-    const text = `${'x'.repeat(1495)} lighthouse keeper ${'padding words here '.repeat(100)}closing remark`;
+    // "lighthouse" crosses the 1,500-character chunk boundary; "closing remark" sits in the last chunk.
+    const text = `${'x'.repeat(1495)} lighthouse keeper ${'padding words here '.repeat(400)}closing remark`;
     const page = commentPage(1, () => text);
     page.comments[0]!.author.name = 'Morgan';
     const version = await saveComments(store, page);
     const rows = sql.exec<{ position: number; search_text: string }>('SELECT position, search_text FROM session_original_segments WHERE version=? ORDER BY position', version).toArray();
-    expect(rows.length).toBeGreaterThan(2);
-    // No chunk repeats the comment: together they hold its words once, plus the author per chunk.
-    const indexed = rows.reduce((sum, row) => sum + row.search_text.length, 0);
-    expect(indexed).toBeLessThanOrEqual(text.length + rows.length * ' morgan'.length);
-    for (const row of rows) expect(row.search_text.length).toBeLessThan(text.length / 2);
-    const first = async (query: string) => (await searchSavedEvidence(reopen(), { query })).packets[0]?.excerpts[0]?.id;
-    expect(await first('lighthouse')).toBe(`saved:${version}:comment:0:0`);
-    expect(await first('keeper')).toBe(`saved:${version}:comment:0:1`);
-    expect(await first('closing remark')).toBe(`saved:${version}:comment:0:${rows.length - 1}`);
-    // A fragment left by the boundary is never a word of its own.
-    expect(await first('ouse')).toBeUndefined();
-    // Words in different chunks of one comment still match together; every chunk is returned.
-    const both = await searchSavedEvidence(reopen(), { query: 'lighthouse closing' });
-    expect(both.packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: rows.length });
-    // An author-only match starts at the comment's beginning.
-    expect(await first('morgan')).toBe(`saved:${version}:comment:0:0`);
+    expect(rows).toHaveLength(7);
+    // The whole comment and its author are indexed once, on the first chunk only.
+    expect(rows[0]!.search_text).toBe(`${text.toLowerCase()} morgan`);
+    expect(rows.slice(1).map(row => row.search_text)).toEqual(rows.slice(1).map(() => ''));
+    const ids = async (query: string) => (await searchSavedEvidence(reopen(), { query })).packets[0]?.excerpts.map(excerpt => excerpt.id);
+    // The first page starts at the comment's beginning, whichever chunk holds the match.
+    const ordered = rows.map(row => `saved:${version}:comment:0:${row.position}`);
+    for (const query of ['lighthouse', 'keeper', 'closing remark', 'lighthouse closing', 'morgan']) {
+      const found = await ids(query);
+      expect(found!.length).toBeGreaterThan(1);
+      expect(found).toEqual(ordered.slice(0, found!.length));
+    }
+    // A chunk boundary inside a word never creates a word of its own.
+    expect(await ids('ouse')).toBeUndefined();
+    const all = await searchSavedEvidence(reopen(), { query: 'closing' });
+    // The rest, including the matching last chunk, is one paged read away.
+    expect(all.packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: rows.length, nextOffset: all.packets[0]!.excerpts.length });
   }));
 
-test('comment indexes written before words were indexed once rebuild on first use; caption indexes stay', async () =>
+test('comment indexes from the earlier layout rebuild on first use; caption indexes stay', async () =>
   within('comment-index-format', async (store, reopen, sql) => {
     const comments = await saveComments(store, commentPage(2, index => `Earlier format remark ${index + 1}`));
     const captions = await saveCaptions(store, id, 'Earlier format caption.');
@@ -2187,7 +2185,7 @@ test('a word longer than a chunk is never indexed as its own suffix', async () =
     page.comments.forEach(comment => { comment.author.name = 'Reader'; });
     const version = await saveComments(store, page);
     const chunks = sql.exec<{ search_text: string }>('SELECT search_text FROM session_original_segments WHERE version=? AND entry=0 ORDER BY position', version).toArray();
-    expect(chunks.map(chunk => chunk.search_text.trim())).toEqual([`${'x'.repeat(3000)}lighthouse reader`, 'reader', 'reader']);
+    expect(chunks.map(chunk => chunk.search_text)).toEqual([`${'x'.repeat(3000)}lighthouse reader`, '', '']);
     const found = await searchSavedEvidence(reopen(), { query: 'lighthouse' });
     expect(found.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([`saved:${version}:comment:1:0`]);
   }));
