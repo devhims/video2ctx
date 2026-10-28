@@ -420,7 +420,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_original_search_gaps', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_original_segments', 'session_original_assets', 'session_original_fts', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });
@@ -1038,6 +1038,8 @@ test('session assets enforce ownership and deletion removes run copies, citation
     const store=(instance as unknown as {sessionStore:InstanceType<typeof SessionEvidenceStore>}).sessionStore;
     expect(await store.search.searchHistory('A caption')).toEqual([]);
     expect((await store.search.searchEvidence(store,'Private captions')).packets).toEqual([]);
+    const {searchSavedEvidence}=await import('../src/agents/runtime/saved-evidence-reader');
+    expect((await searchSavedEvidence(store,{query:'Private captions'})).packets).toEqual([]);
   });
 });
 
@@ -2356,7 +2358,7 @@ test('resumed saved verification restores admitted originals without rereading o
     const core = new MockLanguageModelV4({ doGenerate: async () => {
       const index = step++;
       return { content: [{ type: 'tool-call', toolCallId: `recovery-${index}`,
-        toolName: ['read_saved_evidence', 'complete_research'][index]!,
+        toolName: ['search_originals', 'complete_research'][index]!,
         input: JSON.stringify([{ assetVersion: version }, {}][index]) }],
         finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
     } });

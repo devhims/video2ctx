@@ -18,7 +18,7 @@ import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
 import { finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
 import { bicycleHistory, gcnCaptions, officialCaptions, gcnAnalysis, officialAnalysis, javascriptComments } from './fixtures/saved-replays';
-import { readSavedEvidence, SAVED_EVIDENCE_READ_LIMIT } from '../src/agents/runtime/saved-evidence-reader';
+import { readSavedEvidence, searchSavedEvidence, SAVED_EVIDENCE_READ_LIMIT } from '../src/agents/runtime/saved-evidence-reader';
 import { annaId, kelogId, watercolorTranscript, watercolorCorrection, watercolorFollowup } from './fixtures/watercolor-session';
 
 test('saved original comments include positions 13 and 17 and long tails, with bounded pagination', async () =>
@@ -67,13 +67,13 @@ test('saved reads enforce ownership, admission, cancellation and history-only to
     const admit = vi.fn(() => []);
     const controller = new AbortController();
     const tools = await store.searchTools(admit, controller.signal);
-    const execute = tools.read_saved_evidence!.execute!;
+    const execute = tools.search_originals!.execute!;
     expect(await execute(input, options)).toMatchObject({ packets: [], withheld: true });
     expect(admit).toHaveBeenCalledWith(expect.any(Array), 'read_saved_evidence');
     controller.abort();
     await expect(execute(input, options)).rejects.toThrow();
     const history = await store.searchTools(admit, new AbortController().signal, { evidence: false });
-    expect(history.read_saved_evidence).toBeUndefined();
+    expect(history.search_originals).toBeUndefined();
     const empty = await readSavedEvidence(store, { ...input, query: 'absent phrase' });
     expect(empty.coverage).toMatchObject({ selectedExcerpts: 0, returnedExcerpts: 0 });
     expect(empty.packets[0]!.excerpts).toEqual([]);
@@ -116,9 +116,9 @@ test('original reads retain nested replies, fence interrupted reads and bound re
     expect(write).not.toHaveBeenCalled();
     interrupted.mockRestore();
     const tools = await store.searchTools(() => undefined, new AbortController().signal);
-    for (let index = 0; index < SAVED_EVIDENCE_READ_LIMIT; index++) await tools.read_saved_evidence!.execute!(input,
+    for (let index = 0; index < SAVED_EVIDENCE_READ_LIMIT; index++) await tools.search_originals!.execute!(input,
       { toolCallId: `read-${index}`, messages: [], context: {} });
-    await expect(tools.read_saved_evidence!.execute!(input,
+    await expect(tools.search_originals!.execute!(input,
       { toolCallId: 'over-limit', messages: [], context: {} })).rejects.toThrow('read limit');
     await store.delete(input.assetVersion);
     await expect(readSavedEvidence(store, input)).rejects.toThrow('unavailable or deleted');
@@ -157,7 +157,7 @@ test.each([false, true])('exact watercolor follow-up retains original passages a
       const read = reads[step++];
       if (!read && interrupted) throw new Error('Research phase timeout.');
       return { content: [{ type: 'tool-call', toolCallId: `read-${step}`,
-        toolName: read ? 'read_saved_evidence' : 'complete_research',
+        toolName: read ? 'search_originals' : 'complete_research',
         input: JSON.stringify(read ? { assetVersion: versions.get(read[0]), ...read[1] } : {}) }],
         finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
     } });
@@ -226,8 +226,8 @@ test('watercolor follow-up reads original medium captions with precise citations
     const restored = reopen();
     const received: EvidencePacket[] = [];
     const tools = await restored.searchTools(packets => { received.push(...packets); }, new AbortController().signal);
-    expect(tools.read_saved_evidence, 'Exact quotation requests need an original-asset reader').toBeDefined();
-    const result = await tools.read_saved_evidence!.execute!(
+    expect(tools.search_originals, 'Exact quotation requests need an original-asset reader').toBeDefined();
+    const result = await tools.search_originals!.execute!(
       { assetVersion: saved.assetVersions![0]!, query: 'watercolor medium' },
       { toolCallId: 'watercolor-read', messages: [], context: {} },
     );
@@ -797,7 +797,7 @@ test('Session API searches older messages and lists all user turns across recons
     expect(await reopen().search.searchHistory('team plan')).toEqual([]);
   }));
 
-test('indexes full transcripts before analysis and searches terms across assets with valid citations', async () =>
+test('searches saved transcripts across assets before analysis, with valid citations', async () =>
   within('fulltext-transcripts', async (store, reopen) => {
     const p = provider();
     vi.mocked(p.transcript).mockResolvedValueOnce({
@@ -812,7 +812,7 @@ test('indexes full transcripts before analysis and searches terms across assets 
     await sessionProvider(p, store).transcript('zyxwvutsrqp');
     // Neither transcript needs an analyst or a pre-existing evidence packet.
     expect(store.evidence()).toEqual([]);
-    const result = await reopen().search.searchEvidence(reopen(), 'enterprise pricing');
+    const result = await searchSavedEvidence(reopen(), { query: 'enterprise pricing' });
     expect(result.packets).toHaveLength(2);
     for (const packet of result.packets) {
       expect(packet.excerpts).toHaveLength(1);
@@ -820,10 +820,11 @@ test('indexes full transcripts before analysis and searches terms across assets 
     }
     expect(p.transcript).toHaveBeenCalledTimes(2);
     await store.delete(first.assetVersions![0]);
-    expect((await reopen().search.searchEvidence(reopen(), 'enterprise pricing')).packets).toHaveLength(1);
-    expect((await store.search.searchEvidence(store, '" OR * ()')).packets).toEqual([]);
+    expect((await searchSavedEvidence(reopen(), { query: 'enterprise pricing' })).packets).toHaveLength(1);
+    // FTS operators are plain words here: "OR" is searched as a word, never as syntax.
+    await expect(searchSavedEvidence(store, { query: '" OR * ()' })).resolves.toMatchObject({ packets: [] });
     await store.delete();
-    expect((await reopen().search.searchEvidence(reopen(), 'enterprise')).packets).toEqual([]);
+    expect((await searchSavedEvidence(reopen(), { query: 'enterprise' })).packets).toEqual([]);
   }));
 
 test('searchable context uses Session tools, follows memory corrections and removes deleted findings', async () =>
@@ -848,7 +849,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
     );
     const received: EvidencePacket[] = [];
     const tools = await store.searchTools((packets) => { received.push(...packets); }, new AbortController().signal);
-    expect(Object.keys(tools).sort()).toEqual(['read_saved_evidence', 'read_session_history', 'search_context']);
+    expect(Object.keys(tools).sort()).toEqual(['read_session_history', 'search_context', 'search_originals']);
     const options = { toolCallId: 'search', messages: [], context: {} };
     const run = async (label: string, query: string) =>
       JSON.parse(String(await tools.search_context!.execute!({ label, query }, options)));
@@ -860,12 +861,14 @@ test('searchable context uses Session tools, follows memory corrections and remo
     );
     expect(await run('memory', 'enterprise')).toEqual([]);
     expect((await run('memory', 'team pricing'))[0].text).toBe('Focus on team pricing.');
-    const found = await run('evidence', 'clear sentence');
-    expect(found.packets.length).toBeGreaterThan(0);
-    expect(received.length).toBe(found.packets.length);
+    // Saved captions belong to search_originals; search_context does not return raw copies of them.
+    expect((await run('analysis', 'clear sentence')).packets).toEqual([]);
+    const originals = await tools.search_originals!.execute!({ query: 'clear sentence' }, options) as { packets: EvidencePacket[] };
+    expect(originals.packets).toHaveLength(1);
+    expect(received).toHaveLength(1);
     await store.delete(packet.assetVersions![0]);
     expect(await run('memory', 'opening')).toEqual([]);
-    expect((await run('evidence', 'clear')).packets).toEqual([]);
+    expect((await tools.search_originals!.execute!({ query: 'clear' }, options) as { packets: EvidencePacket[] }).packets).toEqual([]);
     store.deleteMemory('context:focus');
     expect(await run('memory', 'team pricing')).toEqual([]);
   }));
@@ -893,7 +896,7 @@ test('searches visual observations with immutable citations and labels supersede
       cacheStatus: 'miss',
     });
     await sessionProvider(p, store, true).transcript(id);
-    const historical = await store.search.searchEvidence(store, 'clear opening');
+    const historical = await searchSavedEvidence(store, { query: 'clear opening' });
     expect(historical.packets[0]?.warnings).toContainEqual(
       expect.objectContaining({ code: 'SUPERSEDED_SESSION_EVIDENCE' }),
     );
@@ -921,7 +924,7 @@ test('search indexes remain isolated between session Durable Objects', async () 
   await within('search-owner-two', async (store) => {
     expect(await store.search.searchHistory('Private')).toEqual([]);
     expect(store.search.searchMemory('private')).toEqual([]);
-    expect((await store.search.searchEvidence(store, 'clear')).packets).toEqual([]);
+    expect((await searchSavedEvidence(store, { query: 'clear' })).packets).toEqual([]);
   });
 });
 
@@ -933,7 +936,7 @@ test.each([true, false])(
       const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
       const p = provider();
       const raw = await sessionProvider(p, store).transcript(id);
-      const excerptId = `evidence:${raw.assetVersions![0]}:0`;
+      const excerptId = `saved:${raw.assetVersions![0]}:caption:0`;
       const usage = {
         inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
         outputTokens: { total: 10, text: 10, reasoning: 0 },
@@ -947,8 +950,8 @@ test.each([true, false])(
               type: 'tool-call',
               toolCallId: `core-${coreCalls}`,
               // With a finalizer configured, research ends with complete_research.
-              toolName: coreCalls++ === 0 ? 'search_context' : 'complete_research',
-              input: JSON.stringify(coreCalls === 1 ? { label: 'evidence', query: 'clear opening' } : {}),
+              toolName: coreCalls++ === 0 ? 'search_originals' : 'complete_research',
+              input: JSON.stringify(coreCalls === 1 ? { query: 'clear opening' } : {}),
             },
           ],
           finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
@@ -967,7 +970,7 @@ test.each([true, false])(
                     type: 'tool-call',
                     toolCallId: 'lookup',
                     toolName: 'search_context',
-                    input: JSON.stringify({ label: 'evidence', query: 'clear opening' }),
+                    input: JSON.stringify({ label: 'analysis', query: 'clear opening' }),
                   },
                 ]
               : [
@@ -1005,7 +1008,7 @@ test.each([true, false])(
         ),
       );
       // Recovery restores delivered evidence before entering finalization.
-      const recoveredEvidence = resume ? (await store.search.searchEvidence(store, 'clear opening')).packets : [];
+      const recoveredEvidence = resume ? (await searchSavedEvidence(store, { query: 'clear opening' })).packets : [];
       const reads = vi.spyOn(store, 'readEvidence');
       const searches = vi.spyOn(store, 'searchTools');
       await runResearchAgentWithModel({
@@ -1030,29 +1033,34 @@ test.each([true, false])(
     }),
 );
 
-test('lazy transcript index backfill survives reconstruction and cannot restore an asset deleted during indexing', async () =>
-  within('index-backfill-race', async (store, reopen, sql) => {
+test('a search indexes older originals once, and cannot restore an asset deleted during indexing', async () =>
+  within('original-index-backfill-race', async (store, reopen, sql) => {
     const raw = await sessionProvider(provider(), store).transcript(id);
     const version = raw.assetVersions![0]!;
-    sql.exec('DELETE FROM session_context_fts');
-    sql.exec('DELETE FROM session_search_assets');
-    expect((await reopen().search.searchEvidence(reopen(), 'clear opening')).packets).toHaveLength(1);
-    sql.exec('DELETE FROM session_context_fts');
-    sql.exec('DELETE FROM session_search_assets');
+    forgetSavedOriginalIndex(sql, version);
+    expect((await searchSavedEvidence(reopen(), { query: 'clear opening' })).packets).toHaveLength(1);
+    forgetSavedOriginalIndex(sql, version);
     let release!: (value: unknown) => void;
-    vi.spyOn(store, 'read').mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    const search = store.search.searchEvidence(store, 'clear');
-    const rejection = expect(search).rejects.toThrow('changed during indexing');
+    vi.spyOn(store, 'read').mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const search = searchSavedEvidence(store, { query: 'clear' });
     await store.delete(version);
     release(transcript());
-    await rejection;
-    expect(sql.exec('SELECT * FROM session_context_fts').toArray()).toEqual([]);
-    expect(sql.exec('SELECT * FROM session_search_assets').toArray()).toEqual([]);
+    await expect(search).resolves.toMatchObject({ packets: [], unavailable: [] });
+    expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_segments').one().count).toBe(0);
+    expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_assets').one().count).toBe(0);
+  }));
+
+test('sessions created before the move drop their old caption and comment search rows once', async () =>
+  within('original-search-migration', async (store, reopen, sql) => {
+    await sessionProvider(provider(), store).transcript(id);
+    // Recreate the old layout: asset rows in session_context_fts and its marker table.
+    sql.exec('CREATE TABLE session_search_assets (version TEXT PRIMARY KEY)');
+    sql.exec("INSERT INTO session_context_fts (id,owner,scope,content,metadata) VALUES ('evidence:old:0','asset:old','evidence','A clear opening sentence.','{}')");
+    reopen();
+    expect(sql.exec("SELECT COUNT(*) AS count FROM session_context_fts WHERE owner LIKE 'asset:%'").one().count).toBe(0);
+    expect(sql.exec("SELECT name FROM sqlite_master WHERE name IN ('session_search_assets','session_search_asset_delete')").toArray()).toEqual([]);
+    // Asset deletion still works without the old trigger.
+    await reopen().delete();
   }));
 
 test('a new frame question reanalyzes the saved image without extracting or charging again',async()=>
@@ -1235,7 +1243,8 @@ test('a long transcript saved before the limit existed is never loaded again', a
     await expect(limited.readEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     await expect(limited.readTranscriptEvidence(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     await expect(limited.readAsset(version)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
-    await limited.ensureSearchIndexed();
+    await limited.ensureSavedOriginalsIndexed();
+    expect((await searchSavedEvidence(limited, { query: 'gold' })).search).toMatchObject({ overLimitSources: 1 });
     // Reuse through the provider is rejected too, without another fetch.
     await expect(sessionProvider(p, limited).transcript(id)).rejects.toMatchObject({ code: 'VIDEO_TOO_LONG' });
     expect(p.transcript).toHaveBeenCalledTimes(1);
@@ -1264,16 +1273,16 @@ test('evidence search skips a long transcript indexed before the limit and keeps
     await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
     await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
     // Indexed while no limit existed, as in sessions saved before this change.
-    await unlimited.ensureSearchIndexed();
+    await unlimited.ensureSavedOriginalsIndexed();
 
     const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
-    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    const found = await searchSavedEvidence(limited, { query: 'gold medal' });
     expect(found.packets.length).toBeGreaterThan(0);
     expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).toEqual(expect.arrayContaining([shortId]));
     expect(found.packets.flatMap(packet => packet.sources.map(source => source.videoId))).not.toContain(longId);
   }));
 
-test('long transcript matches cannot crowd short-video matches out of the top 20', async () =>
+test('long transcript matches cannot crowd short-video matches out of a search', async () =>
   runInDurableObject(env.AGENT_RUNTIME.getByName('too-long-crowding'), async (_instance, state) => {
     const prefix = 'test-session/too-long-crowding/';
     const unlimited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix);
@@ -1286,16 +1295,15 @@ test('long transcript matches cannot crowd short-video matches out of the top 20
     const fetch = vi.fn(async (videoId: string) => ({ value: videoId === longId ? long : short, cacheStatus: 'miss' as const }));
     await sessionProvider(provider(fetch as never), unlimited).transcript(longId);
     await sessionProvider(provider(fetch as never), unlimited).transcript(shortId);
-    await unlimited.ensureSearchIndexed();
     const videos = (packets: EvidencePacket[]) => packets.flatMap(packet => packet.sources.map(source => source.videoId));
 
-    // Precondition: without the limit, the long transcript fills every one of the 20 slots.
-    const crowded = await unlimited.search.searchEvidence(unlimited, 'gold medal');
-    expect(crowded.packets).toHaveLength(20);
-    expect(videos(crowded.packets)).not.toContain(shortId);
+    // Results are grouped by source, so 100 long-video matches still leave room for the short video.
+    const unlimitedFound = await searchSavedEvidence(unlimited, { query: 'gold medal' });
+    expect(videos(unlimitedFound.packets)).toEqual(expect.arrayContaining([longId, shortId]));
+    expect(unlimitedFound.packets.find(packet => packet.sources[0]!.videoId === longId)!.excerpts.length).toBeLessThanOrEqual(5);
 
     const limited = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, prefix, undefined, undefined, undefined, 7_200);
-    const found = await limited.search.searchEvidence(limited, 'gold medal');
+    const found = await searchSavedEvidence(limited, { query: 'gold medal' });
     expect(videos(found.packets)).toContain(shortId);
     expect(videos(found.packets)).not.toContain(longId);
   }));
@@ -1338,21 +1346,20 @@ test('searches every saved comment by full body and author, and pins later reads
     const saved = await sessionProvider(p, store).comments(id);
     const version = saved.assetVersions![0]!;
     // Comment 14 sits past one read's limit; search still reaches it without a provider call.
-    const gale = await reopen().search.searchEvidence(reopen(), 'Gale');
+    const gale = await searchSavedEvidence(reopen(), { query: 'Gale' });
     expect(gale.packets).toHaveLength(1);
     expect(gale.packets[0]).toMatchObject({ kind: 'youtube_comments', assetVersions: [version],
-      excerpts: [{ id: `evidence:${version}:13`, text: expect.stringContaining('Author: Gale') }] });
+      excerpts: [{ id: `saved:${version}:comment:13:0`, text: expect.stringContaining('Author: Gale') }] });
     // The author and the tail of a comment longer than one excerpt are both searchable.
-    const janine = await reopen().search.searchEvidence(reopen(), 'Janine');
+    const janine = await searchSavedEvidence(reopen(), { query: 'Janine' });
     expect(janine.packets[0]!.excerpts[0]!.text).toContain('Author: Janine');
-    const tail = await reopen().search.searchEvidence(reopen(), 'objection tilted');
-    expect(tail.packets[0]!.excerpts[0]).toMatchObject({ id: expect.stringMatching(new RegExp(`^evidence:${version}:11:\\d+$`)),
-      text: expect.stringContaining('final objection concerns the tilted board') });
-    expect(tail.packets[0]!.excerpts[0]!.text).toContain('Author: Janine');
-    // The whole path to the answer model: the match and author survive its 800-character text budget.
+    const tail = await searchSavedEvidence(reopen(), { query: 'objection tilted' });
+    const passage = tail.packets[0]!.excerpts.find(excerpt => excerpt.text.includes('final objection concerns the tilted board'))!;
+    expect(passage.id.startsWith(`saved:${version}:comment:11:`)).toBe(true);
+    expect(passage.text).toContain('Author: Janine');
+    // The whole path to the answer model: saved originals reach it unshortened, with the author.
     const { finalizationEvidenceForModel } = await import('../src/agents/runtime/model-evidence');
-    const handed = finalizationEvidenceForModel(tail.packets, 100_000).evidence[0]!.excerpts![0]!.text;
-    expect(handed.length).toBeLessThanOrEqual(800);
+    const handed = finalizationEvidenceForModel(tail.packets, 100_000).evidence[0]!.excerpts!.map(excerpt => excerpt.text).join('\n');
     expect(handed).toContain('objection concerns the tilted board');
     expect(handed).toContain('Author: Janine');
     const first = await reopen().readEvidence(version);
@@ -1374,7 +1381,7 @@ test('searches every saved comment by full body and author, and pins later reads
     expect(p.comments).toHaveBeenCalledTimes(2);
     await reopen().delete(version);
     await expect(sessionProvider(p, reopen()).comments(id, { pageVersion: version })).rejects.toThrow(/no longer available/);
-    expect((await reopen().search.searchEvidence(reopen(), 'Gale')).packets.every(packet => !packet.assetVersions?.includes(version))).toBe(true);
+    expect((await searchSavedEvidence(reopen(), { query: 'Gale' })).packets.every(packet => !packet.assetVersions?.includes(version))).toBe(true);
   }));
 
 test('versioned shared observations keep resolvable references, and search keeps legacy ownership warnings', async () =>
@@ -1429,18 +1436,20 @@ function firstCommentPacket(version: string, page: ReturnType<typeof commentPage
     artifacts: [{ type: 'youtube_comments', data: {} }], warnings: [], usage: [] };
 }
 
-test('comment search returns distinct comments, not packet copies of an indexed page', async () =>
+test('search_context skips packet copies of an indexed comment page, which the reader returns once', async () =>
   within('comment-search-dedup', async (store, reopen) => {
     const page = commentPage(30, index => `Brush review ${index + 1}. ${'Detail. '.repeat(500)}`);
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
     const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
     store.savePacket(firstCommentPacket(version, page));
-    const found = await reopen().search.searchEvidence(reopen(), 'brush review');
-    expect(found.packets).toHaveLength(20);
-    const positions = found.packets.map(packet => packet.excerpts[0]!.id.match(new RegExp(`^evidence:${version}:(\\d+)`))?.[1]);
-    expect(positions.every(Boolean)).toBe(true);
-    expect(new Set(positions).size).toBe(20);
+    expect((await reopen().search.searchEvidence(reopen(), 'brush review')).packets).toEqual([]);
+    const found = await searchSavedEvidence(reopen(), { query: 'brush review' });
+    expect(found.packets).toHaveLength(1);
+    const ids = found.packets[0]!.excerpts.map(excerpt => excerpt.id);
+    expect(ids.every(excerptId => excerptId.startsWith(`saved:${version}:comment:`))).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(found.packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: 90, nextOffset: ids.length });
     // Packet citations still resolve for answers that cited them.
     expect(reopen().evidenceForCitations(['comment:c1:0'])).toHaveLength(1);
   }));
@@ -1452,31 +1461,30 @@ test('a legacy comment packet stays searchable when its saved page cannot be ind
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
     const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
     store.savePacket(firstCommentPacket(version, page));
-    // The page blob is unreadable, so the page is never indexed and only the packet rows remain.
+    // A page saved before the index whose blob is now unreadable: only the packet rows remain.
+    forgetSavedOriginalIndex(sql, version);
     const blob = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', version).one().blob_key;
     await env.RESEARCH.delete(blob);
     const found = await reopen().search.searchEvidence(reopen(), 'legacy opinion');
     expect(found.packets.map(packet => packet.excerpts[0]!.id).sort()).toEqual(
       Array.from({ length: 8 }, (_, index) => `comment:c${index + 1}:${index}`).sort());
+    await expect(searchSavedEvidence(reopen(), { query: 'legacy opinion' })).resolves.toMatchObject({ packets: [], unavailable: [version] });
   }));
 
-test('one search reads and parses each saved comment page once', async () =>
-  within('comment-search-cache', async (store) => {
+test('an older comment page is read from storage once, then searched in SQLite', async () =>
+  within('comment-search-cache', async (store, _reopen, sql) => {
     const page = commentPage(20, index => `Palette note ${index + 1}`);
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
-    await sessionProvider(p, store).comments(id);
-    await store.ensureSearchIndexed();
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    forgetSavedOriginalIndex(sql, version);
     const read = vi.spyOn(store, 'read');
-    const brief = vi.spyOn(store, 'brief');
-    const found = await store.search.searchEvidence(store, 'palette note');
-    expect(found.packets).toHaveLength(20);
+    const found = await searchSavedEvidence(store, { query: 'palette note' });
+    expect(found.packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: 20 });
+    expect((await searchSavedEvidence(store, { query: 'palette' })).packets).toHaveLength(1);
     expect(read).toHaveBeenCalledTimes(1);
-    expect(brief).toHaveBeenCalledTimes(1);
-    // A new search after deletion never serves the page from an earlier cache.
-    const version = found.packets[0]!.assetVersions![0]!;
     await store.delete(version);
-    expect((await store.search.searchEvidence(store, 'palette note')).packets).toEqual([]);
+    expect((await searchSavedEvidence(store, { query: 'palette note' })).packets).toEqual([]);
   }));
 
 /** Runs `during` after a store read has started but before it resolves, as a concurrent request would. */
@@ -1491,46 +1499,45 @@ function interleaveReads(store: SessionEvidenceStore, during: () => Promise<void
 }
 
 test.each([1, 4])('a deletion elsewhere during a page read keeps all %i matching comments', async matches =>
-  within(`comment-search-inflight-${matches}`, async (store) => {
+  within(`comment-search-inflight-${matches}`, async (store, _reopen, sql) => {
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const,
       value: commentPage(6, index => index < matches ? `Easel tip ${index + 1}` : `Other remark ${index + 1}`) }));
-    await sessionProvider(p, store).comments(id);
-    await store.ensureSearchIndexed();
+    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
+    forgetSavedOriginalIndex(sql, version);
     // Deleting a memory advances the store generation, so the in-flight page read is fenced.
     interleaveReads(store, async () => store.deleteMemory('unrelated'));
-    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toHaveLength(matches);
+    expect((await searchSavedEvidence(store, { query: 'easel tip' })).packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: matches });
   }));
 
 test('a comment search that keeps being interrupted asks for a retry instead of returning nothing', async () =>
-  within('comment-search-inflight-exhausted', async (store) => {
+  within('comment-search-inflight-exhausted', async (store, _reopen, sql) => {
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Easel tip ${index + 1}`) }));
-    await sessionProvider(p, store).comments(id);
-    await store.ensureSearchIndexed();
+    forgetSavedOriginalIndex(sql, (await sessionProvider(p, store).comments(id)).assetVersions![0]!);
     interleaveReads(store, async () => store.deleteMemory('unrelated'), 3);
-    await expect(store.search.searchEvidence(store, 'easel tip')).rejects.toThrow('Retry the search');
+    await expect(searchSavedEvidence(store, { query: 'easel tip' })).rejects.toThrow('Retry the request');
   }));
 
 test('deleting the matched page during its read still returns nothing for it', async () =>
-  within('comment-search-inflight-own-delete', async (store) => {
+  within('comment-search-inflight-own-delete', async (store, _reopen, sql) => {
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Easel tip ${index + 1}`) }));
     const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
-    await store.ensureSearchIndexed();
+    forgetSavedOriginalIndex(sql, version);
     interleaveReads(store, async () => { await store.delete(version); });
-    expect((await store.search.searchEvidence(store, 'easel tip')).packets).toEqual([]);
+    expect((await searchSavedEvidence(store, { query: 'easel tip' })).packets).toEqual([]);
   }));
 
-test('repeated comment searches showing the same passages reuse their saved rows', async () =>
+test('repeating a saved-original search reuses its saved rows', async () =>
   within('comment-search-saved-rows', async (store, _reopen, sql) => {
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(6, index => `Canvas grain opinion ${index + 1}`) }));
     await sessionProvider(p, store).comments(id);
     const rows = () => sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM session_packets WHERE packet_id LIKE 'session:%'").one().count;
-    expect((await store.search.searchEvidence(store, 'canvas')).packets).toHaveLength(6);
+    expect((await searchSavedEvidence(store, { query: 'canvas grain' })).packets).toHaveLength(1);
     const after = rows();
-    expect((await store.search.searchEvidence(store, 'grain opinion')).packets).toHaveLength(6);
+    expect((await searchSavedEvidence(store, { query: 'canvas grain' })).packets).toHaveLength(1);
     expect(rows()).toBe(after);
   }));
 
@@ -1547,7 +1554,7 @@ test('an unfiltered saved comment read names its page version for continuation',
     expect(filtered.packets[0]!.artifacts[0]!.data.collection).not.toHaveProperty('pageVersion');
   }));
 
-// Durable Object storage is real SQLite, so these cases check the actual unicode61 tokenizer.
+// Durable Object storage is real SQLite, so these cases check the actual porter/unicode61 tokenizer.
 test.each([
   ['a circled digit is not the digit', '① ', ' 1 marks the late match.', '1'],
   ['a ligature is not its letters', 'ﬃ ', ' ffi marks the late match.', 'ffi'],
@@ -1555,15 +1562,15 @@ test.each([
   ['a letter with two diacritics is not folded', 'ộ ', ' o marks the late match.', 'o'],
   ['a term inside a longer word is not a match', 'start ', ' art marks the late match.', 'art'],
   ['a single diacritic is folded', 'cafeteria ', ' café marks the late match.', 'cafe'],
-])('search passages follow the real tokenizer: %s', async (_name, early, late, query) =>
+])('saved comment search follows the real tokenizer: %s', async (_name, early, late, query) =>
   within(`comment-search-tokenizer-${query}`, async (store) => {
     const page = commentPage(1, () => `${early}${'Padding words here. '.repeat(160)}${late}`);
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
     await sessionProvider(p, store).comments(id);
-    const found = await store.search.searchEvidence(store, query);
+    const found = await searchSavedEvidence(store, { query });
     expect(found.packets).toHaveLength(1);
-    expect(found.packets[0]!.excerpts[0]!.text).toContain(late.trim());
+    expect(found.packets[0]!.excerpts.map(excerpt => excerpt.text).join('')).toContain(late.trim());
     expect(found.packets[0]!.excerpts[0]!.text).toContain('Author: Viewer 1');
   }));
 
@@ -1574,42 +1581,9 @@ test('an author-only comment match shows the comment start with its author', asy
     const p = provider();
     p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
     await sessionProvider(p, store).comments(id);
-    const excerpt = (await store.search.searchEvidence(store, 'Janine')).packets[0]!.excerpts[0]!;
+    const excerpt = (await searchSavedEvidence(store, { query: 'Janine' })).packets[0]!.excerpts[0]!;
     expect(excerpt.text.startsWith('Opening line.')).toBe(true);
     expect(excerpt.text).toContain('Author: Janine');
-  }));
-
-test('control characters and marker-like text in a comment cannot move the reported match', async () =>
-  within('comment-search-marker-collision', async (store) => {
-    const early = 'Start \u0001early\u0002 [[match-start:00000000-0000-0000-0000-000000000000]] note. ';
-    const page = commentPage(1, () => `${early}${'Padding words here. '.repeat(160)} the real art is patience.`);
-    const p = provider();
-    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
-    const version = (await sessionProvider(p, store).comments(id)).assetVersions![0]!;
-    const excerpt = (await store.search.searchEvidence(store, 'art')).packets[0]!.excerpts[0]!;
-    expect(excerpt.text).toContain('the real art is patience.');
-    // The passage is an unmodified slice of the saved comment, and its ID records where it starts.
-    const body = excerpt.text.split('\nAuthor: ')[0]!.replace(/^…/, '').replace(/…$/, '');
-    expect(page.comments[0]!.text.replace(/[ \t]+/g, ' ')).toContain(body);
-    const start = Number(excerpt.id.split(':').at(-1));
-    expect(excerpt.id.startsWith(`evidence:${version}:0:`)).toBe(true);
-    expect(page.comments[0]!.text.replace(/[ \t]+/g, ' ').slice(start).startsWith(body)).toBe(true);
-    // The early control characters remain in the saved page.
-    expect((await store.readEvidence(version)).packets[0]!.excerpts[0]!.text).toContain('\u0001early\u0002');
-  }));
-
-// Author "Reviewer" leaves a 1,983-character body budget. Real SQLite reports the span of
-// a token placed on every offset around that cutoff; the passage must contain all of it.
-test.each(Array.from({ length: 11 }, (_, index) => 1975 + index))('a matched token at offset %i near the excerpt cutoff stays whole', async at =>
-  within(`comment-search-cutoff-${at}`, async (store) => {
-    const page = commentPage(1, () => `${'w'.repeat(at - 1)} needle ${'tail '.repeat(100)}`);
-    page.comments[0]!.author.name = 'Reviewer';
-    const p = provider();
-    p.comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: page }));
-    await sessionProvider(p, store).comments(id);
-    const excerpt = (await store.search.searchEvidence(store, 'needle')).packets[0]!.excerpts[0]!;
-    expect(excerpt.text).toMatch(/\bneedle\b/);
-    expect(excerpt.text).toContain('Author: Reviewer');
   }));
 
 // Real SQLite availability/generation checks, with R2 used only to load analyst inputs.
@@ -1688,7 +1662,7 @@ test('saved read attempts survive reopening, failures and concurrent tool instan
     const input = { assetVersion: raw.assetVersions![0]! };
     const options = { toolCallId: 'repeated-call', messages: [], context: {} };
     const make = async (s: SessionEvidenceStore, runId = 'same-run') =>
-      (await s.searchTools(() => undefined, new AbortController().signal, { runId })).read_saved_evidence!.execute!;
+      (await s.searchTools(() => undefined, new AbortController().signal, { runId })).search_originals!.execute!;
     const first = await make(store);
     await expect(first({ assetVersion: 'missing' }, options)).rejects.toThrow('unavailable');
     for (let index = 0; index < 14; index++) await first(input, options);
@@ -1715,7 +1689,7 @@ test.each(['empty', 'withheld', 'no-match'] as const)('saved %s read has honest 
     const decision = { route: 'inspect_video' as const, videoId: id, savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
     const tools = await store.searchTools(packets => mode === 'withheld' ? [] : packets,
       new AbortController().signal, { runId: 'outcome-run' });
-    const result = await tools.read_saved_evidence!.execute!({ assetVersion, ...(mode === 'no-match' ? { query: 'absentliteralword' } : {}) },
+    const result = await tools.search_originals!.execute!({ assetVersion, ...(mode === 'no-match' ? { query: 'absentliteralword' } : {}) },
       { toolCallId: 'read', messages: [], context: {} }) as { packets: EvidencePacket[] };
     const restored = reopen();
     const state = restored.savedEvidenceReadState('outcome-run');
@@ -1748,7 +1722,7 @@ test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete 
     const runId = crypto.randomUUID();
     const tools = await store.searchTools(packets => reason === 'withheld' ? [] : packets,
       new AbortController().signal, { runId });
-    await tools.read_saved_evidence!.execute!({ assetVersion: raw.assetVersions![0]! },
+    await tools.search_originals!.execute!({ assetVersion: raw.assetVersions![0]! },
       { toolCallId: 'original', messages: [], context: {} });
     const restored = reopen();
     const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -1796,7 +1770,7 @@ test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavai
       ? new SessionEvidenceStore(sql, env.RESEARCH, `test-session/original-unavailable-${mode}/`, undefined, undefined, undefined, 1)
       : store;
     const tools = await reading.searchTools(packets => packets, new AbortController().signal, { runId: 'unavailable-run' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
+    await expect(tools.search_originals!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
       .resolves.toMatchObject({ packets: [], unavailable: true, remainingReads: 15 });
     const restored = reopen();
     const state = restored.savedEvidenceReadState('unavailable-run');
@@ -1822,14 +1796,14 @@ test.each(['transient', 'invalid-query', 'invalid-range', 'cancelled', 'deleted'
       throw new SyntaxError('Late decode failure');
     });
     const tools = await store.searchTools(packets => packets, controller.signal, { runId: 'nonterminal' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion,
+    await expect(tools.search_originals!.execute!({ assetVersion,
       ...(mode === 'invalid-query' ? { query: '!!!' } : {}),
       ...(mode === 'invalid-range' ? { startMs: 20, endMs: 10 } : {}),
     }, { toolCallId: 'read', messages: [], context: {} })).rejects.toThrow();
     expect(reopen().savedEvidenceReadState('nonterminal')).toEqual({ attempts: 1, outcomes: [] });
     if (mode === 'transient') {
       const recovered = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'nonterminal' });
-      await expect(recovered.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
+      await expect(recovered.search_originals!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
         .resolves.toMatchObject({ coverage: { returnedExcerpts: 1 }, remainingReads: 14 });
     }
   }));
@@ -1844,7 +1818,7 @@ test('invalid comment time filters never mark a corrupt original unavailable', a
     const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
     await env.RESEARCH.put(key, '{broken');
     const tools = await store.searchTools(packets => packets, new AbortController().signal, { runId: 'invalid-filter' });
-    await expect(tools.read_saved_evidence!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
+    await expect(tools.search_originals!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
       .rejects.toThrow('Timestamp filters');
     expect(reopen().savedEvidenceReadState('invalid-filter')).toEqual({ attempts: 1, outcomes: [] });
   }));
@@ -1898,9 +1872,9 @@ test('prior transcript analyses cannot exhaust a saved-original verification run
       outputTokens: { total: 10, text: 10, reasoning: 0 } };
     const core = new MockLanguageModelV4({ doGenerate: async call => {
       const current = step++;
-      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
+      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['search_originals']);
       else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
-      const toolName = current < 2 ? 'read_saved_evidence' : 'complete_research';
+      const toolName = current < 2 ? 'search_originals' : 'complete_research';
       return { content: [{ type: 'tool-call' as const, toolCallId: `step-${current}`, toolName,
         input: JSON.stringify(current < 2 ? { assetVersion: versions[current], limit: 1 } : {}) }],
         finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' }, usage, warnings: [] };
@@ -2026,4 +2000,192 @@ test('assets saved before the index are indexed once on first read, and deletion
     expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_segments').one().count).toBe(0);
     expect(sql.exec('SELECT COUNT(*) AS count FROM session_original_assets').one().count).toBe(0);
     expect(sql.exec("SELECT COUNT(*) AS count FROM session_original_fts WHERE session_original_fts MATCH 'mix'").one().count).toBe(0);
+  }));
+
+// Tool roles: search_originals owns original captions and comments, including search across them.
+async function saveCaptions(store: SessionEvidenceStore, videoId: string, text: string, refresh = false) {
+  return (await store.retrieve(`captions:${videoId}`, 'transcript', videoId, refresh,
+    async () => ({ value: { ...transcript(text), videoId }, cacheStatus: 'miss' as const }), () => ({}))).assetVersions![0]!;
+}
+
+test('a search across saved originals is bounded, current-first, and counts as one read', async () =>
+  within('original-search-bounds', async (store, reopen) => {
+    const videos = Array.from({ length: 8 }, (_, index) => `goldvideo0${index}`);
+    for (const videoId of videos) await saveCaptions(store, videoId, `Gold medal ceremony number ${videoId}.`);
+    const options = { toolCallId: 'search', messages: [], context: {} };
+    const tools = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'bounded-search' });
+    const result = await tools.search_originals!.execute!({ query: 'gold medals' }, options) as
+      { packets: EvidencePacket[]; search: Record<string, number>; remainingReads: number; moreSources?: string };
+    expect(result.packets).toHaveLength(6);
+    expect(result.search).toMatchObject({ matchedSources: 8, returnedSources: 6, omittedSources: 2 });
+    expect(result.moreSources).toBeDefined();
+    expect(result.remainingReads).toBe(SAVED_EVIDENCE_READ_LIMIT - 1);
+    // Each packet names its source, so the agent can page into it by version.
+    for (const packet of result.packets) expect(packet.artifacts[0]!.data).toMatchObject({ assetVersion: packet.assetVersions![0], offset: 0 });
+    // A refreshed transcript supersedes the old one; the current version ranks first.
+    const refreshed = await saveCaptions(reopen(), videos[7]!, 'Gold medal ceremony, revised.', true);
+    expect((await searchSavedEvidence(reopen(), { query: 'gold medal revised' })).packets[0]!.assetVersions).toEqual([refreshed]);
+    // Nine sources match; the superseded one ranks below every current source, so it is cut first.
+    const ranked = await searchSavedEvidence(reopen(), { query: 'gold medal' });
+    expect(ranked.search).toMatchObject({ matchedSources: 9, returnedSources: 6 });
+    expect(ranked.packets.flatMap(packet => packet.warnings.map(warning => warning.code))).not.toContain('SUPERSEDED_SESSION_EVIDENCE');
+  }));
+
+test('a search across saved originals respects its character budget and input rules', async () =>
+  within('original-search-budget', async (store, reopen) => {
+    for (const videoId of ['budgetvid01', 'budgetvid02', 'budgetvid03'])
+      await saveCaptions(store, videoId, `Budget keyword ${'filler text '.repeat(250)}`);
+    const found = await searchSavedEvidence(reopen(), { query: 'budget keyword' });
+    const characters = found.packets.flatMap(packet => packet.excerpts).reduce((sum, excerpt) => sum + JSON.stringify(excerpt).length, 0);
+    expect(characters).toBeLessThanOrEqual(8_000);
+    expect(found.packets.length).toBeLessThan(3);
+    await expect(searchSavedEvidence(reopen(), {})).rejects.toThrow('assetVersion');
+    await expect(searchSavedEvidence(reopen(), { query: 'budget', offset: 5 })).rejects.toThrow('assetVersion');
+    await expect(searchSavedEvidence(reopen(), { query: 'budget', startMs: 0 })).rejects.toThrow('assetVersion');
+  }));
+
+test('a search across saved originals records withheld sources and keeps transcript analysis in search_context', async () =>
+  within('original-search-roles', async (store, reopen) => {
+    const version = await saveCaptions(store, id, 'The saved caption mentions a lighthouse.');
+    // Transcript analysis is derived context: it stays searchable in search_context.
+    store.savePacket(await versionEvidencePacket({ packetId: 'packet:run:analysis', kind: 'youtube_transcript', assetVersions: [version],
+      sources: [{ id: 's', provider: 'youtube', kind: 'transcript', videoId: id }],
+      excerpts: [{ id: 'analysis:0', sourceId: 's', text: 'The analyst notes a lighthouse metaphor.', startMs: 0 }],
+      artifacts: [{ type: 'youtube_transcript_analysis', data: {} }], warnings: [], usage: [] }));
+    const context = await reopen().search.searchEvidence(reopen(), 'lighthouse');
+    expect(context.packets.map(packet => packet.excerpts[0]!.text)).toEqual(['The analyst notes a lighthouse metaphor.']);
+    // Originals withheld by the run's credit reserve become an explicit gap for that source.
+    const tools = await reopen().searchTools(() => [], new AbortController().signal, { runId: 'withheld-search' });
+    const result = await tools.search_originals!.execute!({ query: 'lighthouse' }, { toolCallId: 'search', messages: [], context: {} }) as
+      { packets: EvidencePacket[]; withheld?: boolean };
+    expect(result).toMatchObject({ packets: [], withheld: true });
+    expect(reopen().savedEvidenceReadState('withheld-search')).toEqual({ attempts: 1, outcomes: [{ assetVersion: version, reason: 'withheld' }] });
+  }));
+
+test('an unreadable older source stays a reported gap on every search', async () =>
+  within('original-search-unreadable', async (store, reopen, sql) => {
+    await saveCaptions(store, 'goodvideo01', 'A readable lighthouse caption.');
+    const broken = await saveCaptions(store, 'badvideo001', 'A lighthouse caption.');
+    forgetSavedOriginalIndex(sql, broken);
+    const blob = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key;
+    await env.RESEARCH.put(blob, JSON.stringify({ segments: 'broken' }));
+    for (let search = 0; search < 2; search++) {
+      const found = await searchSavedEvidence(reopen(), { query: 'lighthouse' });
+      expect(found.packets).toHaveLength(1);
+      expect(found.unavailable).toEqual([broken]);
+    }
+  }));
+
+// Comments: each word is indexed once, in the chunk where it starts; matching chunks come first.
+test('a long comment is indexed once and a match returns its chunks in order', async () =>
+  within('comment-index-once', async (store, reopen, sql) => {
+    // "lighthouse" crosses the 1,500-character chunk boundary; "closing remark" sits in the last chunk.
+    const text = `${'x'.repeat(1495)} lighthouse keeper ${'padding words here '.repeat(400)}closing remark`;
+    const page = commentPage(1, () => text);
+    page.comments[0]!.author.name = 'Morgan';
+    const version = await saveComments(store, page);
+    const rows = sql.exec<{ position: number; search_text: string }>('SELECT position, search_text FROM session_original_segments WHERE version=? ORDER BY position', version).toArray();
+    expect(rows).toHaveLength(7);
+    // The whole comment and its author are indexed once, on the first chunk only.
+    expect(rows[0]!.search_text).toBe(`${text.toLowerCase()} morgan`);
+    expect(rows.slice(1).map(row => row.search_text)).toEqual(rows.slice(1).map(() => ''));
+    const ids = async (query: string) => (await searchSavedEvidence(reopen(), { query })).packets[0]?.excerpts.map(excerpt => excerpt.id);
+    // The first page starts at the comment's beginning, whichever chunk holds the match.
+    const ordered = rows.map(row => `saved:${version}:comment:0:${row.position}`);
+    for (const query of ['lighthouse', 'keeper', 'closing remark', 'lighthouse closing', 'morgan']) {
+      const found = await ids(query);
+      expect(found!.length).toBeGreaterThan(1);
+      expect(found).toEqual(ordered.slice(0, found!.length));
+    }
+    // A chunk boundary inside a word never creates a word of its own.
+    expect(await ids('ouse')).toBeUndefined();
+    const all = await searchSavedEvidence(reopen(), { query: 'closing' });
+    // The rest, including the matching last chunk, is one paged read away.
+    expect(all.packets[0]!.artifacts[0]!.data).toMatchObject({ selectedExcerpts: rows.length, nextOffset: all.packets[0]!.excerpts.length });
+  }));
+
+test('comment indexes from the earlier layout rebuild on first use; caption indexes stay', async () =>
+  within('comment-index-format', async (store, reopen, sql) => {
+    const comments = await saveComments(store, commentPage(2, index => `Earlier format remark ${index + 1}`));
+    const captions = await saveCaptions(store, id, 'Earlier format caption.');
+    // The previous layout: format 1, no entry column values.
+    sql.exec("UPDATE session_original_assets SET format=1");
+    sql.exec('UPDATE session_original_segments SET entry=NULL');
+    const restored = reopen();
+    const storage = vi.spyOn(restored, 'read');
+    expect((await readSavedEvidence(restored, { assetVersion: captions, query: 'caption' })).coverage.returnedExcerpts).toBe(1);
+    expect(storage).not.toHaveBeenCalled();
+    expect((await readSavedEvidence(restored, { assetVersion: comments, query: 'remark' })).coverage.selectedExcerpts).toBe(2);
+    expect(storage).toHaveBeenCalledOnce();
+    expect(sql.exec('SELECT format FROM session_original_assets WHERE version=?', comments).one().format).toBe(2);
+  }));
+
+// The answer stage receives search coverage limits, not only the passages delivered to it.
+async function finalizerInputsAfter(store: SessionEvidenceStore, reopen: () => SessionEvidenceStore, reads: object[], skill: boolean) {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+  let step = 0;
+  const core = new MockLanguageModelV4({ doGenerate: async () => {
+    const current = step++;
+    const read = reads[current];
+    return { content: [{ type: 'tool-call', toolCallId: `step-${current}`, toolName: read ? 'search_originals' : 'complete_research',
+      input: JSON.stringify(read ?? {}) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+  } });
+  let supplied: { contextIncomplete: boolean; missingInputs: Array<Record<string, unknown>> } | undefined;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+    const payload = call.prompt.find(message => message.role === 'user')!.content;
+    supplied ??= JSON.parse(Array.isArray(payload) ? (payload[0] as { text: string }).text : payload as string);
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+      blocks: [{ text: 'The saved captions mention a gold medal ceremony.', evidenceIds: ['ref_1'] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const restored = reopen();
+  const ctx = context(restored, {} as YouTubeAgentProvider);
+  ctx.runId = crypto.randomUUID();
+  ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId, conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 }, input, restored.evidence(), 0));
+  await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, message: 'What do the saved videos say about gold medals?',
+    decision: { route: 'topic_research', useStoryboard: false, ...(skill ? { savedOnly: true, skill: 'verify_saved_evidence' as const } : {}) },
+    inheritedResolved: true, recoveredEvidence: [] });
+  expect(ctx.finalize).toHaveBeenCalledOnce();
+  return supplied!;
+}
+
+test('sources a search left out reach the finalizer as gaps until they are read', async () =>
+  within('original-search-gap-handoff', async (store, reopen) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 8; index++) versions.push(await saveCaptions(store, `gapvideo0${index}`, `Gold medal ceremony ${index}.`));
+    const omitted = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }], false);
+    expect(omitted.contextIncomplete).toBe(true);
+    const gap = omitted.missingInputs.find(input => input.reason === 'saved_original_search_incomplete')!;
+    expect(gap).toMatchObject({ query: 'gold medal', matchedSources: 8, returnedSources: 6 });
+    expect(gap.unreadSources).toHaveLength(2);
+    // Reading the omitted sources directly closes the gap.
+    const unread = (gap.unreadSources as Array<{ assetVersion: string }>).map(source => source.assetVersion);
+    const covered = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }, ...unread.map(assetVersion => ({ assetVersion }))], false);
+    expect(covered.missingInputs.filter(input => String(input.reason).startsWith('saved_original'))).toEqual([]);
+  }));
+
+test('an unreadable older source reaches the finalizer as a gap outside the verification skill', async () =>
+  within('original-unavailable-gap-handoff', async (store, reopen, sql) => {
+    await saveCaptions(store, 'goodvideo02', 'A readable gold medal caption.');
+    const broken = await saveCaptions(store, 'badvideo002', 'A gold medal caption.');
+    forgetSavedOriginalIndex(sql, broken);
+    await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key);
+    const supplied = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }], false);
+    expect(supplied.contextIncomplete).toBe(true);
+    expect(supplied.missingInputs).toContainEqual(expect.objectContaining({ reason: 'saved_original_unavailable', assetVersion: broken, videoId: 'badvideo002' }));
+  }));
+
+test('a word longer than a chunk is never indexed as its own suffix', async () =>
+  within('comment-index-long-word', async (store, reopen, sql) => {
+    // One 3,010-character token: its "lighthouse" ending lies two chunks past where the word starts.
+    const page = commentPage(2, index => index === 0 ? `${'x'.repeat(3000)}lighthouse` : 'A real lighthouse keeper.');
+    page.comments.forEach(comment => { comment.author.name = 'Reader'; });
+    const version = await saveComments(store, page);
+    const chunks = sql.exec<{ search_text: string }>('SELECT search_text FROM session_original_segments WHERE version=? AND entry=0 ORDER BY position', version).toArray();
+    expect(chunks.map(chunk => chunk.search_text)).toEqual([`${'x'.repeat(3000)}lighthouse reader`, '', '']);
+    const found = await searchSavedEvidence(reopen(), { query: 'lighthouse' });
+    expect(found.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([`saved:${version}:comment:1:0`]);
   }));

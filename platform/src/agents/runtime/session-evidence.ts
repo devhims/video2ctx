@@ -3,7 +3,8 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
-import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexState, selectSavedOriginals, writeSavedOriginalIndex,
+import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexFormat, savedOriginalIndexState, savedOriginalVersionsMatching,
+  selectSavedOriginals, writeSavedOriginalIndex,
   type SavedOriginalIndexState, type SavedOriginalQuery } from './saved-original-index';
 import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
@@ -66,8 +67,14 @@ export interface SessionBrief {
   memories: SessionMemory[];
 }
 export interface SavedEvidenceReadState { attempts: number; outcomes: Array<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }> }
+/** A known limit on what this run's saved-original reads covered, for the answer stage. */
+export type SavedOriginalGap =
+  | { reason: 'saved_original_unavailable' | 'saved_original_withheld'; assetVersion: string; videoId: string; kind: SessionAssetKind }
+  | { reason: 'saved_original_search_incomplete'; query: string; matchedSources: number; returnedSources: number;
+    unreadSources: Array<{ assetVersion: string; videoId: string }>; overLimitSources: number };
 export interface SessionAccess {
   savedEvidenceReadState?(runId: string): SavedEvidenceReadState;
+  savedOriginalGaps?(runId: string, readVersions: ReadonlySet<string>): SavedOriginalGap[];
   brief(): SessionBrief;
   /** Synchronous SQLite checks for deletion while analysis is in flight. */
   generation?(): number;
@@ -162,6 +169,9 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_reads (run_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL)');
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_read_outcomes (run_id TEXT NOT NULL, asset_version TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (run_id, asset_version))');
+    // Searches across all saved originals that returned fewer sources than matched, or skipped over-limit transcripts.
+    sql.exec(`CREATE TABLE IF NOT EXISTS session_original_search_gaps (run_id TEXT NOT NULL, query TEXT NOT NULL,
+      matched INTEGER NOT NULL, returned INTEGER NOT NULL, omitted_json TEXT NOT NULL, over_limit INTEGER NOT NULL, PRIMARY KEY (run_id, query))`);
     ensureSavedOriginalSchema(sql);
     this.search = new SessionSearch(sql);
   }
@@ -173,39 +183,6 @@ export class SessionEvidenceStore implements SessionAccess {
   }
   searchTools(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean; runId?: string }) {
     return this.search.tools(this, onEvidence, signal, options);
-  }
-  async ensureSearchIndexed() {
-    const generation = this.generation();
-    const rows = this.sql
-      .exec<{ version: string; video_id: string; details_json: string }>(
-        `SELECT version, kind, video_id, details_json FROM session_assets WHERE kind IN ('transcript','comments')
-      AND version NOT IN (SELECT version FROM session_search_assets)`,
-      )
-      .toArray() as { version: string; kind: SessionAssetKind; video_id: string; details_json: string }[];
-    for (const { version, kind, video_id: videoId, details_json: details } of rows) {
-      // Over-limit transcripts saved before the limit existed stay out of the search index.
-      if (this.overLimit({ kind, videoId, details: JSON.parse(details) })) continue;
-      const value = await this.read(version);
-      if (generation !== this.generation())
-        throw new Error('Session evidence changed during indexing. Retry the search.');
-      if (!value) continue;
-      if (kind === 'transcript') this.indexTranscript(version, value as Transcript);
-      else {
-        // Index every saved comment by its whole body and author, never a shortened excerpt.
-        const comments = savedComments(value);
-        if (comments) this.search.indexAsset(version, comments.map(commentSearchText), { kind: 'comments' });
-      }
-    }
-  }
-  private indexTranscript(version: string, transcript: Transcript) {
-    this.search.indexTranscript(
-      version,
-      completeTranscriptEvidence(
-        transcript.videoId,
-        transcript.segments,
-        `youtube:transcript:${transcript.videoId}`,
-      ).excerpts,
-    );
   }
   generation() {
     return this.sql
@@ -333,14 +310,6 @@ export class SessionEvidenceStore implements SessionAccess {
     const row = this.sql.exec<{ kind: SessionAssetKind; video_id: string; details_json: string }>(
       'SELECT kind, video_id, details_json FROM session_assets WHERE version=?', version).toArray()[0];
     return row ? this.overLimit({ kind: row.kind, videoId: row.video_id, details: JSON.parse(row.details_json) }) : undefined;
-  }
-  /** Saved transcripts over the limit, from stored metadata only. Empty when no limit is set. */
-  overLimitTranscriptVersions(): string[] {
-    if (this.maxVideoSeconds === undefined) return [];
-    return this.sql.exec<{ version: string; video_id: string; details_json: string }>(
-      `SELECT version, video_id, details_json FROM session_assets WHERE kind='transcript'`).toArray()
-      .filter((row) => this.overLimit({ kind: 'transcript', videoId: row.video_id, details: JSON.parse(row.details_json) }))
-      .map((row) => row.version);
   }
   /** The same check for whatever version a reuse key currently points to. */
   transcriptOverLimitForKey(key: string): VideoTooLongError | undefined {
@@ -578,52 +547,6 @@ export class SessionEvidenceStore implements SessionAccess {
     this.savePacket(packet);
     return { packets: [packet], nextOffset: slice.nextOffset };
   }
-  /**
-   * A per-search cache of saved comment pages. Versions are content-addressed and never
-   * change, so a parsed page stays valid for as long as its own version exists.
-   */
-  commentPageCache(): CommentPageCache {
-    return { pages: new Map() };
-  }
-  /**
-   * One saved comment for a search hit, shown around the span search reported as `rawMatch`.
-   * A hit whose own page was deleted or is unreadable returns no packet. A read interrupted
-   * by deleting another asset or memory is retried, so that deletion never drops this hit;
-   * if the session keeps changing, the search fails with a retry message instead.
-   */
-  async readSavedComment(version: string, position: number, rawMatch: MatchSpan | undefined, cache?: CommentPageCache) {
-    const load = () => {
-      const loading = this.loadCommentPage(version);
-      cache?.pages.set(version, loading);
-      return loading;
-    };
-    let page = await (cache?.pages.get(version) ?? load());
-    for (let attempt = 1; page === 'interrupted' && attempt < COMMENT_PAGE_READ_ATTEMPTS; attempt += 1) page = await load();
-    if (page === 'interrupted') {
-      cache?.pages.delete(version);
-      throw new Error('Session evidence changed during the search. Retry the search.');
-    }
-    // Never serve a page from memory after its own version is deleted.
-    if (!page || !this.has(version)) return { packets: [] };
-    const comment = page.comments[position];
-    if (!comment) return { packets: [] };
-    const packet = await this.commentPacket(page.asset, [{ comment, position, rawMatch }], [], undefined, { savedPageCount: 1 }, page.current);
-    this.savePacket(packet);
-    return { packets: [packet] };
-  }
-  /**
-   * The parsed page, undefined when it is not a readable comment page, or 'interrupted' when
-   * another deletion fenced the read while this version still exists.
-   */
-  private async loadCommentPage(version: string): Promise<CommentPage | 'interrupted' | undefined> {
-    const asset = this.brief().assets.find((item) => item.version === version);
-    if (asset?.kind !== 'comments') return undefined;
-    const generation = this.generation();
-    const value = await this.read(version);
-    if (value === null) return generation !== this.generation() && this.has(version) ? 'interrupted' : undefined;
-    const comments = savedComments(value);
-    return comments && { asset, comments, current: this.currentVersions().has(version) };
-  }
   private async savedCommentPage(asset: SessionAsset): Promise<Comment[]> {
     const value = await this.read(asset.version);
     const comments = value === null ? undefined : savedComments(value);
@@ -793,7 +716,6 @@ export class SessionEvidenceStore implements SessionAccess {
             Date.now(),
           );
           this.linkCatalog(version, reference);
-          if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
           this.indexSavedOriginal(version, kind, videoId, result.value, true);
           this.alias(key, version);
         });
@@ -822,7 +744,6 @@ export class SessionEvidenceStore implements SessionAccess {
       const retained = this.sql.exec<AssetRow>('SELECT * FROM session_assets WHERE version=?', version).one();
       if (retained.blob_key !== blobKey) await this.bucket.delete(blobKey);
       this.sql.exec('DELETE FROM session_blob_deletions WHERE blob_key=?', blobKey);
-      if (kind === 'transcript') this.indexTranscript(version, result.value as Transcript);
       this.indexSavedOriginal(version, kind, videoId, result.value);
       this.alias(key, version);
       return { ...result, assetVersions: [version] };
@@ -833,18 +754,54 @@ export class SessionEvidenceStore implements SessionAccess {
    * existed are loaded from storage once and indexed; every later read uses SQLite only.
    */
   async savedOriginalIndex(version: string): Promise<SavedOriginalIndexState | null> {
-    const indexed = savedOriginalIndexState(this.sql, version);
-    if (indexed) return indexed;
     const asset = this.assetInfo(version);
     if (asset?.kind !== 'transcript' && asset?.kind !== 'comments') return null;
-    const generation = this.generation();
-    const value = await this.read(version);
-    if (value === null || generation !== this.generation() || !this.has(version)) return null;
-    // A concurrent first read may have indexed it while this one waited.
-    const raced = savedOriginalIndexState(this.sql, version);
-    if (raced) return raced;
-    this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
-    return savedOriginalIndexState(this.sql, version) ?? null;
+    const indexed = savedOriginalIndexState(this.sql, version, asset.kind);
+    if (indexed) return indexed;
+    // A deletion elsewhere fences an in-flight read. Retry while this version still exists, so an
+    // unrelated deletion never hides it; if the session keeps changing, ask for a retry instead.
+    for (let attempt = 0; attempt < SAVED_ORIGINAL_READ_ATTEMPTS; attempt++) {
+      const generation = this.generation();
+      const value = await this.read(version);
+      if (!this.has(version)) return null;
+      if (generation !== this.generation()) continue;
+      if (value === null) return null;
+      // A concurrent first read may have indexed it while this one waited.
+      const raced = savedOriginalIndexState(this.sql, version, asset.kind);
+      if (raced) return raced;
+      this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
+      return savedOriginalIndexState(this.sql, version, asset.kind) ?? null;
+    }
+    throw new Error('Saved evidence changed during the read. Retry the request.');
+  }
+  /**
+   * Index every saved caption and comment version that predates the index, so a search across
+   * all originals covers them. Returns versions that could not be read, so coverage gaps are explicit.
+   */
+  async ensureSavedOriginalsIndexed(): Promise<string[]> {
+    const missing = this.sql.exec<{ version: string }>(`SELECT a.version FROM session_assets a WHERE a.kind IN ('transcript','comments')
+      AND NOT EXISTS (SELECT 1 FROM session_original_assets o WHERE o.version = a.version
+        AND o.format = CASE a.kind WHEN 'comments' THEN ? ELSE ? END) ORDER BY a.created_at, a.version`,
+    savedOriginalIndexFormat('comments'), savedOriginalIndexFormat('transcript')).toArray();
+    const unavailable: string[] = [];
+    for (const { version } of missing) {
+      if (this.transcriptOverLimit(version)) continue;
+      let state: SavedOriginalIndexState | null;
+      try { state = await this.savedOriginalIndex(version); }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        state = null;
+      }
+      // A version deleted meanwhile is simply gone, not an unreadable source.
+      if (state?.status !== 'ready' && this.has(version)) unavailable.push(version);
+    }
+    // Sources recorded as unreadable on an earlier search remain gaps on every later one.
+    const unreadable = this.sql.exec<{ version: string }>(`SELECT o.version FROM session_original_assets o
+      JOIN session_assets a ON a.version = o.version WHERE o.status='unreadable' ORDER BY a.created_at, o.version`).toArray();
+    return [...new Set([...unavailable, ...unreadable.map(row => row.version)])];
+  }
+  savedOriginalVersionsMatching(words: readonly string[]) {
+    return savedOriginalVersionsMatching(this.sql, words);
   }
   searchSavedOriginal(version: string, total: number, query: SavedOriginalQuery) {
     return selectSavedOriginals(this.sql, version, total, query);
@@ -852,7 +809,7 @@ export class SessionEvidenceStore implements SessionAccess {
   private indexSavedOriginal(version: string, kind: SessionAssetKind, videoId: string, value: unknown, inTransaction = false) {
     if (kind !== 'transcript' && kind !== 'comments') return;
     const built = buildSavedOriginal({ version, kind, videoId }, value);
-    const write = () => writeSavedOriginalIndex(this.sql, version, built);
+    const write = () => writeSavedOriginalIndex(this.sql, version, kind, built);
     if (inTransaction || !this.atomic) write();
     else this.atomic(write);
   }
@@ -867,6 +824,32 @@ export class SessionEvidenceStore implements SessionAccess {
   recordSavedEvidenceOutcome(runId: string, assetVersion: string, reason: 'empty' | 'withheld' | 'unavailable'): void {
     if (!this.has(assetVersion)) return;
     this.sql.exec('INSERT OR REPLACE INTO session_original_read_outcomes VALUES (?, ?, ?)', runId, assetVersion, reason);
+  }
+  recordSavedOriginalSearchGap(runId: string, gap: { query: string; matchedSources: number; returnedSources: number; omitted: readonly string[]; overLimitSources: number }): void {
+    this.sql.exec('INSERT OR REPLACE INTO session_original_search_gaps VALUES (?, ?, ?, ?, ?, ?)', runId, gap.query,
+      gap.matchedSources, gap.returnedSources, JSON.stringify(gap.omitted), gap.overLimitSources);
+  }
+  /**
+   * Coverage limits of this run's saved-original reads: sources that could not be read or were
+   * withheld, and searches that returned fewer sources than matched. A source the run later read
+   * directly no longer counts as unread.
+   */
+  savedOriginalGaps(runId: string, readVersions: ReadonlySet<string>): SavedOriginalGap[] {
+    const assets = new Map(this.brief().assets.map(asset => [asset.version, asset]));
+    const gaps: SavedOriginalGap[] = [];
+    for (const { assetVersion, reason } of this.savedEvidenceReadState(runId).outcomes) {
+      const asset = assets.get(assetVersion);
+      if (asset && (reason === 'unavailable' || reason === 'withheld') && !readVersions.has(assetVersion))
+        gaps.push({ reason: `saved_original_${reason}`, assetVersion, videoId: asset.videoId, kind: asset.kind });
+    }
+    for (const row of this.sql.exec<{ query: string; matched: number; returned: number; omitted_json: string; over_limit: number }>(
+      'SELECT query, matched, returned, omitted_json, over_limit FROM session_original_search_gaps WHERE run_id=? ORDER BY query', runId).toArray()) {
+      const unreadSources = (JSON.parse(row.omitted_json) as string[]).filter(version => assets.has(version) && !readVersions.has(version))
+        .map(version => ({ assetVersion: version, videoId: assets.get(version)!.videoId }));
+      if (unreadSources.length || row.over_limit) gaps.push({ reason: 'saved_original_search_incomplete', query: row.query,
+        matchedSources: row.matched, returnedSources: row.returned, unreadSources, overLimitSources: row.over_limit });
+    }
+    return gaps;
   }
   savedEvidenceReadState(runId: string): SavedEvidenceReadState {
     const attempts = this.sql.exec<{ attempts: number }>('SELECT attempts FROM session_original_reads WHERE run_id=?', runId).toArray()[0]?.attempts ?? 0;
@@ -1038,13 +1021,8 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
   return result;
 }
 
-interface CommentPage { asset: SessionAsset; comments: Comment[]; current: boolean }
-/** Saved comment pages loaded during one search, by version. */
-export interface CommentPageCache {
-  pages: Map<string, Promise<CommentPage | 'interrupted' | undefined>>;
-}
-/** Reads of one comment page per hit, so a burst of unrelated deletions cannot drop it silently. */
-const COMMENT_PAGE_READ_ATTEMPTS = 3;
+/** First reads of one saved original, so a burst of unrelated deletions cannot hide it silently. */
+const SAVED_ORIGINAL_READ_ATTEMPTS = 3;
 
 /** Comments of a saved provider page, or undefined for an unexpected payload. */
 function savedComments(value: unknown): Comment[] | undefined {
