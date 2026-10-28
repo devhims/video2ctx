@@ -75,6 +75,7 @@ import type { AgentDraft } from '../runtime/run-progress';
 import { capabilityRegistry, describeCapabilities } from './capability-registry';
 import { createCapabilityProvider, savedOnlyProvider } from './capability-provider';
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
+import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
 import {
@@ -472,6 +473,20 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       .map((packet) => [packet.packetId, packet]),
   );
   const unreadOriginals = () => unreadOriginalSources(options.decision, options.context.session?.brief(), evidence.values());
+  // Gaps the answer stage must disclose: required sources not read (skill runs), and on every route,
+  // saved originals that could not be read, were withheld, or were left out of a search's results.
+  const savedOriginalHandoffGaps = () => {
+    const unread = unreadOriginals();
+    const read = new Set([...evidence.values()].filter(packet => packet.excerpts.length
+      && packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT)).flatMap(packet => packet.assetVersions ?? []));
+    return [
+      ...unread.map(videoId => ({ reason: 'saved_original_not_read', videoId,
+        readState: options.context.session?.savedEvidenceReadState?.(options.context.runId) })),
+      // A required source's outcome is already in its not-read gap.
+      ...(options.context.session?.savedOriginalGaps?.(options.context.runId, read) ?? [])
+        .filter(gap => !('videoId' in gap) || !unread.includes(gap.videoId)),
+    ];
+  };
   const pendingOriginals = () => pendingOriginalSources(options.decision, options.context.session?.brief(), evidence.values(),
     options.context.session?.savedEvidenceReadState?.(options.context.runId));
   const toolFailures = new Map(
@@ -837,8 +852,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         } },
         evidence: [...evidence.values()],
         researchContext: options.prepareResearchContext?.(contextHandoff.snapshot()) ?? contextHandoff.snapshot(),
-        handoffGaps: unreadOriginals().map(videoId => ({ reason: 'saved_original_not_read', videoId,
-          readState: options.context.session?.savedEvidenceReadState?.(options.context.runId) })),
+        handoffGaps: savedOriginalHandoffGaps(),
         toolFailures: [...toolFailures.values()],
         researchInterrupted: error !== finalizationHandoff,
         modelBudget: options.modelBudget,
@@ -919,7 +933,7 @@ async function runUnifiedFinalizer(options: {
   evidence: EvidencePacket[];
   toolFailures: EvidenceToolFailure[];
   researchContext?: ReturnType<ContextHandoff['snapshot']>;
-  handoffGaps?: Array<{ reason: string; packetId?: string }>;
+  handoffGaps?: Array<{ reason: string; packetId?: string; [detail: string]: unknown }>;
   researchInterrupted?: boolean;
   modelBudget?: AgentModelCostBudget;
   modelCallPrefix?: string;

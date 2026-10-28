@@ -2121,3 +2121,61 @@ test('comment indexes written before words were indexed once rebuild on first us
     expect(storage).toHaveBeenCalledOnce();
     expect(sql.exec('SELECT format FROM session_original_assets WHERE version=?', comments).one().format).toBe(2);
   }));
+
+// The answer stage receives search coverage limits, not only the passages delivered to it.
+async function finalizerInputsAfter(store: SessionEvidenceStore, reopen: () => SessionEvidenceStore, reads: object[], skill: boolean) {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+  let step = 0;
+  const core = new MockLanguageModelV4({ doGenerate: async () => {
+    const current = step++;
+    const read = reads[current];
+    return { content: [{ type: 'tool-call', toolCallId: `step-${current}`, toolName: read ? 'search_originals' : 'complete_research',
+      input: JSON.stringify(read ?? {}) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+  } });
+  let supplied: { contextIncomplete: boolean; missingInputs: Array<Record<string, unknown>> } | undefined;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+    const payload = call.prompt.find(message => message.role === 'user')!.content;
+    supplied ??= JSON.parse(Array.isArray(payload) ? (payload[0] as { text: string }).text : payload as string);
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+      blocks: [{ text: 'The saved captions mention a gold medal ceremony.', evidenceIds: ['ref_1'] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const restored = reopen();
+  const ctx = context(restored, {} as YouTubeAgentProvider);
+  ctx.runId = crypto.randomUUID();
+  ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId, conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 }, input, restored.evidence(), 0));
+  await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, message: 'What do the saved videos say about gold medals?',
+    decision: { route: 'topic_research', useStoryboard: false, ...(skill ? { savedOnly: true, skill: 'verify_saved_evidence' as const } : {}) },
+    inheritedResolved: true, recoveredEvidence: [] });
+  expect(ctx.finalize).toHaveBeenCalledOnce();
+  return supplied!;
+}
+
+test('sources a search left out reach the finalizer as gaps until they are read', async () =>
+  within('original-search-gap-handoff', async (store, reopen) => {
+    const versions: string[] = [];
+    for (let index = 0; index < 8; index++) versions.push(await saveCaptions(store, `gapvideo0${index}`, `Gold medal ceremony ${index}.`));
+    const omitted = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }], false);
+    expect(omitted.contextIncomplete).toBe(true);
+    const gap = omitted.missingInputs.find(input => input.reason === 'saved_original_search_incomplete')!;
+    expect(gap).toMatchObject({ query: 'gold medal', matchedSources: 8, returnedSources: 6 });
+    expect(gap.unreadSources).toHaveLength(2);
+    // Reading the omitted sources directly closes the gap.
+    const unread = (gap.unreadSources as Array<{ assetVersion: string }>).map(source => source.assetVersion);
+    const covered = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }, ...unread.map(assetVersion => ({ assetVersion }))], false);
+    expect(covered.missingInputs.filter(input => String(input.reason).startsWith('saved_original'))).toEqual([]);
+  }));
+
+test('an unreadable older source reaches the finalizer as a gap outside the verification skill', async () =>
+  within('original-unavailable-gap-handoff', async (store, reopen, sql) => {
+    await saveCaptions(store, 'goodvideo02', 'A readable gold medal caption.');
+    const broken = await saveCaptions(store, 'badvideo002', 'A gold medal caption.');
+    forgetSavedOriginalIndex(sql, broken);
+    await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', broken).one().blob_key);
+    const supplied = await finalizerInputsAfter(store, reopen, [{ query: 'gold medal' }], false);
+    expect(supplied.contextIncomplete).toBe(true);
+    expect(supplied.missingInputs).toContainEqual(expect.objectContaining({ reason: 'saved_original_unavailable', assetVersion: broken, videoId: 'badvideo002' }));
+  }));

@@ -110,7 +110,9 @@ export async function searchSavedEvidence(store: SessionEvidenceStore, input: z.
   if (store.generation() !== generation) throw new Error('Saved evidence changed during the search. Retry the search.');
   const published = packets.filter(packet => packet.assetVersions!.every(version => store.has(version)));
   for (const packet of published) store.savePacket(packet);
-  return { packets: published, unavailable, search: { matchedSources: matches.length, returnedSources: published.length,
+  const returned = new Set(published.flatMap(packet => packet.assetVersions ?? []));
+  const omitted = matches.map(match => match.asset.version).filter(version => !returned.has(version));
+  return { packets: published, unavailable, omitted, overLimit, search: { matchedSources: matches.length, returnedSources: published.length,
     ...(matches.length > published.length ? { omittedSources: matches.length - published.length } : {}),
     ...(unavailable.length ? { unavailableSources: unavailable.length } : {}),
     ...(overLimit ? { overLimitSources: overLimit } : {}) } };
@@ -185,6 +187,10 @@ export function createReadSavedEvidenceTool(store: SessionEvidenceStore,
     signal.throwIfAborted();
     // A saved original that cannot be read is a permanent gap for this run, as with a direct read.
     for (const version of result.unavailable) store.recordSavedEvidenceOutcome(runId, version, 'unavailable');
+    // The answer stage sees only delivered passages, so keep the search's own coverage limits for it.
+    if (result.omitted.length || result.overLimit) store.recordSavedOriginalSearchGap(runId, { query: input.query!,
+      matchedSources: result.search.matchedSources, returnedSources: result.search.returnedSources,
+      omitted: result.omitted, overLimitSources: result.overLimit });
     const packets = admit(result.packets, 'read_saved_evidence') ?? result.packets;
     const admitted = new Set(packets.map(packet => packet.packetId));
     for (const packet of result.packets) if (!admitted.has(packet.packetId)) store.recordSavedEvidenceOutcome(runId, packet.assetVersions![0]!, 'withheld');

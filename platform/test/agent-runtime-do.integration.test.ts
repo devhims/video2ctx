@@ -420,7 +420,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_original_segments', 'session_original_assets', 'session_original_fts', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_original_search_gaps', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_original_segments', 'session_original_assets', 'session_original_fts', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });

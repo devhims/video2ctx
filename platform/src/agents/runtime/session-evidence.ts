@@ -67,8 +67,14 @@ export interface SessionBrief {
   memories: SessionMemory[];
 }
 export interface SavedEvidenceReadState { attempts: number; outcomes: Array<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }> }
+/** A known limit on what this run's saved-original reads covered, for the answer stage. */
+export type SavedOriginalGap =
+  | { reason: 'saved_original_unavailable' | 'saved_original_withheld'; assetVersion: string; videoId: string; kind: SessionAssetKind }
+  | { reason: 'saved_original_search_incomplete'; query: string; matchedSources: number; returnedSources: number;
+    unreadSources: Array<{ assetVersion: string; videoId: string }>; overLimitSources: number };
 export interface SessionAccess {
   savedEvidenceReadState?(runId: string): SavedEvidenceReadState;
+  savedOriginalGaps?(runId: string, readVersions: ReadonlySet<string>): SavedOriginalGap[];
   brief(): SessionBrief;
   /** Synchronous SQLite checks for deletion while analysis is in flight. */
   generation?(): number;
@@ -163,6 +169,9 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_reads (run_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL)');
     sql.exec('CREATE TABLE IF NOT EXISTS session_original_read_outcomes (run_id TEXT NOT NULL, asset_version TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (run_id, asset_version))');
+    // Searches across all saved originals that returned fewer sources than matched, or skipped over-limit transcripts.
+    sql.exec(`CREATE TABLE IF NOT EXISTS session_original_search_gaps (run_id TEXT NOT NULL, query TEXT NOT NULL,
+      matched INTEGER NOT NULL, returned INTEGER NOT NULL, omitted_json TEXT NOT NULL, over_limit INTEGER NOT NULL, PRIMARY KEY (run_id, query))`);
     ensureSavedOriginalSchema(sql);
     this.search = new SessionSearch(sql);
   }
@@ -815,6 +824,32 @@ export class SessionEvidenceStore implements SessionAccess {
   recordSavedEvidenceOutcome(runId: string, assetVersion: string, reason: 'empty' | 'withheld' | 'unavailable'): void {
     if (!this.has(assetVersion)) return;
     this.sql.exec('INSERT OR REPLACE INTO session_original_read_outcomes VALUES (?, ?, ?)', runId, assetVersion, reason);
+  }
+  recordSavedOriginalSearchGap(runId: string, gap: { query: string; matchedSources: number; returnedSources: number; omitted: readonly string[]; overLimitSources: number }): void {
+    this.sql.exec('INSERT OR REPLACE INTO session_original_search_gaps VALUES (?, ?, ?, ?, ?, ?)', runId, gap.query,
+      gap.matchedSources, gap.returnedSources, JSON.stringify(gap.omitted), gap.overLimitSources);
+  }
+  /**
+   * Coverage limits of this run's saved-original reads: sources that could not be read or were
+   * withheld, and searches that returned fewer sources than matched. A source the run later read
+   * directly no longer counts as unread.
+   */
+  savedOriginalGaps(runId: string, readVersions: ReadonlySet<string>): SavedOriginalGap[] {
+    const assets = new Map(this.brief().assets.map(asset => [asset.version, asset]));
+    const gaps: SavedOriginalGap[] = [];
+    for (const { assetVersion, reason } of this.savedEvidenceReadState(runId).outcomes) {
+      const asset = assets.get(assetVersion);
+      if (asset && (reason === 'unavailable' || reason === 'withheld') && !readVersions.has(assetVersion))
+        gaps.push({ reason: `saved_original_${reason}`, assetVersion, videoId: asset.videoId, kind: asset.kind });
+    }
+    for (const row of this.sql.exec<{ query: string; matched: number; returned: number; omitted_json: string; over_limit: number }>(
+      'SELECT query, matched, returned, omitted_json, over_limit FROM session_original_search_gaps WHERE run_id=? ORDER BY query', runId).toArray()) {
+      const unreadSources = (JSON.parse(row.omitted_json) as string[]).filter(version => assets.has(version) && !readVersions.has(version))
+        .map(version => ({ assetVersion: version, videoId: assets.get(version)!.videoId }));
+      if (unreadSources.length || row.over_limit) gaps.push({ reason: 'saved_original_search_incomplete', query: row.query,
+        matchedSources: row.matched, returnedSources: row.returned, unreadSources, overLimitSources: row.over_limit });
+    }
+    return gaps;
   }
   savedEvidenceReadState(runId: string): SavedEvidenceReadState {
     const attempts = this.sql.exec<{ attempts: number }>('SELECT attempts FROM session_original_reads WHERE run_id=?', runId).toArray()[0]?.attempts ?? 0;
