@@ -8,7 +8,11 @@ import { completeTranscriptEvidence } from '../providers/youtube/tools/get-video
  * asset is saved (or on its first read, for assets saved earlier). Reads and searches use only
  * Durable Object SQLite, never R2. FTS5's porter stemmer matches inflections: "mix" finds "mixing".
  */
-export const SAVED_ORIGINAL_INDEX_FORMAT = 1;
+/** Index layout per kind. Comments moved to one indexed copy of each word (format 2); older indexes rebuild on first use. */
+const INDEX_FORMAT: Record<SavedOriginalKind, number> = { transcript: 1, comments: 2 };
+export function savedOriginalIndexFormat(kind: SavedOriginalKind): number {
+  return INDEX_FORMAT[kind];
+}
 /** Matches may span this many consecutive captions; a sentence is often split across cues. */
 const CAPTION_WINDOW = 3;
 /** Captions shown either side of a caption match, so a quote is read in context. */
@@ -19,7 +23,7 @@ type Excerpt = EvidencePacket['excerpts'][number];
 export type SavedOriginalKind = 'transcript' | 'comments';
 export interface SavedOriginalMeta { partial?: boolean; warnings: string[]; continuation?: boolean }
 export type SavedOriginalBuild =
-  | { status: 'ready'; entries: Array<{ excerpt: Excerpt; searchText: string }>; meta: SavedOriginalMeta }
+  | { status: 'ready'; entries: Array<{ excerpt: Excerpt; searchText: string; entry: number }>; meta: SavedOriginalMeta }
   | { status: 'unreadable'; reason: string };
 
 const captionShape = z.object({ segments: z.array(z.object({
@@ -35,7 +39,10 @@ export function ensureSavedOriginalSchema(sql: SqlStorage): void {
     status TEXT NOT NULL, total INTEGER NOT NULL, meta_json TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS session_original_segments (id INTEGER PRIMARY KEY, version TEXT NOT NULL,
     position INTEGER NOT NULL, start_ms INTEGER, end_ms INTEGER, search_text TEXT NOT NULL, excerpt_json TEXT NOT NULL,
-    UNIQUE (version, position))`);
+    entry INTEGER, UNIQUE (version, position))`);
+  // Indexes written before comments were grouped by entry lack the column; their comments rebuild lazily.
+  if (!sql.exec<{ name: string }>('PRAGMA table_info(session_original_segments)').toArray().some(column => column.name === 'entry'))
+    sql.exec('ALTER TABLE session_original_segments ADD COLUMN entry INTEGER');
   // External content: the segment rows hold the text once; FTS5 holds only the stemmed index.
   sql.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS session_original_fts USING fts5(search_text,
     content='session_original_segments', content_rowid='id', tokenize='porter unicode61')`);
@@ -63,30 +70,32 @@ export function buildSavedOriginal(asset: { version: string; kind: SavedOriginal
     ...(asset.kind === 'comments' ? { continuation: Boolean((source as CommentsPage).continuation) } : {}) };
   if (asset.kind === 'transcript') {
     const excerpts = completeTranscriptEvidence(asset.videoId, (source as Transcript).segments, sourceId).excerpts;
-    return { status: 'ready', meta, entries: excerpts.map((excerpt, index) => ({
+    return { status: 'ready', meta, entries: excerpts.map((excerpt, index) => ({ entry: index,
       excerpt: { ...excerpt, id: `saved:${asset.version}:caption:${index}` }, searchText: searchableText(excerpt.text) })) };
   }
-  return { status: 'ready', meta, entries: flattenComments((source as CommentsPage).comments).flatMap(({ comment, position }) => {
+  return { status: 'ready', meta, entries: flattenComments((source as CommentsPage).comments).flatMap(({ comment, position }, entry) => {
     // Split long comments without discarding their tail or changing their words.
     const suffix = `\nAuthor: ${comment.author.name.slice(0, 200)}\nComment ID: ${comment.id.slice(0, 200)}\nSaved position: ${position.map(index => index + 1).join('.')}`;
-    // Every chunk is searched by the whole comment and its author, never the attribution labels.
-    const searchText = searchableText(`${comment.text} ${comment.author.name}`);
-    const chunks: Array<{ excerpt: Excerpt; searchText: string }> = [];
+    // Each word is indexed once, in the chunk where it starts, so a match names its chunk. The author
+    // is searchable from every chunk; the attribution labels never are.
+    const author = searchableText(comment.author.name);
+    const chunks: Array<{ excerpt: Excerpt; searchText: string; entry: number }> = [];
     for (let offset = 0; offset < comment.text.length; offset += COMMENT_CHUNK) {
-      chunks.push({ searchText, excerpt: { id: `saved:${asset.version}:comment:${position.join(':')}:${offset / COMMENT_CHUNK}`,
-        sourceId, text: comment.text.slice(offset, offset + COMMENT_CHUNK) + suffix } });
+      chunks.push({ entry, searchText: `${searchableText(chunkWords(comment.text, offset, offset + COMMENT_CHUNK))} ${author}`,
+        excerpt: { id: `saved:${asset.version}:comment:${position.join(':')}:${offset / COMMENT_CHUNK}`,
+          sourceId, text: comment.text.slice(offset, offset + COMMENT_CHUNK) + suffix } });
     }
     return chunks;
   }) };
 }
 
 /** Replace one version's index. Callers own the transaction boundary. */
-export function writeSavedOriginalIndex(sql: SqlStorage, version: string, built: SavedOriginalBuild): void {
+export function writeSavedOriginalIndex(sql: SqlStorage, version: string, kind: SavedOriginalKind, built: SavedOriginalBuild): void {
   sql.exec('DELETE FROM session_original_segments WHERE version=?', version);
-  if (built.status === 'ready') built.entries.forEach(({ excerpt, searchText }, position) => sql.exec(
-    'INSERT INTO session_original_segments (version, position, start_ms, end_ms, search_text, excerpt_json) VALUES (?, ?, ?, ?, ?, ?)',
-    version, position, excerpt.startMs ?? null, excerpt.endMs ?? null, searchText, JSON.stringify(excerpt)));
-  sql.exec('INSERT OR REPLACE INTO session_original_assets VALUES (?, ?, ?, ?, ?)', version, SAVED_ORIGINAL_INDEX_FORMAT,
+  if (built.status === 'ready') built.entries.forEach(({ excerpt, searchText, entry }, position) => sql.exec(
+    'INSERT INTO session_original_segments (version, position, start_ms, end_ms, search_text, excerpt_json, entry) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    version, position, excerpt.startMs ?? null, excerpt.endMs ?? null, searchText, JSON.stringify(excerpt), entry));
+  sql.exec('INSERT OR REPLACE INTO session_original_assets VALUES (?, ?, ?, ?, ?)', version, savedOriginalIndexFormat(kind),
     built.status, built.status === 'ready' ? built.entries.length : 0,
     JSON.stringify(built.status === 'ready' ? built.meta : { reason: built.reason }));
 }
@@ -96,10 +105,10 @@ export type SavedOriginalIndexState =
   | { status: 'unreadable'; reason: string };
 
 /** The current-format index for a version, or undefined when it must be (re)built. */
-export function savedOriginalIndexState(sql: SqlStorage, version: string): SavedOriginalIndexState | undefined {
+export function savedOriginalIndexState(sql: SqlStorage, version: string, kind: SavedOriginalKind): SavedOriginalIndexState | undefined {
   const row = sql.exec<{ format: number; status: string; total: number; meta_json: string }>(
     'SELECT format, status, total, meta_json FROM session_original_assets WHERE version=?', version).toArray()[0];
-  if (!row || row.format !== SAVED_ORIGINAL_INDEX_FORMAT) return undefined;
+  if (!row || row.format !== savedOriginalIndexFormat(kind)) return undefined;
   const meta = JSON.parse(row.meta_json);
   return row.status === 'ready' ? { status: 'ready', total: row.total, meta } : { status: 'unreadable', reason: meta.reason };
 }
@@ -111,10 +120,8 @@ export function selectSavedOriginals(sql: SqlStorage, version: string, total: nu
   const anchors = timeFilteredPositions(sql, version, query);
   let matching: number[];
   if (!query.words?.length) matching = anchors ? [...anchors].sort((a, b) => a - b) : range(total);
-  else if (query.kind === 'comments') {
-    // Comments never mix authors: every word must occur in the same comment.
-    matching = positionsMatching(sql, version, query.words.map(phrase).join(' AND ')).sort((a, b) => a - b);
-  } else {
+  else if (query.kind === 'comments') matching = commentPositionsMatching(sql, version, query.words);
+  else {
     // Captions can split a phrase across cues: every word must occur within a short caption window.
     const sets = query.words.map(word => new Set(positionsMatching(sql, version, phrase(word))));
     const candidates = new Set([...sets[0]!].flatMap(position => range(CAPTION_WINDOW).map(back => position - back)));
@@ -164,6 +171,36 @@ function searchableText(text: string): string {
 
 function phrase(word: string): string {
   return `"${word.replace(/"/g, '')}"`;
+}
+
+/**
+ * Comments never mix authors: every word must occur somewhere in the same comment. Each matching
+ * comment returns all its chunks, those containing the most query words first, then the rest in order.
+ */
+function commentPositionsMatching(sql: SqlStorage, version: string, words: readonly string[]): number[] {
+  const hits = words.map(word => sql.exec<{ position: number; entry: number }>(`SELECT s.position, s.entry FROM session_original_fts f
+    JOIN session_original_segments s ON s.id = f.rowid WHERE session_original_fts MATCH ? AND s.version = ?`, phrase(word), version).toArray());
+  const entries = hits.map(rows => new Set(rows.map(row => row.entry)))
+    .reduce((kept, next) => new Set([...kept].filter(entry => next.has(entry))));
+  if (!entries.size) return [];
+  const wordsAt = new Map<number, number>();
+  for (const rows of hits) for (const position of new Set(rows.map(row => row.position))) wordsAt.set(position, (wordsAt.get(position) ?? 0) + 1);
+  const chunks = sql.exec<{ position: number; entry: number }>(`SELECT position, entry FROM session_original_segments
+    WHERE version = ? AND entry IN (SELECT value FROM json_each(?)) ORDER BY entry, position`, version, JSON.stringify([...entries])).toArray();
+  const grouped = new Map<number, number[]>();
+  for (const { position, entry } of chunks) grouped.set(entry, [...(grouped.get(entry) ?? []), position]);
+  return [...grouped.values()].flatMap(positions =>
+    positions.sort((a, b) => (wordsAt.get(b) ?? 0) - (wordsAt.get(a) ?? 0) || a - b));
+}
+
+/** Text of the words that start in [start, end), each completed to its end, so every word belongs to exactly one chunk. */
+function chunkWords(text: string, start: number, end: number): string {
+  const word = (index: number) => index >= 0 && index < text.length && /[\p{L}\p{N}_'’‘]/u.test(text[index]!);
+  let from = start;
+  if (word(start - 1)) while (from < end && word(from)) from++;
+  let to = Math.min(end, text.length);
+  while (word(to - 1) && word(to)) to++;
+  return text.slice(from, Math.max(from, to));
 }
 
 function positionsMatching(sql: SqlStorage, version: string, match: string): number[] {

@@ -3,8 +3,8 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
 import { SessionSearch } from './session-search';
-import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexState, savedOriginalVersionsMatching, selectSavedOriginals, writeSavedOriginalIndex,
-  SAVED_ORIGINAL_INDEX_FORMAT,
+import { buildSavedOriginal, ensureSavedOriginalSchema, savedOriginalIndexFormat, savedOriginalIndexState, savedOriginalVersionsMatching,
+  selectSavedOriginals, writeSavedOriginalIndex,
   type SavedOriginalIndexState, type SavedOriginalQuery } from './saved-original-index';
 import { VideoTooLongError } from './video-duration-limit';
 import type { ToolSet } from 'ai';
@@ -745,10 +745,10 @@ export class SessionEvidenceStore implements SessionAccess {
    * existed are loaded from storage once and indexed; every later read uses SQLite only.
    */
   async savedOriginalIndex(version: string): Promise<SavedOriginalIndexState | null> {
-    const indexed = savedOriginalIndexState(this.sql, version);
-    if (indexed) return indexed;
     const asset = this.assetInfo(version);
     if (asset?.kind !== 'transcript' && asset?.kind !== 'comments') return null;
+    const indexed = savedOriginalIndexState(this.sql, version, asset.kind);
+    if (indexed) return indexed;
     // A deletion elsewhere fences an in-flight read. Retry while this version still exists, so an
     // unrelated deletion never hides it; if the session keeps changing, ask for a retry instead.
     for (let attempt = 0; attempt < SAVED_ORIGINAL_READ_ATTEMPTS; attempt++) {
@@ -758,10 +758,10 @@ export class SessionEvidenceStore implements SessionAccess {
       if (generation !== this.generation()) continue;
       if (value === null) return null;
       // A concurrent first read may have indexed it while this one waited.
-      const raced = savedOriginalIndexState(this.sql, version);
+      const raced = savedOriginalIndexState(this.sql, version, asset.kind);
       if (raced) return raced;
       this.indexSavedOriginal(version, asset.kind, asset.videoId, value);
-      return savedOriginalIndexState(this.sql, version) ?? null;
+      return savedOriginalIndexState(this.sql, version, asset.kind) ?? null;
     }
     throw new Error('Saved evidence changed during the read. Retry the request.');
   }
@@ -770,9 +770,10 @@ export class SessionEvidenceStore implements SessionAccess {
    * all originals covers them. Returns versions that could not be read, so coverage gaps are explicit.
    */
   async ensureSavedOriginalsIndexed(): Promise<string[]> {
-    const missing = this.sql.exec<{ version: string }>(`SELECT version FROM session_assets WHERE kind IN ('transcript','comments')
-      AND version NOT IN (SELECT version FROM session_original_assets WHERE format=?) ORDER BY created_at, version`,
-    SAVED_ORIGINAL_INDEX_FORMAT).toArray();
+    const missing = this.sql.exec<{ version: string }>(`SELECT a.version FROM session_assets a WHERE a.kind IN ('transcript','comments')
+      AND NOT EXISTS (SELECT 1 FROM session_original_assets o WHERE o.version = a.version
+        AND o.format = CASE a.kind WHEN 'comments' THEN ? ELSE ? END) ORDER BY a.created_at, a.version`,
+    savedOriginalIndexFormat('comments'), savedOriginalIndexFormat('transcript')).toArray();
     const unavailable: string[] = [];
     for (const { version } of missing) {
       if (this.transcriptOverLimit(version)) continue;
@@ -799,7 +800,7 @@ export class SessionEvidenceStore implements SessionAccess {
   private indexSavedOriginal(version: string, kind: SessionAssetKind, videoId: string, value: unknown, inTransaction = false) {
     if (kind !== 'transcript' && kind !== 'comments') return;
     const built = buildSavedOriginal({ version, kind, videoId }, value);
-    const write = () => writeSavedOriginalIndex(this.sql, version, built);
+    const write = () => writeSavedOriginalIndex(this.sql, version, kind, built);
     if (inTransaction || !this.atomic) write();
     else this.atomic(write);
   }
