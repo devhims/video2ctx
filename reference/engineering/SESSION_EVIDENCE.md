@@ -123,6 +123,46 @@ handling and saved-reference publication. Opt-in Fireworks tests use synthetic
 transcripts and chart images with a delayed simulated save. These establish working
 inference and overlap, not a production latency improvement.
 
+## Original saved captions and comments
+
+`read_saved_evidence` reads an immutable session asset version directly. It supports literal-word search, caption time ranges and offset pagination. Each result contains up to 30 excerpts within a 12,000-character excerpt budget, with selection counts and a continuation offset. Captions retain their segment times. Comments retain author, comment ID and saved position, including replies and long comment tails. It never calls YouTube or an analyst.
+
+Prefix matching remains deferred. Queries match whole Unicode words with consistent apostrophe normalization and no stemming or semantic synonyms. Only comment bodies and author names are searchable; generated attribution labels cannot create hits. Search never combines different comments. Older blobs may omit metadata, warnings or replies; unknown completeness remains unknown.
+
+The `verify_saved_evidence` runtime skill guides source selection, focused reads, pagination, exact quotations and calculation premises. Saved-only runs remove retrieval/discovery tools and use a rejecting upstream provider beneath session reuse, including incidental metadata calls. Conflicting saved-only and refresh requirements across failed classifier attempts produce clarification. History-only routes do not expose original reads.
+
+Research initially exposes only the original reader while requested saved sources remain unread. This prevents repeated legacy searches from consuming the research window. After admitted originals are available, other context and analysis tools become available. Normal completion requires admitted original text from every requested available source. This source-level gate does not establish that every claim is supported. Ambiguous multi-video inventories do not invent a subject.
+
+Empty originals, withheld passages, permanently unavailable originals and an exhausted read budget allow completion with explicit unread-source gaps. Missing blobs, corrupt JSON or caption/comment structures, and duration-limit failures mark a still-owned original unavailable for the run. Transient storage errors, invalid input, cancellation and deletion races do not create that outcome. A filtered no-match result does not establish that the source is empty. When no passages were admitted, finalization uses the existing context-answer contract to report the limitation without inventing a citation or source fact. Terminal outcomes are persisted separately from admitted evidence and removed with their source. They never count as verified reads. The production finalizer permits an uncited context answer for a saved-verification route only when the same run has no admitted content, requested originals remain unread, and durable terminal outcomes or the exhausted read budget leave no pending original read. This exception rejects citations and source artifacts, permitting only research coverage with zero reviewed videos; ordinary route matching remains unchanged.
+
+The skill permits at most 16 original read attempts within a 120-second research window. SQLite reserves each attempt synchronously before I/O, including repeated and failed reads. Counters use run IDs, so rebuilt tools, concurrent calls and reconstructed stores share the same cap. The bookkeeping tables initialize automatically without a blob rewrite or manual migration. Starting a new run or deleting saved evidence prunes bookkeeping for terminal runs. Active and recoverable runs retain their read limits even when all assets are cleared. Account deletion removes both bookkeeping tables, including orphaned rows, after draining ongoing work. Existing model-cost, evidence-credit and persisted deadline limits remain authoritative. Ordinary text research keeps its 40-second window.
+
+Selected original passages remain verbatim in finalization even when an analyst summary exists for the same version. Packing includes identical immutable excerpts only once across overlapping pages, retaining each page's warnings and read coverage with explicit references to reused excerpts. Only excerpts actually included can satisfy those references. Saved verification uses a 250,000-character evidence budget for both inspection and topic research; ordinary topic research retains its existing budget. Pages that cannot fit are disclosed as omitted rather than silently shortened. Immutable excerpt IDs continue to resolve after reopening. Recovery joins original pages to that run's admitted-delivery ledger and rechecks ownership. It restores exactly the pages already charged for, without rereading assets, fetching providers or charging again. Undelivered pages, other runs' deliveries and deleted assets remain excluded. Normal evidence admission and per-run asset billing apply.
+
+```mermaid
+%%{init: {"themeVariables": {"sequenceNumberColor": "#ffffff", "actorBkg": "#eef2ff", "actorTextColor": "#111827", "signalColor": "#475569", "signalTextColor": "#475569"}}}%%
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Store as Saved sources
+    participant Finalizer
+    Agent->>Store: Reserve a read for this run
+    Store-->>Agent: Original passages or explicit gap
+    opt Resume after interruption
+        Store-->>Agent: Restore admitted passages and read budget
+    end
+    Agent->>Finalizer: Supply original evidence and remaining gaps
+    Finalizer->>Store: Persist answer with supporting citations
+```
+
+Existing source storage and billing remain in place; bounded original reads supplement shortened evidence.
+
+Naming and formatting preferences remain prompt guidance. There is no requirements-recording tool, `answerFormat` checkpoint, generated code-block field or blocking presentation validator in this PR. Supported partial fallback remains available. Citation validation and ordinary structured-answer validation still apply. Required-format enforcement and the numbered-point citation-placement change are deferred to draft PR #228.
+
+Deterministic replays of the saved Bicycle and JavaScript sessions run in `session-evidence.integration.test.ts`. They check that research reads originals before completing, that passages keep caption times rather than analyst window starts, and that comments 13 and 17 are searchable after reopening without provider access. Caption times come from whole-second saved previews, and fixture comment IDs are synthetic.
+
+The opt-in live Fireworks replays (Watercolor, Bicycle, JavaScript and Pothos) and their fixtures are not part of this PR, because they also score naming and formatting. They are preserved at commit 4951804 for the formatting work in draft #228.
+
 ## Flow
 
 1. Before classification, original user messages and completed answers are indexed into the SDK Session history. Existing run records remain authoritative for execution and dashboard restoration. Failed-run user messages are included; answers whose evidence was deleted are excluded. Backfill reads changed runs incrementally, and subsequent updates only rewrite changed text. The classifier receives eight completed conversation turns, a compact inventory with coverage and collection times, the indexed message count, and bounded derived memory. It never receives raw transcripts or images through the inventory.

@@ -1,20 +1,244 @@
+import { pendingOriginalSources, unreadOriginalSources } from '../src/agents/research/skills/verify-saved-evidence';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
 import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
-import type { EvidencePacket } from '../src/agents/contracts';
-import type { Comment, Transcript } from 'all-things-youtube';
+import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
+import type { Comment, CommentsPage, Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
 import { remember } from './fixtures/memory';
-import { createCapabilityProvider } from '../src/agents/research/capability-provider';
+import { createCapabilityProvider, savedOnlyProvider } from '../src/agents/research/capability-provider';
 import { sessionProvider } from '../src/agents/runtime/session-provider';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import { executeGetVideoTranscript } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { summarizeComment } from '../src/agents/providers/youtube/tools/get-video-comments';
+import { finalizationEvidenceForModel } from '../src/agents/runtime/model-evidence';
+import { bicycleHistory, gcnCaptions, officialCaptions, gcnAnalysis, officialAnalysis, javascriptComments } from './fixtures/saved-replays';
+import { readSavedEvidence, SAVED_EVIDENCE_READ_LIMIT } from '../src/agents/runtime/saved-evidence-reader';
+import { annaId, kelogId, watercolorTranscript, watercolorCorrection, watercolorFollowup } from './fixtures/watercolor-session';
+
+test('saved original comments include positions 13 and 17 and long tails, with bounded pagination', async () =>
+  within('original-comments', async (store, reopen) => {
+    const value = { videoId: id, replyContinuations: [], meta: transcript().meta,
+      comments: Array.from({ length: 20 }, (_, index) => ({ id: `comment-${index + 1}`,
+        text: index === 16 ? 'prefix '.repeat(400) + 'JavaScript closure explanation at the tail.' : `Original JavaScript comment ${index + 1}.`,
+        author: { name: `Viewer ${index + 1}`, thumbnails: [] }, isPinned: false, isHearted: false, replies: [] })) };
+    const saved = await store.retrieve('comments', 'comments', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const restored = reopen();
+    const first = await readSavedEvidence(restored, { assetVersion, offset: 12, limit: 1 });
+    expect(first.packets[0]!.excerpts[0]!.text).toContain('Original JavaScript comment 13.');
+    expect(first.packets[0]!.excerpts[0]!.text).toContain('Comment ID: comment-13');
+    expect(first.coverage.nextOffset).toBe(13);
+    const tail = await readSavedEvidence(restored, { assetVersion, query: 'closure explanation' });
+    expect(tail.packets[0]!.excerpts.map(excerpt => excerpt.text).join(' ')).toContain('JavaScript closure explanation at the tail.');
+    expect(tail.packets[0]!.excerpts[0]!.text).toContain('Author: Viewer 17');
+    expect(finalizationEvidenceForModel(tail.packets, 40_000).evidence[0]!.excerpts![0]!.text)
+      .toBe(tail.packets[0]!.excerpts[0]!.text);
+    let offset = 0;
+    const texts: string[] = [];
+    for (;;) {
+      const page = await readSavedEvidence(restored, { assetVersion, offset, limit: 30 });
+      expect(JSON.stringify(page.packets[0]!.excerpts).length).toBeLessThan(12_100);
+      texts.push(...page.packets[0]!.excerpts.map(excerpt => excerpt.text));
+      if (page.coverage.nextOffset === undefined) break;
+      expect(page.coverage.nextOffset).toBeGreaterThan(offset);
+      offset = page.coverage.nextOffset;
+    }
+    expect(texts).toHaveLength(21);
+    expect(texts.at(-1)).toContain('comment 20.');
+    await expect(readSavedEvidence(restored, { assetVersion, startMs: 1 })).rejects.toThrow('Timestamp filters');
+    await expect(readSavedEvidence(restored, { assetVersion, limit: 31 })).rejects.toThrow();
+    await expect(readSavedEvidence(restored, { assetVersion, query: '!!!' })).rejects.toThrow('at least one word');
+  }));
+
+test('saved reads enforce ownership, admission, cancellation and history-only tool scope', async () =>
+  within('original-read-boundaries', async (store) => {
+    await expect(readSavedEvidence(store, { assetVersion: 'foreign-version' })).rejects.toThrow('unavailable or deleted');
+    const saved = await store.retrieve('transcript', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
+    const input = { assetVersion: saved.assetVersions![0]! };
+    const options = { toolCallId: 'read', messages: [], context: {} };
+    const admit = vi.fn(() => []);
+    const controller = new AbortController();
+    const tools = await store.searchTools(admit, controller.signal);
+    const execute = tools.read_saved_evidence!.execute!;
+    expect(await execute(input, options)).toMatchObject({ packets: [], withheld: true });
+    expect(admit).toHaveBeenCalledWith(expect.any(Array), 'read_saved_evidence');
+    controller.abort();
+    await expect(execute(input, options)).rejects.toThrow();
+    const history = await store.searchTools(admit, new AbortController().signal, { evidence: false });
+    expect(history.read_saved_evidence).toBeUndefined();
+    const empty = await readSavedEvidence(store, { ...input, query: 'absent phrase' });
+    expect(empty.coverage).toMatchObject({ selectedExcerpts: 0, returnedExcerpts: 0 });
+    expect(empty.packets[0]!.excerpts).toEqual([]);
+  }));
+
+test('long original captions page completely without a non-advancing offset', async () =>
+  within('original-oversized-segment', async store => {
+    const value = transcript();
+    value.segments = [{ ...value.segments[0]!, text: 'x'.repeat(12_001) }];
+    const saved = await store.retrieve('transcript', 'transcript', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const first = await readSavedEvidence(store, { assetVersion: saved.assetVersions![0]! });
+    expect(first.coverage.nextOffset).toBeGreaterThan(0);
+    const second = await readSavedEvidence(store, { assetVersion: saved.assetVersions![0]!, offset: first.coverage.nextOffset });
+    expect(second.coverage.nextOffset).toBeUndefined();
+    expect([...first.packets[0]!.excerpts, ...second.packets[0]!.excerpts].map(excerpt => excerpt.text).join(''))
+      .toBe(value.segments[0]!.text);
+  }));
+
+test('original reads retain nested replies, fence interrupted reads and bound repeated calls', async () =>
+  within('original-read-lifecycle', async (store) => {
+    const reply = { id: 'reply-1', text: 'A saved reply explaining closures.', author: { name: 'Reply author', thumbnails: [] },
+      isPinned: false, isHearted: false, replies: [] };
+    const saved = await store.retrieve('comments', 'comments', id, false,
+      async () => ({ value: { videoId: id, replyContinuations: [], meta: transcript().meta,
+        comments: [{ ...reply, id: 'parent', text: 'The parent comment.', replies: [reply] }] }, cacheStatus: 'miss' }), () => ({}));
+    const input = { assetVersion: saved.assetVersions![0]!, query: 'closures' };
+    const result = await readSavedEvidence(store, input);
+    expect(result.packets[0]!.excerpts[0]!.text).toContain('Comment ID: reply-1');
+    expect(result.packets[0]!.excerpts[0]!.text).toContain('Saved position: 1.1');
+    const controller = new AbortController();
+    const read = store.readAsset.bind(store);
+    const write = vi.spyOn(store, 'savePacket');
+    const interrupted = vi.spyOn(store, 'readAsset').mockImplementation(async version => {
+      const asset = await read(version);
+      controller.abort();
+      return asset;
+    });
+    await expect(readSavedEvidence(store, input, controller.signal)).rejects.toThrow();
+    expect(write).not.toHaveBeenCalled();
+    interrupted.mockRestore();
+    const tools = await store.searchTools(() => undefined, new AbortController().signal);
+    for (let index = 0; index < SAVED_EVIDENCE_READ_LIMIT; index++) await tools.read_saved_evidence!.execute!(input,
+      { toolCallId: `read-${index}`, messages: [], context: {} });
+    await expect(tools.read_saved_evidence!.execute!(input,
+      { toolCallId: 'over-limit', messages: [], context: {} })).rejects.toThrow('read limit');
+    await store.delete(input.assetVersion);
+    await expect(readSavedEvidence(store, input)).rejects.toThrow('unavailable or deleted');
+  }));
+
+test.each([false, true])('exact watercolor follow-up retains original passages after reopening (interrupted: %s)', async interrupted =>
+  within(`watercolor-exact-followup-${interrupted}`, async (store, reopen) => {
+    const { MockLanguageModelV4 } = await import('ai/test');
+    const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+    const versions = new Map<string, string>();
+    for (const videoId of [annaId, kelogId]) {
+      const raw = await store.retrieve(`captions:${videoId}`, 'transcript', videoId, false,
+        async () => ({ value: watercolorTranscript(videoId), cacheStatus: 'miss' }), value => ({ language: 'en', segments: value.segments.length, endMs: value.segments.at(-1)?.endMs }));
+      versions.set(videoId, raw.assetVersions![0]!);
+    }
+    const restored = reopen();
+    const reads = [
+      [annaId, { offset: 0, limit: 1 }],
+      [kelogId, { offset: 0, limit: 1 }],
+      [annaId, { startMs: 349_000, endMs: 398_000, limit: 30 }],
+      [annaId, { query: 'gravity', limit: 30 }],
+      [annaId, { startMs: 423_000, endMs: 440_000 }],
+      [kelogId, { query: 'wet not beady' }],
+      [kelogId, { query: 'nearly dry' }],
+      [annaId, { query: 'arches cold pressed' }],
+      [annaId, { query: 'quinacridone red' }],
+      [annaId, { query: 'alizarin crimson' }],
+      [annaId, { query: 'one half minutes' }],
+      [annaId, { query: 'seven half minute' }],
+    ] as const;
+    const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 10, text: 10, reasoning: 0 } };
+    let step = 0;
+    const core = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(call.tools?.map(tool => tool.name)).not.toContain('get_video_transcript');
+      const read = reads[step++];
+      if (!read && interrupted) throw new Error('Research phase timeout.');
+      return { content: [{ type: 'tool-call', toolCallId: `read-${step}`,
+        toolName: read ? 'read_saved_evidence' : 'complete_research',
+        input: JSON.stringify(read ? { assetVersion: versions.get(read[0]), ...read[1] } : {}) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    let finalizerCalled = false;
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      finalizerCalled = true;
+      const supplied = JSON.stringify(call.prompt);
+      for (const phrase of ['use watercolor medium my favorite is', 'of the exercise i tilted my page so the',
+        'enough that it still looks wet', 'but not beady once', 'make sure the brush is damp or nearly',
+        'dry you can\'t have it soaking wet', 'arches cold pressed', 'quinacridone red', 'alizarin crimson',
+        'seven and a half minute mark', 'so one and a half minutes', 'Willow']) expect(supplied).toContain(phrase);
+      // A scripted model checks transport only. It does not prove a live model follows the prompt.
+      const ref = (videoId: string, time: number) => restored.evidence().flatMap(packet => packet.excerpts)
+        .find(excerpt => excerpt.sourceId === `youtube:${videoId}:transcript` && excerpt.startMs === time * 1000)!.id;
+      return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [],
+        blocks: [
+          { text: '1. Willow, kelogsloops: “enough that it still looks wet” and “but not beady”. For lifting: “make sure the brush is damp or nearly” / “dry you can\'t have it soaking wet”.',
+            evidenceIds: [ref(kelogId, 297), ref(kelogId, 299), ref(kelogId, 496), ref(kelogId, 498)] },
+          { text: '2. Anna: “use watercolor medium”. Smaller areas dry faster. For gravity: “i tilted my page” / “top part was drying much faster”; the bottom stays wet longer.',
+            evidenceIds: [ref(annaId, 378), ref(annaId, 352), ref(annaId, 354), ref(annaId, 423), ref(annaId, 426), ref(annaId, 434)] },
+          { text: '3. Anna uses Arches cold pressed paper, quinacridone red first and alizarin crimson for veins. The elapsed experiment interval is 7.5 minus 1.5 = 6 minutes, not a video timestamp.',
+            evidenceIds: [ref(annaId, 80), ref(annaId, 171), ref(annaId, 304), ref(annaId, 121), ref(annaId, 275)] },
+        ] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    const freshFetch = vi.fn(async (): Promise<never> => { throw new Error('Fresh YouTube retrieval prohibited'); });
+    const ctx = context(restored, { transcript: freshFetch, video: freshFetch, search: freshFetch } as unknown as YouTubeAgentProvider);
+    ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId,
+      conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'test', creditsRemaining: 100 }, input, restored.evidence(), 0));
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, message: watercolorFollowup,
+      conversationHistory: [{ userMessageId: 'correction', agentMessageId: 'previous-answer', user: watercolorCorrection, assistant: 'I cannot supply exact quotations because only analyst findings were supplied.', resourceIds: [annaId, kelogId] }],
+      decision: { route: 'topic_research', comparisonVideoIds: [annaId, kelogId], savedOnly: true, skill: 'verify_saved_evidence',
+        useStoryboard: false, numberedItemCount: 3 }, context: ctx });
+    expect(step).toBe(reads.length + 1);
+    expect(finalizerCalled).toBe(true);
+    expect(freshFetch).not.toHaveBeenCalled();
+    const answer: ReturnType<typeof buildAgentTurnResult> = await vi.mocked(ctx.finalize).mock.results[0]!.value;
+    expect(answer.citations).toContainEqual(expect.objectContaining({ videoId: annaId, startMs: 304_000,
+      excerpt: 'alizarin crimson and start working on' }));
+    const savedAgain = reopen();
+    const evidence = savedAgain.evidence().flatMap(packet => packet.excerpts);
+    for (const [videoId, text, startMs] of [
+      [annaId, 'use watercolor medium my favorite is', 378_000],
+      [annaId, 'of the exercise i tilted my page so the', 423_000],
+      [kelogId, 'you\'ll want the paper to be just damp', 295_000],
+      [kelogId, 'make sure the brush is damp or nearly', 496_000],
+      [annaId, 'alizarin crimson and start working on', 304_000],
+    ] as const) {
+      const excerpt = evidence.find(item => item.text === text)!;
+      expect(excerpt).toMatchObject({ sourceId: `youtube:${videoId}:transcript`, startMs });
+      expect(savedAgain.evidenceForCitations([excerpt.id])[0]!.excerpts).toContainEqual(excerpt);
+    }
+  }));
+
+test('watercolor follow-up reads original medium captions with precise citations after reconstruction', async () =>
+  within('watercolor-original-captions', async (store, reopen) => {
+    const value = { ...transcript(), videoId: 'LxyZ4a_YzSQ', segments: [
+      { text: 'section number two if you want to extend', startMs: 374_000, endMs: 376_000 },
+      { text: 'the drying time and improve pigment flow', startMs: 376_000, endMs: 378_000 },
+      { text: 'use watercolor medium my favorite is', startMs: 378_000, endMs: 381_000 },
+      { text: 'synthetic ox gold from the brand core', startMs: 381_000, endMs: 384_000 },
+    ] };
+    const saved = await store.retrieve('watercolor', 'transcript', value.videoId, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({ language: 'en', endMs: 384_000 }));
+    const restored = reopen();
+    const received: EvidencePacket[] = [];
+    const tools = await restored.searchTools(packets => { received.push(...packets); }, new AbortController().signal);
+    expect(tools.read_saved_evidence, 'Exact quotation requests need an original-asset reader').toBeDefined();
+    const result = await tools.read_saved_evidence!.execute!(
+      { assetVersion: saved.assetVersions![0]!, query: 'watercolor medium' },
+      { toolCallId: 'watercolor-read', messages: [], context: {} },
+    );
+    expect(JSON.stringify(result)).toContain('use watercolor medium my favorite is');
+    const final = finalizationEvidenceForModel(received, 40_000);
+    const quote = final.evidence.flatMap(packet => packet.excerpts ?? [])
+      .find(excerpt => excerpt.text === 'use watercolor medium my favorite is');
+    expect(quote).toMatchObject({ startMs: 378_000, endMs: 381_000 });
+    expect(restored.evidenceForCitations([final.fullIds.get(quote!.id)!])[0]?.excerpts)
+      .toContainEqual(expect.objectContaining({ text: quote!.text, startMs: 378_000 }));
+  }));
 
 function visualGate() {
   let release!: () => void;
@@ -614,7 +838,7 @@ test('searchable context uses Session tools, follows memory corrections and remo
     );
     const received: EvidencePacket[] = [];
     const tools = await store.searchTools((packets) => { received.push(...packets); }, new AbortController().signal);
-    expect(Object.keys(tools).sort()).toEqual(['read_session_history', 'search_context']);
+    expect(Object.keys(tools).sort()).toEqual(['read_saved_evidence', 'read_session_history', 'search_context']);
     const options = { toolCallId: 'search', messages: [], context: {} };
     const run = async (label: string, query: string) =>
       JSON.parse(String(await tools.search_context!.execute!({ label, query }, options)));
@@ -1445,3 +1669,277 @@ test('failed preview cleanup stays queued across store reconstruction and remove
     expect(await env.RESEARCH.head(retained)).not.toBeNull();
     expect(sql.exec('SELECT * FROM session_blob_deletions').toArray()).toEqual([]);
   }));
+
+
+test('saved read attempts survive reopening, failures and concurrent tool instances', async () =>
+  within('original-durable-budget', async (store, reopen) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
+    const input = { assetVersion: raw.assetVersions![0]! };
+    const options = { toolCallId: 'repeated-call', messages: [], context: {} };
+    const make = async (s: SessionEvidenceStore, runId = 'same-run') =>
+      (await s.searchTools(() => undefined, new AbortController().signal, { runId })).read_saved_evidence!.execute!;
+    const first = await make(store);
+    await expect(first({ assetVersion: 'missing' }, options)).rejects.toThrow('unavailable');
+    for (let index = 0; index < 14; index++) await first(input, options);
+    const restored = reopen();
+    const second = await make(restored);
+    const third = await make(reopen());
+    const attempts = await Promise.allSettled([second(input, options), third(input, options)]);
+    expect(attempts.map(result => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(restored.savedEvidenceReadState('same-run').attempts).toBe(16);
+    await expect((await make(reopen()))(input, options)).rejects.toThrow('read limit');
+    await expect((await make(reopen(), 'next-run'))(input, options)).resolves.toMatchObject({ remainingReads: 15 });
+    await store.delete(input.assetVersion);
+    // Deletion must not replenish a run's attempt budget.
+    await expect(first(input, options)).rejects.toThrow('read limit');
+  }));
+
+test.each(['empty', 'withheld', 'no-match'] as const)('saved %s read has honest completion state across reopening', async mode =>
+  within(`original-outcome-${mode}`, async (store, reopen) => {
+    const value = transcript();
+    if (mode === 'empty') value.segments = [];
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    const decision = { route: 'inspect_video' as const, videoId: id, savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
+    const tools = await store.searchTools(packets => mode === 'withheld' ? [] : packets,
+      new AbortController().signal, { runId: 'outcome-run' });
+    const result = await tools.read_saved_evidence!.execute!({ assetVersion, ...(mode === 'no-match' ? { query: 'absentliteralword' } : {}) },
+      { toolCallId: 'read', messages: [], context: {} }) as { packets: EvidencePacket[] };
+    const restored = reopen();
+    const state = restored.savedEvidenceReadState('outcome-run');
+    expect(unreadOriginalSources(decision, restored.brief(), result.packets)).toEqual([id]);
+    expect(pendingOriginalSources(decision, restored.brief(), result.packets, state)).toEqual(mode === 'no-match' ? [id] : []);
+    expect(state.outcomes).toEqual(mode === 'no-match' ? [] : [{ assetVersion, reason: mode }]);
+    // Another nonempty original for this video must still be attempted.
+    if (mode !== 'no-match') {
+      await restored.retrieve('other-captions', 'transcript', id, false,
+        async () => ({ value: { ...transcript(), segments: [{ ...transcript().segments[0]!, text: 'A different original source.' }] }, cacheStatus: 'miss' }), () => ({}));
+      expect(pendingOriginalSources(decision, restored.brief(), result.packets, state)).toEqual([id]);
+    }
+    expect(pendingOriginalSources(decision, restored.brief(), [], { attempts: 16, outcomes: [] })).toEqual([]);
+    await restored.delete(assetVersion);
+    expect(reopen().savedEvidenceReadState('outcome-run').outcomes).toEqual([]);
+  }));
+
+test.each(['empty', 'withheld', 'unavailable'] as const)('research can complete with an explicit %s gap after recovery', async reason =>
+  within(`original-gap-finalization-${reason}`, async (store, reopen) => {
+    const { MockLanguageModelV4 } = await import('ai/test');
+    const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+    const value = transcript();
+    if (reason === 'empty') value.segments = [];
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    if (reason === 'unavailable') {
+      vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new SyntaxError('corrupt saved JSON'));
+    }
+    const runId = crypto.randomUUID();
+    const tools = await store.searchTools(packets => reason === 'withheld' ? [] : packets,
+      new AbortController().signal, { runId });
+    await tools.read_saved_evidence!.execute!({ assetVersion: raw.assetVersions![0]! },
+      { toolCallId: 'original', messages: [], context: {} });
+    const restored = reopen();
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const core = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(call.tools?.map(tool => tool.name)).toContain('complete_research');
+      return { content: [{ type: 'tool-call', toolCallId: 'complete', toolName: 'complete_research', input: '{}' }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      const supplied = JSON.stringify(call.prompt);
+      expect(supplied).toContain('saved_original_not_read');
+      expect(supplied).toContain(reason);
+      expect(supplied).not.toContain('Hello world');
+      return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'low', warnings: [],
+        blocks: [{ text: 'The saved original could not supply the requested quotation.', evidenceIds: [] }] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    const freshFetch = vi.fn(async (): Promise<never> => { throw new Error('Fresh retrieval prohibited'); });
+    const ctx = context(restored, { transcript: freshFetch, video: freshFetch, search: freshFetch } as unknown as YouTubeAgentProvider);
+    ctx.runId = runId;
+    ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId, conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 0 }, input, [], 0));
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx,
+      message: 'Quote the saved captions without fresh retrieval.',
+      decision: { route: 'inspect_video', videoId: id, savedOnly: true, skill: 'verify_saved_evidence', useStoryboard: false },
+      inheritedResolved: true, recoveredEvidence: [],
+    });
+    expect(core.doGenerateCalls).toHaveLength(1);
+    expect(ctx.finalize).toHaveBeenCalledOnce();
+    expect(freshFetch).not.toHaveBeenCalled();
+  }));
+
+
+test.each(['missing', 'json', 'shape', 'duration'] as const)('permanently unavailable %s original releases the gate across recovery', async mode =>
+  within(`original-unavailable-${mode}`, async (store, reopen, sql) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({ endMs: 5600 }));
+    const assetVersion = raw.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
+    if (mode === 'missing') await env.RESEARCH.delete(key);
+    if (mode === 'json') await env.RESEARCH.put(key, '{invalid json');
+    if (mode === 'shape') await env.RESEARCH.put(key, JSON.stringify({ segments: 'broken' }));
+    const reading = mode === 'duration'
+      ? new SessionEvidenceStore(sql, env.RESEARCH, `test-session/original-unavailable-${mode}/`, undefined, undefined, undefined, 1)
+      : store;
+    const tools = await reading.searchTools(packets => packets, new AbortController().signal, { runId: 'unavailable-run' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'read', messages: [], context: {} }))
+      .resolves.toMatchObject({ packets: [], unavailable: true, remainingReads: 15 });
+    const restored = reopen();
+    const state = restored.savedEvidenceReadState('unavailable-run');
+    expect(state).toEqual({ attempts: 1, outcomes: [{ assetVersion, reason: 'unavailable' }] });
+    const decision = { route: 'inspect_video' as const, videoId: id, savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
+    expect(pendingOriginalSources(decision, restored.brief(), [], state)).toEqual([]);
+    expect(unreadOriginalSources(decision, restored.brief(), [])).toEqual([id]);
+  }));
+
+
+test.each(['transient', 'invalid-query', 'invalid-range', 'cancelled', 'deleted'] as const)(
+  '%s read does not become a permanent source failure', async mode =>
+  within(`original-nonterminal-${mode}`, async (store, reopen) => {
+    const raw = await store.retrieve('captions', 'transcript', id, false,
+      async () => ({ value: transcript(), cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    const controller = new AbortController();
+    if (mode === 'transient') vi.spyOn(store, 'readAsset').mockRejectedValueOnce(new Error('Temporary R2 failure'));
+    if (mode === 'cancelled' || mode === 'deleted') vi.spyOn(store, 'readAsset').mockImplementationOnce(async () => {
+      if (mode === 'cancelled') controller.abort(new Error('Cancelled'));
+      else await store.delete(assetVersion);
+      throw new SyntaxError('Late decode failure');
+    });
+    const tools = await store.searchTools(packets => packets, controller.signal, { runId: 'nonterminal' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion,
+      ...(mode === 'invalid-query' ? { query: '!!!' } : {}),
+      ...(mode === 'invalid-range' ? { startMs: 20, endMs: 10 } : {}),
+    }, { toolCallId: 'read', messages: [], context: {} })).rejects.toThrow();
+    expect(reopen().savedEvidenceReadState('nonterminal')).toEqual({ attempts: 1, outcomes: [] });
+    if (mode === 'transient') {
+      const recovered = await reopen().searchTools(packets => packets, new AbortController().signal, { runId: 'nonterminal' });
+      await expect(recovered.read_saved_evidence!.execute!({ assetVersion }, { toolCallId: 'retry', messages: [], context: {} }))
+        .resolves.toMatchObject({ coverage: { returnedExcerpts: 1 }, remainingReads: 14 });
+    }
+  }));
+
+
+test('invalid comment time filters never mark a corrupt original unavailable', async () =>
+  within('original-comment-invalid-filter', async (store, reopen, sql) => {
+    const value = { comments: [{ id: 'comment', text: 'saved comment', author: { name: 'Alice' } }] };
+    const raw = await store.retrieve('comments', 'comments', id, false,
+      async () => ({ value, cacheStatus: 'miss' }), () => ({}));
+    const assetVersion = raw.assetVersions![0]!;
+    const key = sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key;
+    await env.RESEARCH.put(key, '{broken');
+    const tools = await store.searchTools(packets => packets, new AbortController().signal, { runId: 'invalid-filter' });
+    await expect(tools.read_saved_evidence!.execute!({ assetVersion, startMs: 10 }, { toolCallId: 'read', messages: [], context: {} }))
+      .rejects.toThrow('Timestamp filters');
+    expect(reopen().savedEvidenceReadState('invalid-filter')).toEqual({ attempts: 1, outcomes: [] });
+  }));
+
+// Deterministic replays of saved sessions: original reads, caption times and provider-free search.
+const gcnId = 'YhOT5GYUZJw', officialId = 'Ml9Ojbl2uaw', jsId = 'DC471a9qrU4';
+const replayMeta = { source: 'allthingsyoutube' as const, fetchedAt: '2026-10-26T00:00:00Z', partial: false, warnings: [] };
+// Captions and comments come from saved UI previews, not a fresh provider fetch.
+// Preview timestamps have whole-second precision; comment IDs below are fixture IDs.
+function replayTranscript(videoId: string, values: (string | number)[][]): Transcript {
+  const rows = values as [number, string][];
+  return { videoId, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'asr', isTranslatable: true, isDefault: true },
+    segments: rows.map(([seconds, text], index) => ({ text, startMs: seconds * 1000,
+      endMs: (rows[index + 1]?.[0] ?? seconds + 2) * 1000,
+      durationMs: ((rows[index + 1]?.[0] ?? seconds + 2) - seconds) * 1000 })),
+    text: rows.map(row => row[1]).join(' '), meta: replayMeta };
+}
+function replayComments(): CommentsPage {
+  return { videoId: jsId, meta: replayMeta, totalCount: 213, continuation: 'fixture-more-remote-comments',
+    comments: javascriptComments.map(row => ({
+      id: `saved-position-${row.position}`, text: row.text, author: { name: row.author, thumbnails: [] },
+      isPinned: false, isHearted: false, replies: [],
+    })) };
+}
+async function seedReplay(store: SessionEvidenceStore, name: string) {
+  const prior: EvidencePacket[] = [];
+  if (name.startsWith('bicycle')) {
+    for (const [videoId, rows, analysis] of [[gcnId, gcnCaptions, gcnAnalysis], [officialId, officialCaptions, officialAnalysis]] as const) {
+      const saved = await store.retrieve(`captions:${videoId}`, 'transcript', videoId, false,
+        async () => ({ value: replayTranscript(videoId, rows), cacheStatus: 'miss' }), value => ({ segments: value.segments.length }));
+      const packet = evidencePacketSchema.parse({ ...analysis, assetVersions: saved.assetVersions });
+      store.savePacket(packet);
+      prior.push(packet);
+    }
+  } else {
+    await store.retrieve('comments', 'comments', jsId, false,
+      async () => ({ value: replayComments(), cacheStatus: 'miss' }), value => ({ comments: value.comments.length, complete: false }));
+  }
+  return prior;
+}
+
+test('prior transcript analyses cannot exhaust a saved-original verification run before it reads', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('bicycle-prior-budget'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/bicycle-prior-budget/');
+    const prior = await seedReplay(store, 'bicycle');
+    const versions = store.brief().assets.map(asset => asset.version);
+    let step = 0;
+    const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 10, text: 10, reasoning: 0 } };
+    const core = new MockLanguageModelV4({ doGenerate: async call => {
+      const current = step++;
+      if (current < 2) expect(call.tools?.map(tool => tool.name)).toEqual(['read_saved_evidence']);
+      else expect(call.tools?.map(tool => tool.name)).toContain('search_context');
+      const toolName = current < 2 ? 'read_saved_evidence' : 'complete_research';
+      return { content: [{ type: 'tool-call' as const, toolCallId: `step-${current}`, toolName,
+        input: JSON.stringify(current < 2 ? { assetVersion: versions[current], limit: 1 } : {}) }],
+        finishReason: { unified: 'tool-calls' as const, raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ confidence: 'high', warnings: [],
+        blocks: [{ text: 'Rowan source passages recovered.', evidenceIds: store.evidence().filter(packet => packet.packetId.startsWith('session:original:'))
+          .flatMap(packet => packet.excerpts.map(excerpt => excerpt.id)) }] }) }],
+      finishReason: { unified: 'stop' as const, raw: 'stop' }, usage, warnings: [],
+    }) });
+    const finish = vi.fn(async (_id, input) => buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
+    await runResearchAgentWithModel({ message: bicycleHistory[3]!.user,
+      conversationHistory: bicycleHistory.slice(0, 3).map((turn, index) => ({ ...turn,
+        userMessageId: `u${index}`, agentMessageId: `a${index}`, resourceIds: [gcnId, officialId] })),
+      decision: { route: 'topic_research', comparisonVideoIds: [gcnId, officialId], researchVideoCount: 2,
+        savedOnly: true, skill: 'verify_saved_evidence', useStoryboard: false },
+      recoveredEvidence: prior, inheritedResolved: true, model: core, finalizationModel: finalizer,
+      context: { runId: crypto.randomUUID(), signal: new AbortController().signal, provider: savedOnlyProvider(), session: store,
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: async execution => execution.execute(), finalize: finish } });
+    expect(step).toBe(3);
+    expect(finish).toHaveBeenCalledOnce();
+  });
+});
+
+test('real saved JavaScript comments 13 and 17 are searchable after reopening, without provider access', async () => {
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('real-js-comments'), async (_instance, state) => {
+    const reopen = () => new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/real-js-comments/');
+    await seedReplay(reopen(), 'javascript');
+    const store = reopen(), assetVersion = store.brief().assets[0]!.version;
+    for (const [query, position] of [['Promise.all', 17], ['imperative declarative', 13]] as const) {
+      const result = await readSavedEvidence(store, { assetVersion, query });
+      const text = result.packets.flatMap(packet => packet.excerpts).map(excerpt => excerpt.text).join('\n');
+      expect(text).toContain(javascriptComments[position - 1]!.text);
+      expect(text).toContain(javascriptComments[position - 1]!.author);
+      expect(result.coverage.totalExcerpts).toBe(20);
+      expect(result.coverage.sourceContinuationAvailable).toBe(true);
+    }
+  });
+});
+
+test('real saved Bicycle passages retain caption times instead of analyst window starts', async () => {
+  await runInDurableObject(env.AGENT_RUNTIME.getByName('real-bicycle-passages'), async (_instance, state) => {
+    const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'test-replay/real-bicycle-passages/');
+    await seedReplay(store, 'bicycle');
+    for (const [videoId, query, time] of [[officialId, '13 kilometer', 167_000], [officialId, 'gradient 8', 170_000],
+      [gcnId, 'electronic systems', 152_000], [gcnId, 'keep under tension', 173_000]] as const) {
+      const assetVersion = store.brief().assets.find(asset => asset.videoId === videoId)!.version;
+      const result = await readSavedEvidence(store, { assetVersion, query });
+      expect(result.packets[0]!.excerpts.some(excerpt => excerpt.startMs === time)).toBe(true);
+    }
+  });
+});

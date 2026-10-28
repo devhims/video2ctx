@@ -406,6 +406,8 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
     await instance.getSessionAssets(conversationId,userId);
     (instance as unknown as {syncSessionHistory():void}).syncSessionHistory();
     instance.sql`INSERT INTO session_run_generations VALUES (${runId},0)`;
+    instance.sql`INSERT INTO session_original_reads VALUES (${runId}, 3)`;
+    instance.sql`INSERT INTO session_original_read_outcomes VALUES (${runId}, 'orphan-version', 'unavailable')`;
   });
   await runtime.deleteAccountData();
   expect(await runtime.getRun(runId)).toBeNull();
@@ -418,7 +420,7 @@ test('account deletion clears runtime data and rejects delayed admissions', asyn
   });
   await runtime.deleteAccountData();
   await runInDurableObject(runtime, async (_instance, state) => {
-    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
+    for (const table of ['agent_runs', 'agent_tool_calls', 'agent_evidence_packets', 'agent_model_usage', 'agent_memory_jobs', 'agent_events', 'cf_agents_fibers', 'session_run_generations', 'session_original_reads', 'session_original_read_outcomes', 'session_assets', 'session_memories', 'session_memory_writes', 'session_context_fts', 'session_search_assets', 'session_history_index', 'session_history_runs', 'assistant_messages', 'assistant_fts']) {
       expect(state.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).toArray()[0]).toMatchObject({ count: 0 });
     }
   });
@@ -2324,3 +2326,210 @@ test('progress restores the latest persisted tool activity and keeps interruptio
   await runtime.reconcileRun(runId);
   expect(await runtime.getRunProgress(runId)).toMatchObject({ tools: [{ activity: 'analyzing', status: 'interrupted' }] });
 });
+
+test('resumed saved verification restores admitted originals without rereading or charging again', async () => {
+  const { runtime, runId, conversationId, userId } = await seed('saved-verification-recovery', 'running');
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { buildAgentTurnResult } = await import('../src/agents/finalizer');
+  const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } };
+  const decision = { route: 'inspect_video' as const, videoId: lineageVideo, savedOnly: true,
+    skill: 'verify_saved_evidence' as const, useStoryboard: false };
+  const message = 'Juniper, exactly three numbered points, no introduction or closing section, and fenced code. Quote the saved original.';
+  type Methods = {
+    sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+    deliverEvidence(id: string, source: string, packets: EvidencePacket[]): import('../src/agents/runtime/evidence-billing').EvidenceDelivery;
+    persistResearchContext(id: string, context: import('../src/agents/runtime/context-handoff').ResearchContext): void;
+    readEvidencePackets(id: string): EvidencePacket[];
+    evidenceLedger: { committed(id: string): number };
+  };
+  let charged = 0, version = '', originalId = '';
+  await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as Methods;
+    const store = internal.sessionStore;
+    const saved = await store.retrieve(`transcript:${lineageVideo}:default`, 'transcript', lineageVideo, false, async () => ({ value: {
+      videoId: lineageVideo, text: 'const x = 1;', segments: [{ text: 'const x = 1;', startMs: 75000, endMs: 76000, durationMs: 1000 }],
+      meta: { source: 'allthingsyoutube', fetchedAt: '2026-10-26T00:00:00Z', partial: false, warnings: [] },
+    }, cacheStatus: 'miss' as const }), () => ({ complete: true }));
+    version = saved.assetVersions![0]!;
+    let step = 0;
+    const core = new MockLanguageModelV4({ doGenerate: async () => {
+      const index = step++;
+      return { content: [{ type: 'tool-call', toolCallId: `recovery-${index}`,
+        toolName: ['read_saved_evidence', 'complete_research'][index]!,
+        input: JSON.stringify([{ assetVersion: version }, {}][index]) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    await expect(runResearchAgentWithModel({ message, decision, model: core,
+      finalizationModel: new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Should stop before finalizer'); } }),
+      persistResearchContext: context => internal.persistResearchContext(runId, context),
+      onFinalizing: async deadline => {
+        instance.sql`UPDATE agent_runs SET finalization_deadline_at=${deadline} WHERE id=${runId}`;
+        throw new Error('Simulated interruption at finalization boundary');
+      },
+      context: { runId, signal: new AbortController().signal, provider: {} as any, session: store,
+        transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: async execution => execution.execute(),
+        deliverEvidence: (packets, source) => internal.deliverEvidence(runId, source, packets),
+        finalize: async () => { throw new Error('Should not persist an answer before recovery'); } },
+    })).rejects.toThrow();
+    const original = store.evidence().find(packet => packet.packetId.startsWith('session:original:'))!;
+    originalId = original.excerpts[0]!.id;
+    const { readSavedEvidence } = await import('../src/agents/runtime/saved-evidence-reader');
+    // A page saved before admission must not leak into finalization recovery.
+    const undelivered = await readSavedEvidence(store, { assetVersion: version, query: 'const' });
+    expect(undelivered.packets[0]!.packetId).not.toBe(original.packetId);
+    charged = internal.evidenceLedger.committed(runId);
+    expect(charged).toBeGreaterThan(0);
+    expect.soft(internal.readEvidencePackets(runId).map(packet => packet.packetId)).toContain(original.packetId);
+
+  });
+  // Reconstruct solely from persisted state in another object access. This models
+  // the finalization resume shortcut, not a same-invocation timeout handoff.
+  await runInDurableObject(runtime, async instance => {
+    const internal = instance as unknown as Methods;
+    const evidence = internal.readEvidencePackets(runId);
+    expect(evidence).toHaveLength(1);
+    const row = instance.sql<{ research_context_json: string; finalization_deadline_at: number }>`SELECT research_context_json,finalization_deadline_at FROM agent_runs WHERE id=${runId}`[0]!;
+    const reread = vi.spyOn(internal.sessionStore, 'readAsset');
+    const core = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('Research must not restart'); } });
+    let attempts = 0;
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      expect(JSON.stringify(call.prompt)).toContain('const x = 1;');
+      attempts++;
+      return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'high', warnings: [],
+        blocks: [{ text: 'Cedar: the saved caption reads const x = 1;', evidenceIds: [originalId] }] }) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    const finish = vi.fn(async (_id, input) => buildAgentTurnResult({ runId, conversationId,
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId, creditsRemaining: 100 }, input, evidence, charged));
+    await runResearchAgentWithModel({ message, decision, model: core, finalizationModel: finalizer,
+      finalizationDeadlineAt: row.finalization_deadline_at, recoveredResearchContext: row.research_context_json ? JSON.parse(row.research_context_json) : undefined,
+      recoveredEvidence: evidence, inheritedResolved: true,
+      context: { runId, signal: new AbortController().signal, provider: {} as any, session: internal.sessionStore,
+        transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: async execution => execution.execute(), finalize: finish },
+    });
+    expect(attempts).toBe(1);
+    expect(core.doGenerateCalls).toHaveLength(0);
+    expect(reread).not.toHaveBeenCalled(); reread.mockRestore();
+    expect(finish).toHaveBeenCalledOnce();
+    expect(finish.mock.calls[0]![1].answer).toContain('const x = 1;');
+    expect(internal.evidenceLedger.committed(runId)).toBe(charged);
+    expect((await finish.mock.results[0]!.value).citations).toContainEqual(expect.objectContaining({ id: originalId, startMs: 75000 }));
+    // Neither an undelivered page nor another run's delivery is recoverable here.
+    expect(internal.readEvidencePackets('unrelated-run')).toEqual([]);
+    await instance.deleteSessionAssets(conversationId, userId, version);
+    expect(internal.readEvidencePackets(runId)).toEqual([]);
+  });
+});
+
+
+test('clearing saved evidence prunes terminal read bookkeeping without replenishing active limits', async () => {
+  const { runtime, userId, runId, conversationId } = await seed('original-read-retention', 'running');
+  await runInDurableObject(runtime, async instance => {
+    await instance.getSessionAssets(conversationId, userId);
+    instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,user_message_id,agent_message_id,
+      turn_ordinal,message,status,phase,credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
+      VALUES ('terminal',${userId},${conversationId},'old-user','old-agent',0,'old prompt','completed','completed',5000,0,0,0)`;
+    instance.sql`INSERT INTO session_original_reads VALUES (${runId},16), ('terminal',4)`;
+    instance.sql`INSERT INTO session_original_read_outcomes VALUES ('terminal','orphan','unavailable')`;
+  });
+  await runtime.deleteSessionAssets(conversationId, userId);
+  await runInDurableObject(runtime, async instance => {
+    expect(instance.sql`SELECT * FROM session_original_reads`).toEqual([{ run_id: runId, attempts: 16 }]);
+    expect(instance.sql`SELECT * FROM session_original_read_outcomes`).toEqual([]);
+    const internal = instance as unknown as { sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore };
+    expect(() => internal.sessionStore.reserveSavedEvidenceRead(runId)).toThrow('read limit');
+  });
+});
+
+test.each(['empty', 'withheld', 'unavailable', 'exhausted'] as const)(
+  'recovered saved %s gap completes through the persisted-route finalizer', async reason => {
+    const { MockLanguageModelV4 } = await import('ai/test');
+    const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
+    const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+    for (const route of ['inspect_video', 'topic_research'] as const) {
+      const { runtime, runId } = await seed(`saved-gap-boundary-${reason}-${route}`, 'running');
+      const videoId = 'abcdefghijk';
+      const decision = { ...(route === 'inspect_video' ? { route, videoId } : { route, comparisonVideoIds: [videoId, 'lmnopqrstuv'] }),
+        savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
+      await runInDurableObject(runtime, async (instance, state) => {
+        const sessionStore = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, `test-gap/${runId}/`);
+        sessionStore.reserveSavedEvidenceRead(runId);
+        if (reason === 'exhausted') for (let i = 1; i < 16; i++) sessionStore.reserveSavedEvidenceRead(runId);
+        for (const source of route === 'inspect_video' ? [videoId] : [videoId, 'lmnopqrstuv']) {
+          const saved = await sessionStore.retrieve(`captions:${source}`, 'transcript', source, false,
+            async () => ({ value: { videoId: source, segments: [], text: '' }, cacheStatus: 'miss' }), () => ({}));
+          if (reason !== 'exhausted') sessionStore.recordSavedEvidenceOutcome(runId, saved.assetVersions![0]!, reason);
+        }
+        instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify(decision)},0)`;
+      });
+      await runInDurableObject(runtime, async (instance, state) => {
+        const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, 'recovered/');
+        const writer = instance as unknown as {
+          performFinalizeRun(runId: string, toolId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+        };
+        const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 1, text: 1, reasoning: 0 } };
+        const model = new MockLanguageModelV4({ doGenerate: async call => {
+          expect(JSON.stringify(call.prompt)).toContain('saved_original_not_read');
+          return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'low', warnings: [],
+            blocks: [{ text: 'The saved original could not supply the requested quotation.', evidenceIds: [] }] }) }],
+            finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+        } });
+        const freshFetch = vi.fn(async (): Promise<never> => { throw new Error('Fresh retrieval prohibited'); });
+        const finalize = vi.fn((toolId: string, input: FinalizeAnswerInput) => writer.performFinalizeRun(runId, toolId, input));
+        await runResearchAgentWithModel({ message: 'Quote only the saved source.', decision, model, finalizationModel: model,
+          finalizationDeadlineAt: Date.now() + 60_000, inheritedResolved: true, recoveredEvidence: [],
+          context: { runId, signal: new AbortController().signal, session: store,
+            provider: { transcript: freshFetch, video: freshFetch, search: freshFetch } as any,
+            transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: async execution => execution.execute(), finalize },
+        });
+        expect(finalize).toHaveBeenCalledOnce();
+        expect(freshFetch).not.toHaveBeenCalled();
+        const row = instance.sql<{ status: string; result_json: string }>`SELECT status,result_json FROM agent_runs WHERE id=${runId}`[0]!;
+        expect(row.status).toBe('completed');
+        expect(JSON.parse(row.result_json)).toMatchObject({ intent: 'context_answer', citations: [],
+          answer: 'The saved original could not supply the requested quotation.' });
+      });
+    }
+  });
+
+
+test.each(['ordinary', 'pending', 'other-run', 'deleted', 'another-original', 'citation', 'artifact', 'claimed-coverage', 'admitted-content'] as const)(
+  'saved-gap exception rejects %s context-answer substitution', async mode => {
+    const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
+    const { runtime, runId } = await seed(`saved-gap-reject-${mode}`, 'running');
+    await runInDurableObject(runtime, async (instance, state) => {
+      const store = new SessionEvidenceStore(state.storage.sql, env.RESEARCH, `test-gap/${runId}/`);
+      const videoId = 'abcdefghijk';
+      const decision = { route: 'inspect_video', videoId, useStoryboard: false,
+        ...(mode === 'ordinary' ? {} : { savedOnly: true, skill: 'verify_saved_evidence' }) };
+      const saved = await store.retrieve('captions', 'transcript', videoId, false,
+        async () => ({ value: { segments: [], text: '' }, cacheStatus: 'miss' }), () => ({}));
+      const assetVersion = saved.assetVersions![0]!;
+      const owner = mode === 'other-run' ? 'other-run' : runId;
+      store.reserveSavedEvidenceRead(owner);
+      if (mode !== 'pending') store.recordSavedEvidenceOutcome(owner, assetVersion, 'unavailable');
+      if (mode === 'deleted') await store.delete(assetVersion);
+      if (mode === 'another-original') await store.retrieve('other-captions', 'transcript', videoId, false,
+        async () => ({ value: { segments: [], text: 'different original' }, cacheStatus: 'miss' }), () => ({}));
+      instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify(decision)},0)`;
+      const writer = instance as unknown as {
+        performFinalizeRun(runId: string, toolId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+        deliverEvidence(runId: string, source: 'read_saved_evidence', packets: EvidencePacket[]): unknown;
+      };
+      if (mode === 'admitted-content') {
+        const packet: EvidencePacket = { packetId: 'admitted-original', kind: 'youtube_transcript', assetVersions: [assetVersion],
+          sources: [{ id: 'source', provider: 'youtube', kind: 'transcript', videoId }],
+          excerpts: [{ id: 'original', sourceId: 'source', text: 'A usable original passage.' }],
+          artifacts: [{ type: 'saved_original_evidence', data: {} }], usage: [], warnings: [] };
+        store.savePacket(packet);
+        writer.deliverEvidence(runId, 'read_saved_evidence', [packet]);
+      }
+      await expect(writer.performFinalizeRun(runId, 'forged-gap', { intent: 'context_answer', confidence: 'low',
+        answer: 'The saved source is unavailable.' + (mode === 'citation' ? ' [cite:fake]' : ''),
+        citations: [], artifacts: mode === 'artifact' ? [{ type: 'youtube_video', data: { videoId } }]
+          : mode === 'claimed-coverage' ? [{ type: 'research_coverage', data: { targetVideos: 1, reviewedVideos: 1 } }] : [],
+        warnings: [] })).rejects.toMatchObject({ code: 'AGENT_INTENT_MISMATCH' });
+      expect(instance.sql<{ result_json: string | null }>`SELECT result_json FROM agent_runs WHERE id=${runId}`[0]!.result_json).toBeNull();
+    });
+  });

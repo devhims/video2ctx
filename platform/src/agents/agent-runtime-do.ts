@@ -1,3 +1,4 @@
+import { pendingOriginalSources, unreadOriginalSources, usesSavedEvidenceSkill } from './research/skills/verify-saved-evidence';
 import { reconcileResearchMemory, type ResearchContext } from './runtime/context-handoff';
 import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
@@ -347,6 +348,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     }
     this.sessionStore.queueCleanup(previews);
     await this.sessionStore.delete(version);
+    this.pruneSavedReadState();
     await this.traceManager.publishPending();
     return {deleted:true};
   }
@@ -402,6 +404,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   ): Promise<AgentRunReceipt | AgentRunRejection> {
     this.ensureAgentRuntimeSchema();
     if (this.#deleted) throw new Error('Account deletion is in progress.');
+    this.pruneSavedReadState();
     const parsedRequest = agentRequestSchema.parse(request);
     const parsedAdmission = agentAdmissionSchema.parse(admission);
     const identity = queuedIdentity ? queuedRunIdentitySchema.parse(queuedIdentity) : undefined;
@@ -949,6 +952,21 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       execute: () => this.performFinalizeRun(runId, toolCallId, input) });
   }
 
+  /** A saved-source limitation may use the uncited context contract only when this
+   * run's persisted read state proves there is no remaining original read to attempt. */
+  private allowsSavedEvidenceGap(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
+    if (!usesSavedEvidenceSkill(decision) || (decision.route !== 'inspect_video' && decision.route !== 'topic_research')
+      || input.intent !== 'context_answer' || input.citations.length
+      || input.artifacts.some(artifact => artifact.type !== 'research_coverage' || artifact.data.reviewedVideos !== 0)
+      || answerCitationIds(input.answer).length) return false;
+    const evidence = this.readEvidencePackets(runId);
+    if (evidence.some(packet => packet.excerpts.length)) return false;
+    const brief = this.sessionStore.brief();
+    const state = this.sessionStore.savedEvidenceReadState(runId);
+    return unreadOriginalSources(decision, brief, evidence).length > 0
+      && pendingOriginalSources(decision, brief, evidence, state).length === 0;
+  }
+
   private async performFinalizeRun(
     runId: string,
     toolCallId: string,
@@ -976,7 +994,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (!decision) {
       throw new ApiError(422, 'AGENT_ROUTE_MISSING', 'The agent run has no persisted capability route.');
     }
-    if (!finalIntentMatchesRoute(decision, parsedInput.intent)) {
+    if (!finalIntentMatchesRoute(decision, parsedInput.intent)
+      && !this.allowsSavedEvidenceGap(runId, decision, parsedInput)) {
       throw new ApiError(
         422,
         'AGENT_INTENT_MISMATCH',
@@ -1057,6 +1076,15 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (this.#deleted || isTerminal(this.requireRun(runId).status)) {
       throw new Error('Agent run is no longer active.');
     }
+  }
+
+  /** Terminal runs cannot resume research. Keep counters for every active/recoverable run. */
+  private pruneSavedReadState(): void {
+    // Initialize the session tables even on a first request or a legacy conversation.
+    void this.sessionStore;
+    for (const table of ['session_original_reads', 'session_original_read_outcomes'])
+      this.ctx.storage.sql.exec(`DELETE FROM ${table} WHERE run_id IN
+        (SELECT id FROM agent_runs WHERE status IN ('completed', 'failed', 'cancelled'))`);
   }
 
   private async settleRun(runId: string): Promise<void> {
@@ -1418,7 +1446,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       this.sessionStore.search.clearHistory();
       for (const table of ['agent_trace_payload_chunks', 'agent_call_traces', 'agent_evidence_packets', 'agent_tool_calls', 'agent_routes',
         'agent_events', 'agent_model_usage', 'agent_memory_jobs', 'agent_evidence_deliveries', 'agent_evidence_delivered_packets', 'agent_evidence_packet_operations', 'agent_evidence_charges', 'agent_evidence_claims', 'agent_evidence_asset_claims', 'agent_memory_cost_reports', 'agent_runs', 'session_run_generations', 'session_memory_writes',
-        'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox']) {
+        'agent_trace_run_index', 'agent_trace_publish_order', 'agent_model_attempt_outbox', 'session_original_reads', 'session_original_read_outcomes']) {
         this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
       }
       // SDK snapshots contain run identifiers only, but clear those too.
@@ -1446,9 +1474,23 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private readEvidencePackets(runId: string): EvidencePacket[] {
-    return this.sql<{ packet_json: string }>`
+    const packets = this.sql<{ packet_json: string }>`
       SELECT packet_json FROM agent_evidence_packets WHERE run_id = ${runId} ORDER BY created_at ASC
     `.map((row) => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
+    // Original reads live in session_packets, not the provider-tool audit table.
+    // Restore only pages this run admitted. The ledger is the existing billing
+    // receipt, so recovery neither redelivers evidence nor charges for it again.
+    const store = this.sessionStore;
+    const originals = this.sql<{ packet_json: string }>`
+      SELECT p.packet_json FROM session_packets p
+      JOIN agent_evidence_delivered_packets d ON d.packet_id = p.packet_id
+      WHERE d.run_id = ${runId} AND EXISTS (
+        SELECT 1 FROM json_each(p.packet_json, '$.artifacts')
+        WHERE json_extract(value, '$.type') = 'saved_original_evidence'
+      ) ORDER BY d.created_at ASC
+    `.map(row => evidencePacketSchema.parse(JSON.parse(row.packet_json)))
+      .filter(packet => packet.assetVersions?.length && packet.assetVersions.every(version => store.has(version)));
+    return [...new Map([...packets, ...originals].map(packet => [packet.packetId, packet])).values()];
   }
 
   private readEvidenceToolFailures(runId: string): EvidenceToolFailure[] {

@@ -37,6 +37,10 @@ export interface AgentCoreDefinition {
   /** Retired names that still request finalization, for models that keep emitting them. */
   finalizationAliases?: readonly string[];
   toolCallLimits?: Readonly<Record<string, number>>;
+  /** Bounded overrides for source paging, still subject to time and model-cost limits. */
+  maxModelSteps?: number;
+  nonTerminalToolCallLimit?: number;
+  finalizationReserveMs?: number;
   isToolBudgetExhausted?: () => boolean;
 }
 
@@ -66,6 +70,7 @@ export async function runAgentCoreWithModel(options: {
   const hardBudgetMs = options.hardBudgetMs ?? DEFAULT_AGENT_CORE_WAIT_MS;
   const modelCallPrefix = options.modelCallPrefix ?? crypto.randomUUID();
   const finalizationToolName = options.definition.finalizationToolName;
+  const maxModelSteps = options.definition.maxModelSteps ?? MAX_MODEL_STEPS;
   const loop = new ToolLoopAgent({
     id: options.definition.id,
     model: options.model,
@@ -107,7 +112,7 @@ export async function runAgentCoreWithModel(options: {
       return { ...toolCall, input: JSON.stringify(result.output) };
     }),
     stopWhen: [
-      isStepCount(MAX_MODEL_STEPS + FINALIZATION_RETRY_STEPS),
+      isStepCount(maxModelSteps + FINALIZATION_RETRY_STEPS),
       hasExecutedToolResult(finalizationToolName),
     ],
     prepareStep: ({ stepNumber, steps }) => {
@@ -128,12 +133,14 @@ export async function runAgentCoreWithModel(options: {
 
       const reason = getFinalizationReason({
         stepNumber,
-        maxSteps: MAX_MODEL_STEPS,
+        maxSteps: maxModelSteps,
         elapsedMs: Date.now() - startedAt,
         hardBudgetMs,
+        remainingBudgetMs: options.definition.finalizationReserveMs,
         steps,
         terminalToolName: finalizationToolName,
         toolCallLimits: options.definition.toolCallLimits,
+        nonTerminalToolCallLimit: options.definition.nonTerminalToolCallLimit,
         toolBudgetExhausted: options.definition.isToolBudgetExhausted?.(),
         modelCostMicros: options.modelBudget?.currentCostMicros(),
         modelCostLimitMicros: options.modelBudget?.limitMicros,
@@ -145,7 +152,7 @@ export async function runAgentCoreWithModel(options: {
       }
 
       console.warn(
-        `[agent-core] forcing ${finalizationToolName}: runId=${options.context.runId} reason=${reason} step=${stepNumber} maxSteps=${MAX_MODEL_STEPS}`,
+        `[agent-core] forcing ${finalizationToolName}: runId=${options.context.runId} reason=${reason} step=${stepNumber} maxSteps=${maxModelSteps}`,
       );
       options.onFinalizationRequested?.();
       return forceFinalization(options.finalizationModel ?? options.model, finalizationToolName);

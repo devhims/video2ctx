@@ -3,6 +3,17 @@ import type { YouTubeAgentProvider } from '../providers/youtube/provider';
 
 type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research' | 'inspect_video' }>;
 
+/** Beneath session reuse, so even incidental analyst metadata reads cannot fetch. */
+export function savedOnlyProvider(): YouTubeAgentProvider {
+  const unavailable = async (): Promise<never> => {
+    throw new Error('Fresh retrieval is prohibited for this saved-only request. Read existing session evidence or report the missing source.');
+  };
+  return { search: unavailable, browse: unavailable, trends: unavailable, video: unavailable,
+    tracks: unavailable, transcript: unavailable, comments: unavailable, endscreen: unavailable,
+    channel: unavailable, channelVideos: unavailable, channelPlaylists: unavailable, playlist: unavailable,
+    frames: unavailable, storyboard: unavailable };
+}
+
 export function createCapabilityProvider(
   provider: YouTubeAgentProvider,
   decision: ExecutableRoute,

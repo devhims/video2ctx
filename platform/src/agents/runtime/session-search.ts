@@ -5,6 +5,7 @@ import type { EvidencePacket } from '../contracts';
 import type { SessionEvidenceStore } from './session-evidence';
 import { firstMatchSpan, matchMarkers, type MatchMarkers } from './search-highlight';
 import { withVisualProvenanceWarning } from './model-evidence';
+import { createReadSavedEvidenceTool } from './saved-evidence-reader';
 
 export interface HistoryEntry {
   id: string;
@@ -237,10 +238,10 @@ export class SessionSearch {
   }
   async tools(
     store: SessionEvidenceStore,
-    onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void,
+    onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void,
     signal: AbortSignal,
     /** History-only routes search messages and memory, never saved source evidence. */
-    options: { evidence?: boolean } = {},
+    options: { evidence?: boolean; runId?: string } = {},
   ): Promise<ToolSet> {
     const check = () => signal.throwIfAborted();
     const base = Session.create(this.history)
@@ -276,7 +277,7 @@ export class SessionSearch {
             const found = await this.searchEvidence(store, query);
             check();
             // Only admitted hits reach the model; hits the run reserve cannot cover are withheld.
-            const packets = onEvidence(found.packets) ?? found.packets;
+            const packets = onEvidence(found.packets, 'search_context') ?? found.packets;
             const withheld = found.packets.length - packets.length;
             return JSON.stringify({ packets, ...(withheld > 0 ? { withheld, note: 'Some matches were not loaded because the run credit reserve is exhausted.' } : {}) });
           },
@@ -284,6 +285,7 @@ export class SessionSearch {
       });
     return {
       ...(await session.tools()),
+      ...(options.evidence === false ? {} : { read_saved_evidence: createReadSavedEvidenceTool(store, onEvidence, signal, options.runId) }),
       read_session_history: tool({
         description:
           'Read all persisted session user messages or completed answers chronologically, including failed-run user messages and older turns. For listing messages, paginate until nextOffset is absent. Results may span conversation branches. Source-deleted answers are omitted.',

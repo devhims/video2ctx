@@ -3,6 +3,7 @@ import { storyboardManifestSchema } from '../providers/youtube/storyboard';
 import { framesSchema } from '../../lib/youtube-frames-contract';
 import { transcriptFactsSchema, transcriptSourceContextSchema } from './transcript-grounding';
 import { z } from 'zod';
+import { SAVED_EVIDENCE_ARTIFACT, savedEvidenceCoverageSchema } from './saved-evidence-contract';
 import {
   agentWarningSchema,
   evidenceExcerptSchema,
@@ -106,6 +107,8 @@ export const modelEvidencePacketSchema = z.object({
     operation: z.enum(['image_analysis', 'transcript_analysis', 'retrieval', 'saved_read', 'inherited']),
     note: z.string().min(1).max(300),
   }).optional(),
+  // Counts describe the original read. Reused IDs point to exact excerpts already in this context.
+  savedEvidence: savedEvidenceCoverageSchema.extend({ reusedExcerptIds: z.array(z.string()).optional() }).optional(),
   warnings: z.array(agentWarningSchema).max(MODEL_WARNINGS),
 });
 
@@ -145,6 +148,11 @@ export function transcriptAwaitsAnalysis(packet: Pick<EvidencePacket, 'artifacts
  * remains the source of truth for billing, recovery, and citation validation.
  */
 export function evidencePacketForModel(packet: EvidencePacket): ModelEvidencePacket {
+  const original = packet.artifacts.find(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT);
+  if (original) return modelEvidencePacketSchema.parse({
+    packetId: packet.packetId, kind: packet.kind, sources: packet.sources, assetVersions: packet.assetVersions,
+    excerpts: packet.excerpts, savedEvidence: savedEvidenceCoverageSchema.parse(original.data), warnings: packet.warnings,
+  });
   // Single-video inspection is read directly by the main model, including on recovery/finalization.
   if (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript')) {
     return modelEvidencePacketSchema.parse({
@@ -354,22 +362,43 @@ function appendedLength(selectedLength: number, selectedCount: number, candidate
   return selectedLength + serializedLength(candidate) + (selectedCount ? 1 : 0);
 }
 
+/** Deduplicate only identical immutable originals, including source identity and span. */
+function originalExcerptKey(packet: ModelEvidencePacket, excerpt: z.infer<typeof evidenceExcerptSchema>): string {
+  return JSON.stringify([packet.savedEvidence?.assetVersion, packet.assetVersions, packet.sources, excerpt]);
+}
+
 function packEvidence(
   prioritized: ReadonlyArray<{ source: EvidencePacket; packet: ModelEvidencePacket }>,
   maxCharacters: number,
 ): { evidence: ModelEvidencePacket[]; omitted: OmittedModelEvidence[] } {
   const selected: ModelEvidencePacket[] = [];
   const omitted: OmittedModelEvidence[] = [];
+  const originalExcerpts = new Set<string>();
   let selectedLength = serializedLength(selected);
   const fits = (candidate: ModelEvidencePacket) => appendedLength(selectedLength, selected.length, candidate) <= maxCharacters;
   const add = (candidate: ModelEvidencePacket) => {
     selectedLength = appendedLength(selectedLength, selected.length, candidate);
     selected.push(candidate);
+    if (candidate.savedEvidence) for (const excerpt of candidate.excerpts ?? [])
+      originalExcerpts.add(originalExcerptKey(candidate, excerpt));
   };
 
-  for (const { source, packet } of prioritized) {
+  for (const { source, packet: original } of prioritized) {
+    let packet = original;
+    if (original.savedEvidence) {
+      const reused = (original.excerpts ?? []).filter(excerpt => originalExcerpts.has(originalExcerptKey(original, excerpt)));
+      if (reused.length) packet = { ...original,
+        excerpts: original.excerpts!.filter(excerpt => !originalExcerpts.has(originalExcerptKey(original, excerpt))),
+        savedEvidence: { ...original.savedEvidence, reusedExcerptIds: reused.map(excerpt => excerpt.id) },
+      };
+    }
     if (fits(packet)) {
       add(packet);
+      continue;
+    }
+    if (packet.savedEvidence) {
+      // Selected originals are exact quote inputs. Never silently shorten or sample them.
+      omitted.push({ packetId: source.packetId, kind: source.kind, entriesRetained: source.excerpts.length });
       continue;
     }
     if (packet.collection) {
@@ -423,13 +452,14 @@ export function projectEvidencePacketsForModel(
 ): { evidence: ModelEvidencePacket[]; omitted?: OmittedEvidenceNotice; omittedPackets: OmittedModelEvidence[] } {
   const projected = packets.map(packet => ({ source: packet, packet: evidencePacketForModel(packet) }));
   const prioritized = [
+    ...projected.filter(({ packet }) => packet.savedEvidence),
     ...projected.filter(({ packet }) => packet.transcriptAnalysis),
-    ...projected.filter(({ packet }) => !packet.transcriptAnalysis),
+    ...projected.filter(({ packet }) => !packet.transcriptAnalysis && !packet.savedEvidence),
   ];
   const unreserved = packEvidence(prioritized, options.maxCharacters);
   if (!unreserved.omitted.length) return { evidence: unreserved.evidence, omittedPackets: [] };
   // Reserve the largest minimal notice any omitted subset could need, then repack.
-  const collections = projected.filter(({ packet }) => packet.collection);
+  const collections = projected.filter(({ packet }) => packet.collection || packet.savedEvidence);
   const reserve = serializedLength(omittedNotice(
     collections.map(({ source }) => ({ packetId: source.packetId, kind: source.kind, entriesRetained: source.excerpts.length })), 0));
   const packed = packEvidence(prioritized, Math.max(0, options.maxCharacters - reserve));
@@ -544,7 +574,7 @@ const TRANSCRIPT_ANALYSIS_TOOLS = new Set(['analyze_video_transcript']);
 const IMAGE_ANALYSIS_ARTIFACTS = new Set(['youtube_frame_analysis', 'youtube_storyboard_analysis']);
 const TRANSCRIPT_ANALYSIS_ARTIFACTS = new Set(['youtube_transcript_analysis']);
 /** Deliveries a model of this run asked for. Other sources load earlier evidence automatically. */
-const EXPLICIT_READ_SOURCES = new Set(['search_context', 'read_prior_evidence', 'read_session_evidence']);
+const EXPLICIT_READ_SOURCES = new Set(['search_context', 'read_prior_evidence', 'read_session_evidence', 'read_saved_evidence']);
 
 /**
  * The operation this turn performed for a packet. Anything without a current record is inherited.
@@ -649,9 +679,21 @@ export function finalizationEvidenceForModel(
   for (const [full, short] of aliases) if (included.has(short)) fullIds.set(short, full);
   // Identify actual handoff inputs lost to the prompt budget or subject filter.
   // Normal model projection is intentional; additional reduction is a gap.
+  const suppliedOriginals = new Set(projected.flatMap(packet => packet.savedEvidence
+    ? (packet.excerpts ?? []).map(excerpt => originalExcerptKey(packet, excerpt)) : []));
   for (const packet of compact) {
     const expected = evidencePacketForModel(packet);
-    const actual = projected.find(item => item.packetId === packet.packetId);
+    let actual = projected.find(item => item.packetId === packet.packetId);
+    if (actual?.savedEvidence?.reusedExcerptIds && expected.savedEvidence) {
+      const { reusedExcerptIds, ...coverage } = actual.savedEvidence;
+      // Reconstruct only excerpts whose exact source/version/text/span is actually supplied.
+      // An omitted earlier page can never satisfy a reference or hide a budget gap.
+      const supplied = new Set((actual.excerpts ?? []).map(excerpt => originalExcerptKey(actual!, excerpt)));
+      const reused = new Set(reusedExcerptIds);
+      actual = { ...actual, savedEvidence: coverage, excerpts: (expected.excerpts ?? []).filter(excerpt =>
+        supplied.has(originalExcerptKey(expected, excerpt))
+        || (reused.has(excerpt.id) && suppliedOriginals.has(originalExcerptKey(expected, excerpt)))) };
+    }
     if (JSON.stringify(expected) !== JSON.stringify(actual)) {
       missingInputs.push({ reason: 'prompt_evidence_cut', packetId: packet.packetId, assetVersions: packet.assetVersions });
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidencePacket } from '../src/agents/contracts';
+import { SAVED_EVIDENCE_ARTIFACT } from '../src/agents/runtime/saved-evidence-reader';
 import {
   evidencePacketForModel,
   finalizationEvidenceForModel,
@@ -7,6 +8,59 @@ import {
 } from '../src/agents/runtime/model-evidence';
 
 describe('agent model evidence', () => {
+  it('deduplicates overlapping originals without displacing a later quote or inventing a gap', () => {
+    const page = (index: number, prefix: string): EvidencePacket => ({
+      packetId: `original:${index}`, kind: 'youtube_transcript', assetVersions: ['version'],
+      sources: [{ id: 'source', provider: 'youtube', kind: 'transcript', videoId: 'abcdefghijk' }],
+      excerpts: Array.from({ length: 6 }, (_, i) => ({ id: `${prefix}:${i}`, sourceId: 'source',
+        text: `${prefix} ${'original caption '.repeat(90)}`, startMs: i * 1000, endMs: (i + 1) * 1000 })),
+      artifacts: [{ type: SAVED_EVIDENCE_ARTIFACT, data: { assetVersion: 'version', kind: 'transcript',
+        totalExcerpts: 12, selectedExcerpts: 6, offset: 0, returnedExcerpts: 6 } }], warnings: [], usage: [],
+    });
+    const pages = [...Array.from({ length: 5 }, (_, i) => page(i, 'overlap')), page(5, 'requested-quote')];
+    pages[2]!.warnings.push({ code: 'PARTIAL_SAVED_SOURCE', message: 'Known saved-source gap.' });
+    const before = JSON.stringify(pages);
+    const result = finalizationEvidenceForModel(pages, 40_000);
+    const excerpts = result.evidence.flatMap(p => p.excerpts ?? []);
+    expect(excerpts.filter(e => e.text.startsWith('overlap'))).toHaveLength(6);
+    expect(excerpts.filter(e => e.text.startsWith('requested-quote'))).toHaveLength(6);
+    expect(result.fullIds.size).toBe(12);
+    expect(result.evidence[2]!.warnings).toEqual(pages[2]!.warnings);
+    expect(result.evidence[2]!.savedEvidence).toMatchObject({ returnedExcerpts: 6 });
+    expect(result.complete).toBe(true);
+    expect(result.missingInputs).toEqual([]);
+    expect(JSON.stringify(result.evidence).length).toBeLessThanOrEqual(40_000);
+    expect(JSON.stringify(pages)).toBe(before);
+    // Equal text is not enough: another immutable version and different spans survive.
+    const other = page(6, 'overlap');
+    other.assetVersions = ['other-version'];
+    other.artifacts[0]!.data.assetVersion = 'other-version';
+    other.excerpts = other.excerpts.map(e => ({ ...e, id: `other:${e.id}`, startMs: 90000 }));
+    expect(finalizationEvidenceForModel([pages[0]!, other], 40_000).evidence.flatMap(p => p.excerpts ?? [])).toHaveLength(12);
+    // A repeated excerpt cannot refer to an earlier page that did not fit.
+    const small = { ...pages[0]!, packetId: 'small-page', excerpts: pages[0]!.excerpts.slice(0, 1) };
+    const tight = finalizationEvidenceForModel([pages[0]!, small], 4000);
+    expect(tight.evidence.flatMap(p => p.excerpts ?? [])).toHaveLength(1);
+    expect(tight.complete).toBe(false);
+  });
+
+  it('keeps original quote pages alongside same-version analysis without shortening or sampling', () => {
+    const analysis = { ...transcriptPacket(), assetVersions: ['saved-version'] };
+    const original = { ...analysis, packetId: 'original-page',
+      excerpts: Array.from({ length: 12 }, (_, index) => ({ ...analysis.excerpts[0]!,
+        id: `original:${index}`, text: 'Original caption '.repeat(90) + `tail ${index}` })),
+      artifacts: [{ type: SAVED_EVIDENCE_ARTIFACT, data: { assetVersion: 'saved-version', kind: 'transcript',
+        totalExcerpts: 201, selectedExcerpts: 12, offset: 0, returnedExcerpts: 12 } }] };
+    const result = finalizationEvidenceForModel([analysis, original], 40_000);
+    const page = result.evidence.find(packet => packet.savedEvidence)!;
+    expect(page.excerpts?.map(excerpt => excerpt.text)).toEqual(original.excerpts.map(excerpt => excerpt.text));
+    expect(result.fullIds.get(page.excerpts![11]!.id)).toBe('original:11');
+    expect(result.evidence.some(packet => packet.transcriptAnalysis)).toBe(true);
+    const tight = finalizationEvidenceForModel([analysis, original], 2000);
+    expect(tight.evidence.some(packet => packet.savedEvidence)).toBe(false);
+    expect(tight.complete).toBe(false);
+    expect(tight.missingInputs).toContainEqual(expect.objectContaining({ reason: 'prompt_evidence_cut', packetId: 'original-page' }));
+  });
   it('preserves every direct transcript excerpt through recovery and finalization', () => {
     const packet = transcriptPacket();
     packet.artifacts = [{ type: 'youtube_complete_transcript', data: { allReturnedSegmentsIncluded: true } }];

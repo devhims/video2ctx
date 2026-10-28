@@ -7457,6 +7457,15 @@
                               "maxLength": 200
                             }
                           },
+                          "savedOnly": {
+                            "type": "boolean"
+                          },
+                          "skill": {
+                            "type": "string",
+                            "enum": [
+                              "verify_saved_evidence"
+                            ]
+                          },
                           "refreshEvidence": {
                             "type": "boolean"
                           },
@@ -7529,6 +7538,15 @@
                               "minLength": 1,
                               "maxLength": 200
                             }
+                          },
+                          "savedOnly": {
+                            "type": "boolean"
+                          },
+                          "skill": {
+                            "type": "string",
+                            "enum": [
+                              "verify_saved_evidence"
+                            ]
                           },
                           "refreshEvidence": {
                             "type": "boolean"
@@ -7621,6 +7639,15 @@
                               "context_answer",
                               "clarification",
                               "rejected"
+                            ]
+                          },
+                          "savedOnly": {
+                            "type": "boolean"
+                          },
+                          "skill": {
+                            "type": "string",
+                            "enum": [
+                              "verify_saved_evidence"
                             ]
                           },
                           "contextScope": {
@@ -9053,6 +9080,15 @@
                           "maxLength": 200
                         }
                       },
+                      "savedOnly": {
+                        "type": "boolean"
+                      },
+                      "skill": {
+                        "type": "string",
+                        "enum": [
+                          "verify_saved_evidence"
+                        ]
+                      },
                       "refreshEvidence": {
                         "type": "boolean"
                       },
@@ -9125,6 +9161,15 @@
                           "minLength": 1,
                           "maxLength": 200
                         }
+                      },
+                      "savedOnly": {
+                        "type": "boolean"
+                      },
+                      "skill": {
+                        "type": "string",
+                        "enum": [
+                          "verify_saved_evidence"
+                        ]
                       },
                       "refreshEvidence": {
                         "type": "boolean"
@@ -9217,6 +9262,15 @@
                           "context_answer",
                           "clarification",
                           "rejected"
+                        ]
+                      },
+                      "savedOnly": {
+                        "type": "boolean"
+                      },
+                      "skill": {
+                        "type": "string",
+                        "enum": [
+                          "verify_saved_evidence"
                         ]
                       },
                       "contextScope": {

@@ -1,3 +1,4 @@
+import { SAVED_EVIDENCE_READ_LIMIT } from './saved-evidence-contract';
 import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import type { VerifiedImage } from '../../lib/verified-image';
@@ -62,7 +63,9 @@ export interface SessionBrief {
   assets: SessionAsset[];
   memories: SessionMemory[];
 }
+export interface SavedEvidenceReadState { attempts: number; outcomes: Array<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }> }
 export interface SessionAccess {
+  savedEvidenceReadState?(runId: string): SavedEvidenceReadState;
   brief(): SessionBrief;
   /** Synchronous SQLite checks for deletion while analysis is in flight. */
   generation?(): number;
@@ -80,7 +83,7 @@ export interface SessionAccess {
   readHistory?(offset?: number, role?: 'user' | 'assistant'): ReturnType<SessionSearch['readHistory']>;
   searchHistory?(query: string): Promise<{ content: string }[]>;
   /** onEvidence admits found packets and returns those the model may receive. */
-  searchTools?(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }): Promise<ToolSet>;
+  searchTools?(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean; runId?: string }): Promise<ToolSet>;
 }
 
 /** Keep model routing context bounded without truncating stored evidence or history. */
@@ -155,6 +158,8 @@ export class SessionEvidenceStore implements SessionAccess {
     sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_writes (id TEXT PRIMARY KEY, source_turn INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS session_memory_state (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`INSERT OR IGNORE INTO session_memory_state VALUES (1, 0)`);
+    sql.exec('CREATE TABLE IF NOT EXISTS session_original_reads (run_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL)');
+    sql.exec('CREATE TABLE IF NOT EXISTS session_original_read_outcomes (run_id TEXT NOT NULL, asset_version TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (run_id, asset_version))');
     this.search = new SessionSearch(sql);
   }
   readHistory(offset = 0, role?: 'user' | 'assistant') {
@@ -163,7 +168,7 @@ export class SessionEvidenceStore implements SessionAccess {
   searchHistory(query: string) {
     return this.search.searchHistory(query);
   }
-  searchTools(onEvidence: (packets: EvidencePacket[]) => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean }) {
+  searchTools(onEvidence: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, options?: { evidence?: boolean; runId?: string }) {
     return this.search.tools(this, onEvidence, signal, options);
   }
   async ensureSearchIndexed() {
@@ -818,6 +823,25 @@ export class SessionEvidenceStore implements SessionAccess {
       return { ...result, assetVersions: [version] };
     });
   }
+  /** Reserve synchronously before I/O. Failed and repeated reads consume attempts too. */
+  reserveSavedEvidenceRead(runId: string): number {
+    const row = this.sql.exec<{ attempts: number }>(`INSERT INTO session_original_reads VALUES (?, 1)
+      ON CONFLICT(run_id) DO UPDATE SET attempts=attempts+1 WHERE attempts < ? RETURNING attempts`,
+      runId, SAVED_EVIDENCE_READ_LIMIT).toArray()[0];
+    if (!row) throw new Error('Saved-evidence read limit reached. Answer from the passages already read and state remaining gaps.');
+    return SAVED_EVIDENCE_READ_LIMIT - row.attempts;
+  }
+  recordSavedEvidenceOutcome(runId: string, assetVersion: string, reason: 'empty' | 'withheld' | 'unavailable'): void {
+    if (!this.has(assetVersion)) return;
+    this.sql.exec('INSERT OR REPLACE INTO session_original_read_outcomes VALUES (?, ?, ?)', runId, assetVersion, reason);
+  }
+  savedEvidenceReadState(runId: string): SavedEvidenceReadState {
+    const attempts = this.sql.exec<{ attempts: number }>('SELECT attempts FROM session_original_reads WHERE run_id=?', runId).toArray()[0]?.attempts ?? 0;
+    const outcomes = this.sql.exec<{ assetVersion: string; reason: 'empty' | 'withheld' | 'unavailable' }>(
+      'SELECT asset_version AS assetVersion, reason FROM session_original_read_outcomes WHERE run_id=?', runId).toArray()
+      .filter(outcome => this.has(outcome.assetVersion));
+    return { attempts, outcomes };
+  }
   beginRun(runId: string) {
     this.sql.exec('INSERT OR IGNORE INTO session_run_generations VALUES (?, ?)', runId, this.generation());
   }
@@ -917,6 +941,7 @@ export class SessionEvidenceStore implements SessionAccess {
     this.sql.exec('UPDATE session_memory_state SET version=version+1 WHERE id=1');
     for (const row of rows) {
       this.sql.exec('DELETE FROM session_asset_keys WHERE version=?', row.version);
+      this.sql.exec('DELETE FROM session_original_read_outcomes WHERE asset_version=?', row.version);
       this.sql.exec('DELETE FROM session_assets WHERE version=?', row.version);
     }
     // Keep pending deletions durable so interrupted cleanup can be retried.

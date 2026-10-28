@@ -13,6 +13,7 @@ export const AGENT_TOOL_LABELS: Record<string, ToolLabels & { reused?: ToolLabel
   get_video_frames: { running: 'Capturing Frames', completed: 'Captured Frames', action: 'Capture',
     reused: { running: 'Reusing Frames', completed: 'Reused Frames', action: 'Reuse' } },
   get_video_comments: { running: 'Reading Comments', completed: 'Read Comments', action: 'Reading' },
+  read_saved_evidence: { running: 'Reading Saved Originals', completed: 'Read Saved Originals', action: 'Reading' },
   get_channel: { running: 'Checking Channel', completed: 'Checked Channel', action: 'Check' },
   get_channel_videos: { running: 'Listing Videos', completed: 'Listed Videos', action: 'Listing' },
   get_channel_playlists: { running: 'Listing Playlists', completed: 'Listed Playlists', action: 'Listing' },

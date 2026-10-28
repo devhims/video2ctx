@@ -325,6 +325,7 @@ describe('delivered context disclosure', () => {
     // Artifacts never upgrade evidence this turn did not produce.
     expect(evidenceDeliveryOperation({ deliveredSources: ['inherited_subject'] }, ['youtube_frame_analysis'])).toBe('inherited');
     expect(evidenceDeliveryOperation({ deliveredSources: ['search_context'] })).toBe('saved_read');
+    expect(evidenceDeliveryOperation({ deliveredSources: ['read_saved_evidence'] })).toBe('saved_read');
     expect(evidenceDeliveryOperation({ deliveredSources: ['read_prior_evidence'] })).toBe('saved_read');
     expect(evidenceDeliveryOperation({ deliveredSources: ['inherited_subject', 'read_prior_evidence'] })).toBe('saved_read');
     expect(evidenceDeliveryOperation({ deliveredSources: ['inherited_subject'] })).toBe('inherited');

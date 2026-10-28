@@ -1,5 +1,8 @@
 export const AGENT_CLASSIFICATION_TIMEOUT_MS = 20_000;
 export const AGENT_RESEARCH_TIMEOUT_MS = 40_000;
+// Saved verification includes a requirement handoff and multiple bounded original
+// reads. Give it enough model round trips without changing read or cost ceilings.
+export const AGENT_SAVED_VERIFICATION_TIMEOUT_MS = 120_000;
 // Visual runs include source selection, bounded frame extraction and analysis.
 // Individual frame calls allocate from this shared window before starting.
 export const AGENT_VISUAL_RESEARCH_TIMEOUT_MS = 120_000;
@@ -15,8 +18,9 @@ export function finalizationHardDeadline(mainDeadlineAt: number): number {
   return mainDeadlineAt + AGENT_FINALIZATION_RETRY_TIMEOUT_MS;
 }
 
-export function researchTimeoutMs(useStoryboard: boolean | undefined): number {
-  return useStoryboard === true ? AGENT_VISUAL_RESEARCH_TIMEOUT_MS : AGENT_RESEARCH_TIMEOUT_MS;
+export function researchTimeoutMs(useStoryboard: boolean | undefined, savedVerification = false): number {
+  return useStoryboard === true ? AGENT_VISUAL_RESEARCH_TIMEOUT_MS
+    : savedVerification ? AGENT_SAVED_VERIFICATION_TIMEOUT_MS : AGENT_RESEARCH_TIMEOUT_MS;
 }
 
 /** Bounds a phase even when work ignores cancellation. Terminal saving can leave
