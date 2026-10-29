@@ -1,4 +1,5 @@
 import { pendingOriginalSources, unreadOriginalSources, usesSavedEvidenceSkill } from './research/skills/verify-saved-evidence';
+import { confirmedEmptySource, outstandingRequestedEvidence } from './research/requested-evidence';
 import { reconcileResearchMemory, type ResearchContext } from './runtime/context-handoff';
 import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
@@ -955,10 +956,14 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       execute: () => this.performFinalizeRun(runId, toolCallId, input) });
   }
 
-  /** A saved-source limitation may use the uncited context contract only when this
-   * run's persisted read state proves there is no remaining original read to attempt. */
-  private allowsSavedEvidenceGap(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
-    if (!usesSavedEvidenceSkill(decision) || (decision.route !== 'inspect_video' && decision.route !== 'topic_research')
+  /**
+   * A research route may finish with the uncited context contract only when this run's persisted
+   * evidence proves there is nothing to cite: no admitted passages, plus a saved-source gap with no
+   * original read left to attempt (saved-evidence skill), a source read and confirmed empty, or
+   * requested evidence that can no longer be obtained for any requested subject.
+   */
+  private allowsUncitedEvidenceAnswer(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
+    if ((decision.route !== 'inspect_video' && decision.route !== 'topic_research')
       || input.intent !== 'context_answer' || input.citations.length
       || input.artifacts.some(artifact => artifact.type !== 'research_coverage' || artifact.data.reviewedVideos !== 0)
       || answerCitationIds(input.answer).length) return false;
@@ -966,8 +971,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     if (evidence.some(packet => packet.excerpts.length)) return false;
     const brief = this.sessionStore.brief();
     const state = this.sessionStore.savedEvidenceReadState(runId);
-    return unreadOriginalSources(decision, brief, evidence).length > 0
-      && pendingOriginalSources(decision, brief, evidence, state).length === 0;
+    if (usesSavedEvidenceSkill(decision) && unreadOriginalSources(decision, brief, evidence).length > 0
+      && pendingOriginalSources(decision, brief, evidence, state).length === 0) return true;
+    // Empty saved reads are recorded as read outcomes; empty fetches persist as packets.
+    if (evidence.some(confirmedEmptySource) || state.outcomes.some(outcome => outcome.reason === 'empty')) return true;
+    const failures = this.readEvidenceToolFailures(runId);
+    const outstanding = outstandingRequestedEvidence({ decision, brief, packets: evidence,
+      terminalVersions: new Set(state.outcomes.map(outcome => outcome.assetVersion)),
+      canUse: (tool, videoId) => tool === 'search_originals' || !failures.some(failure => failure.toolName === tool
+        && (failure.videoId === undefined || videoId === undefined || failure.videoId === videoId)) });
+    return outstanding.length > 0 && outstanding.every(item => item.state === 'unavailable');
   }
 
   private async performFinalizeRun(
@@ -998,7 +1011,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       throw new ApiError(422, 'AGENT_ROUTE_MISSING', 'The agent run has no persisted capability route.');
     }
     if (!finalIntentMatchesRoute(decision, parsedInput.intent)
-      && !this.allowsSavedEvidenceGap(runId, decision, parsedInput)) {
+      && !this.allowsUncitedEvidenceAnswer(runId, decision, parsedInput)) {
       throw new ApiError(
         422,
         'AGENT_INTENT_MISMATCH',

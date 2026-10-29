@@ -919,3 +919,74 @@ test('a recovered comment failure for one video keeps another video\'s requested
     expect(missing).toEqual([{ reason: 'requested_evidence_missing', kind: 'comments', videoId: videoA }]);
   });
 });
+
+// Uncited answers cross the real finalization boundary only when persisted evidence leaves nothing to cite.
+async function researchThroughRuntime(name: string, decision: Record<string, unknown>,
+  steps: Array<{ tool: string; input?: object }>, commentPage: (videoId: string) => unknown, answer: string) {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { vi } = await import('vitest');
+  const { runtime, runIds: [runId] } = await seedRuns(name);
+  let finalInput: FinalizeAnswerInput | undefined;
+  let status: string | undefined;
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId!}, ${JSON.stringify(decision)}, 0)`;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    let step = 0;
+    const core = new MockLanguageModelV4({ doGenerate: async () => {
+      const next = steps[step++] ?? { tool: 'complete_research' };
+      return { content: [{ type: 'tool-call', toolCallId: `${name}-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text',
+      text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [{ text: answer, evidenceIds: [] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    const store = internals.sessionStore;
+    const comments = vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentPage(videoId) }));
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
+      message: 'What do commenters say about this video?', decision: decision as never,
+      context: { runId: runId!, signal: new AbortController().signal, session: store,
+        provider: sessionProvider({ comments } as unknown as AgentToolContext['provider'], store),
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
+        deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId!, source, packets),
+        // The real persistence boundary, including the persisted-route intent check.
+        finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId!, toolId, input); },
+      } as unknown as AgentToolContext });
+    status = internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId!}`[0]?.status;
+  });
+  return { runtime, runId: runId!, finalInput: finalInput!, status };
+}
+const commentsPage = (count: number) => (videoId: string) => ({ videoId, totalCount: count, replyContinuations: [],
+  meta: { source: 'allthingsyoutube', fetchedAt: '2026-10-30T00:00:00Z', partial: false, warnings: [] },
+  comments: Array.from({ length: count }, (_, index) => ({ id: `c${index}`, text: `A viewer note ${index}.`,
+    author: { name: 'Viewer', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] })) });
+
+test('a truthful no-comments answer is accepted at the real finalization boundary', async () => {
+  const { finalInput, status } = await researchThroughRuntime('empty-comments-boundary',
+    { route: 'inspect_video', videoId: VIDEO, useStoryboard: false, requestedEvidence: ['comments'] },
+    [{ tool: 'get_video_comments', input: { videoId: VIDEO } }], commentsPage(0), 'This video has no comments.');
+  expect(finalInput.intent).toBe('context_answer');
+  expect(status).toBe('completed');
+});
+
+test('a gap answer for unobtainable requested comments is accepted at the real finalization boundary', async () => {
+  const { status } = await researchThroughRuntime('unobtainable-comments-boundary',
+    { route: 'inspect_video', videoId: VIDEO, useStoryboard: false, savedOnly: true, requestedEvidence: ['comments'] },
+    [], commentsPage(0), 'The comments were not saved, and this request allows saved data only.');
+  expect(status).toBe('completed');
+});
+
+test('an uncited context answer is still rejected when the run admitted passages', async () => {
+  const empty = await researchThroughRuntime('uncited-reference', { route: 'inspect_video', videoId: VIDEO, useStoryboard: false,
+    requestedEvidence: ['comments'] }, [{ tool: 'get_video_comments', input: { videoId: VIDEO } }], commentsPage(0), 'This video has no comments.');
+  const { runtime, runIds: [runId] } = await seedRuns('uncited-with-passages');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals;
+    internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId!}, ${JSON.stringify({ route: 'inspect_video', videoId: VIDEO })}, 0)`;
+    await internals.performEvidenceTool(runId!, execution('readable-comments', { kind: 'youtube_comments', usage: [{ operation: 'comments', credits: 1, cacheStatus: 'miss' }] },
+      undefined, 'get_video_comments'));
+    await expect(internals.finalizeRun(runId!, 'finalize', empty.finalInput)).rejects.toMatchObject({ code: 'AGENT_INTENT_MISMATCH' });
+  });
+});
