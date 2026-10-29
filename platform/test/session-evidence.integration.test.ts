@@ -2192,7 +2192,7 @@ test('a word longer than a chunk is never indexed as its own suffix', async () =
 
 // Requested evidence: research cannot complete while a requested kind can still be obtained.
 async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider, decision: Extract<CapabilityRouteDecision, { route: 'inspect_video' | 'topic_research' }>,
-  steps: Array<{ tool: string; input?: object }>, recoveredEvidence: EvidencePacket[] = []) {
+  steps: Array<{ tool: string; input?: object }>, recoveredEvidence: EvidencePacket[] = [], setup?: (ctx: AgentToolContext) => void) {
   const { MockLanguageModelV4 } = await import('ai/test');
   const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -2215,6 +2215,7 @@ async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
   } });
   const ctx = context(store, p);
+  setup?.(ctx);
   ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId, conversationId: crypto.randomUUID(),
     userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
   await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence,
@@ -2319,5 +2320,46 @@ test('reading viewer comments does not satisfy a request for the speaker\'s exac
       [{ tool: 'search_originals', input: { assetVersion: commentsVersion } }, { tool: 'search_originals', input: { assetVersion: captions } }, { tool: 'complete_research' }]);
     expect(offered[1]).not.toContain('complete_research');
     expect(offered[2]).toContain('complete_research');
+    expect(missing).toEqual([]);
+  }));
+
+// Requested evidence counts only when the model actually receives it.
+test('a transcript withheld for analysis does not satisfy requested quotations', async () =>
+  within('requested-quotes-withheld-transcript', async store => {
+    const { offered, missing } = await runRequested(store, withComments(store).p,
+      // Topic research withholds a fetched transcript's text until it is analyzed.
+      { route: 'topic_research', comparisonVideoIds: [id], researchVideoCount: 1, useStoryboard: false, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'get_video_transcript', input: { videoId: id } }, { tool: 'search_originals', input: { query: 'clear opening' } }, { tool: 'complete_research' }],
+      [], ctx => { ctx.transcriptPolicy = { mode: 'contextual_analysis', researchQuestion: 'Quote the opening.',
+        analyze: async () => { throw new Error('Analysis is not part of this test.'); } }; });
+    // The fetched transcript's text is withheld from the models, so only the original read opens completion.
+    expect(offered[1]).not.toContain('complete_research');
+    expect(offered[2]).toContain('complete_research');
+    expect(missing).toEqual([]);
+  }));
+
+test('a comment search with no matches does not satisfy requested comments', async () =>
+  within('requested-comments-empty-search', async store => {
+    const commentsVersion = await saveComments(store, commentPage(3, index => `Viewer note ${index + 1}`));
+    const filtered = await runRequested(store, withComments(store).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'search_originals', input: { assetVersion: commentsVersion, query: 'absentliteralword' } },
+        { tool: 'search_originals', input: { assetVersion: commentsVersion } }, { tool: 'complete_research' }]);
+    expect(filtered.offered[1]).not.toContain('complete_research');
+    expect(filtered.offered[2]).toContain('complete_research');
+    expect(filtered.missing).toEqual([]);
+  }));
+
+test('a comment fetch that returns no comments satisfies requested comments', async () =>
+  within('requested-comments-none-exist', async store => {
+    // The run also reads a caption, so the answer has something to cite besides the empty comment page.
+    await saveCaptions(store, id, 'A clear opening sentence.');
+    const none = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(0, () => '') }));
+    const { offered, missing } = await runRequested(store, withComments(store, none).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'search_originals', input: { query: 'clear opening' } }, { tool: 'get_video_comments', input: { videoId: id } }, { tool: 'complete_research' }]);
+    expect(offered[1]).not.toContain('complete_research');
+    expect(offered[2]).toContain('complete_research');
+    expect(none).toHaveBeenCalledOnce();
     expect(missing).toEqual([]);
   }));

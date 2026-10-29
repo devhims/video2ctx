@@ -1,6 +1,7 @@
 import type { CapabilityRouteDecision, EvidencePacket } from '../contracts';
 import type { SessionBrief } from '../runtime/session-evidence';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
+import { transcriptAwaitsAnalysis } from '../runtime/model-evidence';
 
 export type RequestedEvidenceKind = 'original_quotes' | 'comments';
 /** pending: still obtainable in this run, so research cannot complete. unavailable: report it as a gap. */
@@ -21,10 +22,11 @@ export function requestedEvidenceKinds(decision: CapabilityRouteDecision): Reque
 }
 
 /**
- * Requested evidence not yet read in this run. Exact quotations are the speaker's words, so they need
- * original caption text (a saved-transcript read or the complete transcript); viewer comments never
- * satisfy them. Comments need a comment read, including one that returned no comments. A subject whose
- * evidence can no longer be obtained is unavailable.
+ * Requested evidence not yet read in this run, counting only text the models actually receive. Exact
+ * quotations are the speaker's words, so they need caption text: a saved-transcript read, or a complete
+ * transcript that is not withheld for analysis. Viewer comments never satisfy them. Comments need comments
+ * that were read, or a source that genuinely has none; a filtered read with no matches does not count.
+ * A subject whose evidence can no longer be obtained is unavailable.
  */
 export function outstandingRequestedEvidence(context: RequestedEvidenceContext): RequestedEvidenceItem[] {
   const kinds = requestedEvidenceKinds(context.decision);
@@ -41,10 +43,7 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
   const saved = 'savedOnly' in decision && decision.savedOnly === true;
   const items: RequestedEvidenceItem[] = [];
   for (const kind of kinds) for (const videoId of subjects) {
-    const read = kind === 'original_quotes'
-      ? packets.some(packet => about(packet, videoId) && packet.kind === 'youtube_transcript' && packet.excerpts.length
-        && packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT || artifact.type === 'youtube_complete_transcript'))
-      : packets.some(packet => about(packet, videoId) && packet.kind === 'youtube_comments');
+    const read = packets.some(packet => about(packet, videoId) && (kind === 'original_quotes' ? captionTextRead(packet) : commentsRead(packet)));
     if (read) continue;
     const obtainable = kind === 'original_quotes'
       ? (context.canUse('search_originals') && savedOriginal('transcript', videoId))
@@ -54,6 +53,21 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
     items.push({ kind, ...(videoId ? { videoId } : {}), state: obtainable ? 'pending' : 'unavailable' });
   }
   return items;
+}
+
+/** Caption text that reaches the models: a saved-original read, or a complete transcript not withheld for analysis. */
+function captionTextRead(packet: EvidencePacket): boolean {
+  return packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
+    && (packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT)
+      || (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript') && !transcriptAwaitsAnalysis(packet)));
+}
+
+/** Comments that were read, or a source that genuinely has none: never a filtered read with no matches. */
+function commentsRead(packet: EvidencePacket): boolean {
+  if (packet.kind !== 'youtube_comments') return false;
+  if (packet.excerpts.length) return true;
+  return packet.artifacts.some(artifact => (artifact.type === SAVED_EVIDENCE_ARTIFACT && artifact.data.totalExcerpts === 0)
+    || (artifact.type === 'youtube_comments' && (artifact.data.collection as { fetchedCount?: unknown } | undefined)?.fetchedCount === 0));
 }
 
 export function requestedEvidenceGuidance(kinds: readonly RequestedEvidenceKind[]): string {
