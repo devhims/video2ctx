@@ -69,6 +69,7 @@ import {
 import {
   evidencePacketForModel,
   finalizationEvidenceForModel,
+  transcriptAwaitsAnalysis,
 } from '../runtime/model-evidence';
 import { COMPLETE_RESEARCH_TOOL_NAME, FINALIZE_ANSWER_TOOL_NAME } from '../runtime/loop-control';
 import type { AgentDraft } from '../runtime/run-progress';
@@ -593,8 +594,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     },
     finalize: async (id, input) => {
       await startFinalization();
+      // A transcript withheld from the models until analysis has not been reviewed.
       const reviewedVideos = new Set([...evidence.values()].filter(packet =>
-        packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
+        packet.kind === 'youtube_transcript' && packet.excerpts.length > 0 && !transcriptAwaitsAnalysis(packet)
         && (options.decision.comparisonVideoIds?.length || options.decision.route !== 'topic_research' || packet.artifacts.some(artifact => artifact.type === 'youtube_transcript_analysis')),
       ).flatMap(packet => packet.sources.flatMap(source => source.videoId && (!options.decision.comparisonVideoIds || options.decision.comparisonVideoIds.includes(source.videoId)) ? [source.videoId] : [])));
       const target = researchVideoTarget(options.decision);

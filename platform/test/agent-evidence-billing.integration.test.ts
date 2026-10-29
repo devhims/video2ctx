@@ -922,7 +922,8 @@ test('a recovered comment failure for one video keeps another video\'s requested
 
 // Uncited answers cross the real finalization boundary only when persisted evidence leaves nothing to cite.
 async function researchThroughRuntime(name: string, decision: Record<string, unknown>,
-  steps: Array<{ tool: string; input?: object }>, commentPage: (videoId: string) => unknown, answer: string) {
+  steps: Array<{ tool: string; input?: object }>, commentPage: (videoId: string) => unknown, answer: string,
+  options: { transcript?: (videoId: string) => unknown; withholdTranscripts?: boolean } = {}) {
   const { MockLanguageModelV4 } = await import('ai/test');
   const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
   const { vi } = await import('vitest');
@@ -944,11 +945,15 @@ async function researchThroughRuntime(name: string, decision: Record<string, unk
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
     const store = internals.sessionStore;
     const comments = vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentPage(videoId) }));
+    const transcript = options.transcript && vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: options.transcript!(videoId) }));
     await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
       message: 'What do commenters say about this video?', decision: decision as never,
       context: { runId: runId!, signal: new AbortController().signal, session: store,
-        provider: sessionProvider({ comments } as unknown as AgentToolContext['provider'], store),
-        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        provider: sessionProvider({ comments, ...(transcript ? { transcript } : {}) } as unknown as AgentToolContext['provider'], store),
+        getEvidence: () => store.evidence(),
+        // Topic research withholds a fetched transcript's text from the models until it is analyzed.
+        transcriptPolicy: options.withholdTranscripts ? { mode: 'contextual_analysis', researchQuestion: 'What do commenters say?',
+          analyze: async () => { throw new Error('Analysis is not part of this test.'); } } : { mode: 'complete_transcript' },
         executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
         deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId!, source, packets),
         // The real persistence boundary, including the persisted-route intent check.
@@ -989,4 +994,21 @@ test('an uncited context answer is still rejected when the run admitted passages
       undefined, 'get_video_comments'));
     await expect(internals.finalizeRun(runId!, 'finalize', empty.finalInput)).rejects.toMatchObject({ code: 'AGENT_INTENT_MISMATCH' });
   });
+});
+
+test('a withheld transcript plus empty comment pages still allows the truthful no-comments answer', async () => {
+  const { finalInput, status } = await researchThroughRuntime('withheld-transcript-empty-comments',
+    { route: 'topic_research', comparisonVideoIds: [VIDEO, 'zyxwvutsrqp'], researchVideoCount: 2, useStoryboard: false, requestedEvidence: ['comments'] },
+    ['transcript', 'comments'].flatMap(kind => [VIDEO, 'zyxwvutsrqp'].map(videoId => ({ tool: `get_video_${kind}`, input: { videoId } }))),
+    commentsPage(0), 'This video has no comments.', {
+      withholdTranscripts: true,
+      transcript: videoId => ({ videoId, track: { id: 'en', name: 'English', languageCode: 'en', kind: 'manual', isTranslatable: true, isDefault: true },
+        segments: [{ text: 'A transcript the models have not been shown.', startMs: 0, endMs: 1000, durationMs: 1000 }],
+        text: 'A transcript the models have not been shown.',
+        meta: { source: 'allthingsyoutube', fetchedAt: '2026-10-30T00:00:00Z', partial: false, warnings: [] } }),
+    });
+  expect(finalInput.intent).toBe('context_answer');
+  // Transcripts withheld for analysis were not reviewed.
+  expect(finalInput.artifacts.find(artifact => artifact.type === 'research_coverage')?.data.reviewedVideos).toBe(0);
+  expect(status).toBe('completed');
 });

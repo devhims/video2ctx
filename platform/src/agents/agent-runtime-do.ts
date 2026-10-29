@@ -74,7 +74,7 @@ import {
   type AgentRequest,
 } from './contracts';
 import { buildAgentTurnResult } from './finalizer';
-import type { EvidenceRunRecord } from './runtime/model-evidence';
+import { transcriptAwaitsAnalysis, type EvidenceRunRecord } from './runtime/model-evidence';
 import { metadataForConversation, unambiguousMetadataRecords, evidenceWithConversationMetadata } from './runtime/conversation-metadata';
 import { isInspectionPacket } from './runtime/inspection-records';
 import { AGENT_MODEL_ID, createAgentModel, estimateAgentModelCostMicros } from './model';
@@ -968,7 +968,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       || input.artifacts.some(artifact => artifact.type !== 'research_coverage' || artifact.data.reviewedVideos !== 0)
       || answerCitationIds(input.answer).length) return false;
     const evidence = this.readEvidencePackets(runId);
-    if (evidence.some(packet => packet.excerpts.length)) return false;
+    // Only passages the models received count; a transcript withheld until analysis was never shown.
+    if (evidence.some(packet => packet.excerpts.length && !transcriptAwaitsAnalysis(packet))) return false;
     const brief = this.sessionStore.brief();
     const state = this.sessionStore.savedEvidenceReadState(runId);
     if (usesSavedEvidenceSkill(decision) && unreadOriginalSources(decision, brief, evidence).length > 0
