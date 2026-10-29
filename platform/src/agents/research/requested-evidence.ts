@@ -12,8 +12,8 @@ export interface RequestedEvidenceContext {
   packets: Iterable<EvidencePacket>;
   /** Saved versions this run could not read (unavailable, withheld or empty). */
   terminalVersions: ReadonlySet<string>;
-  /** Whether a tool can still deliver evidence in this run: offered, provider present, not failed. */
-  canUse: (tool: 'search_originals' | 'get_video_transcript' | 'get_video_comments') => boolean;
+  /** Whether a tool can still deliver evidence for a subject in this run: offered, provider present, not failed for it. */
+  canUse: (tool: 'search_originals' | 'get_video_transcript' | 'get_video_comments', videoId?: string) => boolean;
 }
 
 export function requestedEvidenceKinds(decision: CapabilityRouteDecision): RequestedEvidenceKind[] {
@@ -21,9 +21,10 @@ export function requestedEvidenceKinds(decision: CapabilityRouteDecision): Reque
 }
 
 /**
- * Requested evidence not yet read in this run. Exact quotations need original caption or comment
- * text (a saved-original read or the complete transcript); comments need a comment read, including
- * one that returned no comments. A subject whose evidence can no longer be obtained is unavailable.
+ * Requested evidence not yet read in this run. Exact quotations are the speaker's words, so they need
+ * original caption text (a saved-transcript read or the complete transcript); viewer comments never
+ * satisfy them. Comments need a comment read, including one that returned no comments. A subject whose
+ * evidence can no longer be obtained is unavailable.
  */
 export function outstandingRequestedEvidence(context: RequestedEvidenceContext): RequestedEvidenceItem[] {
   const kinds = requestedEvidenceKinds(context.decision);
@@ -41,15 +42,15 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
   const items: RequestedEvidenceItem[] = [];
   for (const kind of kinds) for (const videoId of subjects) {
     const read = kind === 'original_quotes'
-      ? packets.some(packet => about(packet, videoId) && packet.excerpts.length
+      ? packets.some(packet => about(packet, videoId) && packet.kind === 'youtube_transcript' && packet.excerpts.length
         && packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT || artifact.type === 'youtube_complete_transcript'))
       : packets.some(packet => about(packet, videoId) && packet.kind === 'youtube_comments');
     if (read) continue;
     const obtainable = kind === 'original_quotes'
-      ? (context.canUse('search_originals') && (savedOriginal('transcript', videoId) || savedOriginal('comments', videoId)))
-        || (!saved && context.canUse('get_video_transcript'))
+      ? (context.canUse('search_originals') && savedOriginal('transcript', videoId))
+        || (!saved && context.canUse('get_video_transcript', videoId))
       : (context.canUse('search_originals') && savedOriginal('comments', videoId))
-        || (!saved && context.canUse('get_video_comments'));
+        || (!saved && context.canUse('get_video_comments', videoId));
     items.push({ kind, ...(videoId ? { videoId } : {}), state: obtainable ? 'pending' : 'unavailable' });
   }
   return items;

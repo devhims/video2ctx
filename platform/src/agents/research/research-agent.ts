@@ -105,6 +105,8 @@ export interface EvidenceToolFailure {
   toolName: string;
   operation: EvidenceOperation;
   message: string;
+  /** The video a single-video tool call was for; absent when the failure is not tied to one video. */
+  videoId?: string;
   durationLimit?: VideoDurationFailure;
 }
 
@@ -484,9 +486,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const outstandingRequested = () => requestedKinds.length ? outstandingRequestedEvidence({
     decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
     terminalVersions: new Set(options.context.session?.savedEvidenceReadState?.(options.context.runId).outcomes.map(outcome => outcome.assetVersion) ?? []),
-    canUse: tool => {
+    canUse: (tool, videoId) => {
       if (tool === 'search_originals') return originalsReadable;
-      const failed = [...toolFailures.values()].some(failure => failure.toolName === tool);
+      // A failure for one video releases only that video; one not tied to a video releases every subject.
+      const failed = [...toolFailures.values()].some(failure => failure.toolName === tool
+        && (failure.videoId === undefined || videoId === undefined || failure.videoId === videoId));
       const provider = tool === 'get_video_comments' ? options.context.provider.comments : options.context.provider.transcript;
       return (toolNames as readonly string[]).includes(tool) && !failed && !!provider;
     },
@@ -514,7 +518,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   );
   const currentDurationNotice = () => durationLimitNotice([...toolFailures.values()], [...evidence.values()],
     options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds);
-  const pendingTools = new Map<string, Pick<EvidenceToolExecution, 'toolCallId' | 'toolName' | 'operation'>>();
+  const pendingTools = new Map<string, Pick<EvidenceToolExecution, 'toolCallId' | 'toolName' | 'operation'> & { videoId?: string }>();
   const recoveredTranscriptAnalysisKeys = transcriptAnalysisKeys(
     options.recoveredEvidence ?? [],
   );
@@ -656,6 +660,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
       pendingTools.set(execution.toolCallId, {
         toolCallId: execution.toolCallId, toolName: execution.toolName, operation: execution.operation,
+        ...(executionVideoId(execution) ? { videoId: executionVideoId(execution) } : {}),
       });
       try {
         const packet = await options.context.executeEvidenceTool(execution);
@@ -668,6 +673,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           toolCallId: execution.toolCallId,
           toolName: execution.toolName,
           operation: execution.operation,
+          ...(executionVideoId(execution) ? { videoId: executionVideoId(execution) } : {}),
           message: errorMessage(error),
           durationLimit: videoDurationFailure(error),
         });
@@ -804,7 +810,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           ],
           finalizationToolName: completionTool,
           finalizationAliases: completionTool === COMPLETE_RESEARCH_TOOL_NAME ? [FINALIZE_ANSWER_TOOL_NAME] : undefined,
-          isToolBudgetExhausted: () => !savedEvidenceSkill && transcriptBudget?.isExhausted() === true && !visualRequired,
+          isToolBudgetExhausted: () => !savedEvidenceSkill && transcriptBudget?.isExhausted() === true && !visualRequired
+            && !outstandingRequested().some(item => item.state === 'pending'),
         },
         messages: conversationModelMessages(
           options.conversationHistory ?? [],
@@ -913,6 +920,12 @@ async function runResearchAgentWithModelWithinDeadline(options: {
 
 /** Describing what was read must match what this turn's context actually holds. */
 export const EVIDENCE_DELIVERY_GUIDANCE = 'Evidence delivery labels describe this turn: image_analysis supplies image findings; transcript_analysis supplies analyst findings rather than a full transcript; retrieval supplies fetched or reused content; saved_read and inherited visual evidence contain earlier analysis. Use these distinctions internally. When the user explicitly asks about the workflow, explain only recorded activity and distinguish earlier evidence from current operations. Otherwise answer with findings, citations and material limitations.';
+
+/** The single video a tool call targets, when its input names one. */
+function executionVideoId(execution: Pick<EvidenceToolExecution, 'input'>): string | undefined {
+  const videoId = (execution.input as { videoId?: unknown } | undefined)?.videoId;
+  return typeof videoId === 'string' ? videoId : undefined;
+}
 
 function transcriptAnalysisKeys(recoveredEvidence: readonly EvidencePacket[]): string[] {
   return recoveredEvidence.flatMap((packet) => {

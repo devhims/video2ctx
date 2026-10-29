@@ -2192,7 +2192,7 @@ test('a word longer than a chunk is never indexed as its own suffix', async () =
 
 // Requested evidence: research cannot complete while a requested kind can still be obtained.
 async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider, decision: Extract<CapabilityRouteDecision, { route: 'inspect_video' | 'topic_research' }>,
-  steps: Array<{ tool: string; input?: object }>) {
+  steps: Array<{ tool: string; input?: object }>, recoveredEvidence: EvidencePacket[] = []) {
   const { MockLanguageModelV4 } = await import('ai/test');
   const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -2204,25 +2204,25 @@ async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider
       finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
   } });
   let supplied: { missingInputs: Array<Record<string, unknown>> } | undefined;
-  let cite = false;
+  let cite: string[] = [];
   const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
     const payload = call.prompt.find(message => message.role === 'user')!.content;
     const text = Array.isArray(payload) ? (payload[0] as { text: string }).text : payload as string;
     supplied ??= JSON.parse(text);
-    cite ||= text.includes('ref_1');
+    if (!cite.length) cite = [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12);
     return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
-      blocks: [{ text: 'The saved sources were reviewed as requested.', evidenceIds: cite ? ['ref_1'] : [] }] }) }],
+      blocks: [{ text: 'The saved sources were reviewed as requested.', evidenceIds: cite }] }) }],
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
   } });
   const ctx = context(store, p);
   ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId, conversationId: crypto.randomUUID(),
     userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
-  await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence: [],
+  await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence,
     message: 'Explain the opening with exact quotes, and what do commenters say?' });
   expect(ctx.finalize).toHaveBeenCalledOnce();
   return { offered, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
 }
-const withComments = (store: SessionEvidenceStore, comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Viewer note ${index + 1}`) }))) => {
+const withComments = (store: SessionEvidenceStore, comments: ReturnType<typeof vi.fn> = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Viewer note ${index + 1}`) }))) => {
   const p = { ...provider(), comments } as unknown as YouTubeAgentProvider;
   return { p: sessionProvider(p, store), comments };
 };
@@ -2273,5 +2273,51 @@ test('the saved-evidence skill without saved-only reads originals first, then st
     expect(offered[1]).not.toContain('complete_research');
     expect(offered[2]).toContain('complete_research');
     expect(comments).toHaveBeenCalledOnce();
+    expect(missing).toEqual([]);
+  }));
+
+// Review reproductions: every requested subject and kind is enforced on its own.
+const videoA = 'videoaaaaa1', videoB = 'videobbbbb2';
+const perVideoComments = (failFor?: string) => vi.fn(async (videoId: string) => {
+  if (videoId === failFor) throw new Error('Comments are unavailable for this video.');
+  return { cacheStatus: 'miss' as const, value: { ...commentPage(2, index => `Viewer note ${index + 1}`), videoId } };
+});
+const transcriptAnalysis = (videoId: string): EvidencePacket => ({ packetId: `analysis:${videoId}`, kind: 'youtube_transcript',
+  sources: [{ id: `youtube:${videoId}:transcript`, provider: 'youtube', kind: 'transcript', videoId }],
+  excerpts: [{ id: `analysis:${videoId}:0`, sourceId: `youtube:${videoId}:transcript`, text: 'The analyst summarizes the explanation.' }],
+  artifacts: [{ type: 'youtube_transcript_analysis', data: { analysisKey: `analysis-key:${videoId}` } }], warnings: [], usage: [] });
+
+test('meeting the transcript analysis target does not end research before requested comments are read', async () =>
+  within('requested-after-transcript-target', async store => {
+    const { p, comments } = withComments(store, perVideoComments());
+    const { offered, missing } = await runRequested(store, p, { route: 'topic_research', comparisonVideoIds: [videoA, videoB],
+      researchVideoCount: 2, useStoryboard: false, requestedEvidence: ['comments'] },
+    [{ tool: 'get_video_comments', input: { videoId: videoA } }, { tool: 'get_video_comments', input: { videoId: videoB } }, { tool: 'complete_research' }],
+    [transcriptAnalysis(videoA), transcriptAnalysis(videoB)]);
+    expect(comments).toHaveBeenCalledTimes(2);
+    expect(offered[1]).not.toContain('complete_research');
+    expect(missing).toEqual([]);
+  }));
+
+test('a comment failure for one video does not release another video that was not attempted', async () =>
+  within('requested-per-video-failure', async store => {
+    const { p, comments } = withComments(store, perVideoComments(videoA));
+    const { offered, missing } = await runRequested(store, p, { route: 'topic_research', comparisonVideoIds: [videoA, videoB],
+      researchVideoCount: 2, useStoryboard: false, requestedEvidence: ['comments'] },
+    [{ tool: 'get_video_comments', input: { videoId: videoA } }, { tool: 'get_video_comments', input: { videoId: videoB } }, { tool: 'complete_research' }]);
+    expect(offered[1]).not.toContain('complete_research');
+    expect(comments).toHaveBeenCalledTimes(2);
+    expect(missing).toEqual([{ reason: 'requested_evidence_missing', kind: 'comments', videoId: videoA }]);
+  }));
+
+test('reading viewer comments does not satisfy a request for the speaker\'s exact quotations', async () =>
+  within('requested-quotes-need-captions', async store => {
+    const captions = await saveCaptions(store, id, 'A clear opening sentence.');
+    const commentsVersion = await saveComments(store, commentPage(2, index => `Viewer note ${index + 1}`));
+    const { offered, missing } = await runRequested(store, withComments(store).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['original_quotes', 'comments'] },
+      [{ tool: 'search_originals', input: { assetVersion: commentsVersion } }, { tool: 'search_originals', input: { assetVersion: captions } }, { tool: 'complete_research' }]);
+    expect(offered[1]).not.toContain('complete_research');
+    expect(offered[2]).toContain('complete_research');
     expect(missing).toEqual([]);
   }));
