@@ -77,6 +77,7 @@ import { createCapabilityProvider, savedOnlyProvider } from './capability-provid
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
 import { outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds } from './requested-evidence';
+import { evidenceToolVideoId } from '../providers/youtube/tool-context';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
 import {
@@ -660,7 +661,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
       pendingTools.set(execution.toolCallId, {
         toolCallId: execution.toolCallId, toolName: execution.toolName, operation: execution.operation,
-        ...(executionVideoId(execution) ? { videoId: executionVideoId(execution) } : {}),
+        ...(evidenceToolVideoId(execution) ? { videoId: evidenceToolVideoId(execution) } : {}),
       });
       try {
         const packet = await options.context.executeEvidenceTool(execution);
@@ -673,7 +674,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           toolCallId: execution.toolCallId,
           toolName: execution.toolName,
           operation: execution.operation,
-          ...(executionVideoId(execution) ? { videoId: executionVideoId(execution) } : {}),
+          ...(evidenceToolVideoId(execution) ? { videoId: evidenceToolVideoId(execution) } : {}),
           message: errorMessage(error),
           durationLimit: videoDurationFailure(error),
         });
@@ -920,12 +921,6 @@ async function runResearchAgentWithModelWithinDeadline(options: {
 
 /** Describing what was read must match what this turn's context actually holds. */
 export const EVIDENCE_DELIVERY_GUIDANCE = 'Evidence delivery labels describe this turn: image_analysis supplies image findings; transcript_analysis supplies analyst findings rather than a full transcript; retrieval supplies fetched or reused content; saved_read and inherited visual evidence contain earlier analysis. Use these distinctions internally. When the user explicitly asks about the workflow, explain only recorded activity and distinguish earlier evidence from current operations. Otherwise answer with findings, citations and material limitations.';
-
-/** The single video a tool call targets, when its input names one. */
-function executionVideoId(execution: Pick<EvidenceToolExecution, 'input'>): string | undefined {
-  const videoId = (execution.input as { videoId?: unknown } | undefined)?.videoId;
-  return typeof videoId === 'string' ? videoId : undefined;
-}
 
 function transcriptAnalysisKeys(recoveredEvidence: readonly EvidencePacket[]): string[] {
   return recoveredEvidence.flatMap((packet) => {

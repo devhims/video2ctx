@@ -83,7 +83,7 @@ import {
   type AgentModelCostBudget,
   type AgentModelUsageEntry,
 } from './runtime/model-budget';
-import type { EvidenceToolExecution } from './providers/youtube/tool-context';
+import { evidenceToolVideoId, type EvidenceToolExecution } from './providers/youtube/tool-context';
 import { currentDateGuidance } from './runtime/current-date';
 import {
   conversationReadInputSchema,
@@ -138,6 +138,8 @@ interface ToolCallRow {
   result_json: string | null;
   error: string | null;
   error_context_json: string | null;
+  /** The single video the call targeted, so a recovered failure releases only that video's requested evidence. */
+  video_id: string | null;
   credits: number;
   created_at: number;
   updated_at: number;
@@ -880,15 +882,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sql`
       INSERT INTO agent_tool_calls (
         run_id, tool_call_id, semantic_key, tool_name, operation, status,
-        result_json, error, credits, created_at, updated_at
+        result_json, error, credits, created_at, updated_at, video_id
       ) VALUES (
         ${runId}, ${execution.toolCallId}, ${execution.semanticKey}, ${execution.toolName},
-        ${execution.operation}, 'running', null, null, 0, ${timestamp}, ${timestamp}
+        ${execution.operation}, 'running', null, null, 0, ${timestamp}, ${timestamp}, ${evidenceToolVideoId(execution) ?? null}
       )
       ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
         semantic_key = excluded.semantic_key,
         tool_name = excluded.tool_name,
         operation = excluded.operation,
+        video_id = excluded.video_id,
         status = 'running',
         error = null,
         error_context_json = null,
@@ -1494,8 +1497,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private readEvidenceToolFailures(runId: string): EvidenceToolFailure[] {
-    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json'>>`
-      SELECT tool_call_id, tool_name, operation, error, error_context_json
+    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json' | 'video_id'>>`
+      SELECT tool_call_id, tool_name, operation, error, error_context_json, video_id
       FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'failed' AND error IS NOT NULL
       ORDER BY created_at ASC
@@ -1508,6 +1511,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         operation: operation.data,
         message: row.error,
         durationLimit: parseVideoDurationFailure(row.error_context_json),
+        // Rows written before this column existed have no video, so they keep releasing every subject.
+        ...(row.video_id ? { videoId: row.video_id } : {}),
       }];
     });
   }
@@ -2004,8 +2009,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         PRIMARY KEY (run_id, tool_call_id)
       )
     `;
-    if (!this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`.some(column => column.name === 'error_context_json')) {
+    const toolCallColumns = this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`;
+    if (!toolCallColumns.some(column => column.name === 'error_context_json')) {
       this.sql`ALTER TABLE agent_tool_calls ADD COLUMN error_context_json TEXT`;
+    }
+    if (!toolCallColumns.some(column => column.name === 'video_id')) {
+      this.sql`ALTER TABLE agent_tool_calls ADD COLUMN video_id TEXT`;
     }
     this.evidenceLedger.initialize();
     this.sql`

@@ -861,3 +861,61 @@ test.each(['reused', 'fresh', 'provider-failure', 'cancelled', 'metadata', 'quot
     expect(internal.evidenceLedger.committed(runId!)).toBe(scenario === 'fresh' ? 22 : 18);
   });
 });
+
+test('a recovered comment failure for one video keeps another video\'s requested comments obtainable', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { buildAgentTurnResult } = await import('../src/agents/finalizer');
+  const { vi } = await import('vitest');
+  const { runtime, runIds: [runId] } = await seedRuns('recovered-failure-scope');
+  const videoA = 'videoaaaaa1', videoB = 'videobbbbb2';
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & {
+      readEvidenceToolFailures(runId: string): import('../src/agents/research/research-agent').EvidenceToolFailure[] };
+    // A's comment fetch fails through the real tool path, which persists the failure.
+    await expect(internals.performEvidenceTool(runId!, { toolCallId: 'comments-a', toolName: 'get_video_comments',
+      semanticKey: `comments:${videoA}`, operation: 'comments', input: { videoId: videoA },
+      execute: async () => { throw new Error('Comments are unavailable for this video.'); } })).rejects.toThrow('unavailable');
+    // Recovery reads the persisted record, as a resumed run does.
+    const recovered = internals.readEvidenceToolFailures(runId!);
+    expect(recovered).toMatchObject([{ toolName: 'get_video_comments', videoId: videoA }]);
+
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const offered: string[][] = [];
+    const steps = [{ tool: 'get_video_comments', input: { videoId: videoB } }, { tool: 'complete_research', input: {} }];
+    const core = new MockLanguageModelV4({ doGenerate: async call => {
+      offered.push((call.tools ?? []).map(tool => tool.name));
+      const step = steps[offered.length - 1] ?? steps[1]!;
+      return { content: [{ type: 'tool-call', toolCallId: `resumed-${offered.length}`, toolName: step.tool, input: JSON.stringify(step.input) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    let missing: Array<Record<string, unknown>> = [];
+    const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+      const payload = call.prompt.find(message => message.role === 'user')!.content;
+      const text = Array.isArray(payload) ? (payload[0] as { text: string }).text : payload as string;
+      missing = (JSON.parse(text).missingInputs as Array<Record<string, unknown>>).filter(input => input.reason === 'requested_evidence_missing');
+      return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+        blocks: [{ text: 'Viewer comments were read where available.', evidenceIds: [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12) }] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+    } });
+    const comments = vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: { videoId, totalCount: 1, replyContinuations: [],
+      meta: { source: 'allthingsyoutube' as const, fetchedAt: '2026-10-29T00:00:00Z', partial: false, warnings: [] },
+      comments: [{ id: 'c1', text: 'A viewer note.', author: { name: 'Viewer', thumbnails: [] }, isPinned: false, isHearted: false, replies: [] }] } }));
+    const store = internals.sessionStore;
+    const finalize = vi.fn(async (_id: string, input: Parameters<typeof buildAgentTurnResult>[2]) => buildAgentTurnResult({ runId: runId!,
+      conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+    { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
+      recoveredToolFailures: recovered, message: 'Compare both videos and what do commenters say?',
+      decision: { route: 'topic_research', comparisonVideoIds: [videoA, videoB], researchVideoCount: 2, useStoryboard: false, requestedEvidence: ['comments'] },
+      context: { runId: runId!, signal: new AbortController().signal, session: store,
+        provider: sessionProvider({ comments } as unknown as AgentToolContext['provider'], store),
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution), finalize } as unknown as AgentToolContext });
+    // B was never attempted, so A's recovered failure must not open completion.
+    expect(offered[0]).not.toContain('complete_research');
+    expect(comments).toHaveBeenCalledOnce();
+    expect(comments.mock.calls[0]![0]).toBe(videoB);
+    expect(missing).toEqual([{ reason: 'requested_evidence_missing', kind: 'comments', videoId: videoA }]);
+  });
+});
