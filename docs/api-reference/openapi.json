@@ -7466,6 +7466,18 @@
                               "verify_saved_evidence"
                             ]
                           },
+                          "requestedEvidence": {
+                            "minItems": 1,
+                            "maxItems": 2,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "original_quotes",
+                                "comments"
+                              ]
+                            }
+                          },
                           "refreshEvidence": {
                             "type": "boolean"
                           },
@@ -7547,6 +7559,18 @@
                             "enum": [
                               "verify_saved_evidence"
                             ]
+                          },
+                          "requestedEvidence": {
+                            "minItems": 1,
+                            "maxItems": 2,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "original_quotes",
+                                "comments"
+                              ]
+                            }
                           },
                           "refreshEvidence": {
                             "type": "boolean"
@@ -9089,6 +9113,18 @@
                           "verify_saved_evidence"
                         ]
                       },
+                      "requestedEvidence": {
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "original_quotes",
+                            "comments"
+                          ]
+                        }
+                      },
                       "refreshEvidence": {
                         "type": "boolean"
                       },
@@ -9170,6 +9206,18 @@
                         "enum": [
                           "verify_saved_evidence"
                         ]
+                      },
+                      "requestedEvidence": {
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "original_quotes",
+                            "comments"
+                          ]
+                        }
                       },
                       "refreshEvidence": {
                         "type": "boolean"

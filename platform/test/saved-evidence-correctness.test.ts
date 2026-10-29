@@ -106,10 +106,10 @@ function packet(version: string, original = true): EvidencePacket {
     artifacts: [{ type: original ? SAVED_EVIDENCE_ARTIFACT : 'youtube_transcript_analysis', data: {} }] };
 }
 
-it('activates original verification for saved-only text research, leaving visual analysis and normal retrieval alone', () => {
+it('activates original verification for text research with the skill, with or without saved-only, leaving visual analysis alone', () => {
   expect(usesSavedEvidenceVerification(decision)).toBe(true);
   expect(usesSavedEvidenceVerification({ ...decision, skill: undefined })).toBe(false);
-  expect(usesSavedEvidenceVerification({ ...decision, savedOnly: false })).toBe(false);
+  expect(usesSavedEvidenceVerification({ ...decision, savedOnly: false })).toBe(true);
   expect(usesSavedEvidenceVerification({ ...decision, useStoryboard: true })).toBe(false);
 });
 

@@ -20,13 +20,19 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
-  it('derives the saved-only restriction when the classifier selected verification but omitted its flag', async () => {
+  it('keeps retrieval available when the classifier selects verification without a saved-only restriction', async () => {
     const model = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk',
-      skill: 'verify_saved_evidence', visualEvidence: 'none' });
-    await expect(classifyCapabilityWithModel({ message: 'Recover the exact quote from the saved captions for https://youtu.be/abcdefghijk.', model,
-      signal: new AbortController().signal })).resolves.toMatchObject({
-      route: 'inspect_video', skill: 'verify_saved_evidence', savedOnly: true,
-    });
+      skill: 'verify_saved_evidence', requestedEvidence: ['original_quotes', 'comments'], visualEvidence: 'none' });
+    const decision = await classifyCapabilityWithModel({ message: 'Read the saved captions for exact quotes from https://youtu.be/abcdefghijk, and what do commenters say?', model,
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'inspect_video', skill: 'verify_saved_evidence', requestedEvidence: ['original_quotes', 'comments'] });
+    expect('savedOnly' in decision && decision.savedOnly).toBeFalsy();
+  });
+  it('repairs a finalize decision that carries requested evidence into an executable route', async () => {
+    const model = classifierModel({ route: 'finalize', responseIntent: 'context_answer', contextScope: 'video',
+      reason: 'Answer from context.', requestedEvidence: ['comments'], visualEvidence: 'none' });
+    await expect(classifyCapabilityWithModel({ message: 'What do commenters say about https://youtu.be/abcdefghijk?', model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ route: 'inspect_video', requestedEvidence: ['comments'] });
   });
   it('preserves a saved-only classification for the exact watercolor follow-up', async () => {
     const { watercolorFollowup, annaId, kelogId } = await import('./fixtures/watercolor-session');

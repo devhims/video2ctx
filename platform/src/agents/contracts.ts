@@ -13,6 +13,9 @@ export const visualEvidenceSchema = z.enum(['none', 'helpful', 'required']);
 export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
 export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(8);
 
+/** Evidence the user explicitly asked to be read before answering. Research cannot complete until each is read or unavailable. */
+export const requestedEvidenceSchema = z.array(z.enum(['original_quotes', 'comments'])).min(1).max(2);
+
 export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
   z.object({
     route: z.literal('topic_research'),
@@ -26,6 +29,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     visualRequirements: visualRequirementsSchema.optional(),
     savedOnly: z.boolean().optional(),
     skill: z.enum(['verify_saved_evidence']).optional(),
+    requestedEvidence: requestedEvidenceSchema.optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),
@@ -41,6 +45,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     visualRequirements: visualRequirementsSchema.optional(),
     savedOnly: z.boolean().optional(),
     skill: z.enum(['verify_saved_evidence']).optional(),
+    requestedEvidence: requestedEvidenceSchema.optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),

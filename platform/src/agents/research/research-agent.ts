@@ -76,6 +76,7 @@ import { capabilityRegistry, describeCapabilities } from './capability-registry'
 import { createCapabilityProvider, savedOnlyProvider } from './capability-provider';
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
+import { outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds } from './requested-evidence';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
 import {
@@ -88,6 +89,8 @@ import {
 type ExecutableRoute = Extract<CapabilityRouteDecision, { route: 'topic_research' | 'inspect_video' }>;
 
 const MAX_CONCURRENT_TRANSCRIPT_ANALYSES = 2;
+/** Retrieval the saved-evidence skill keeps for requested evidence that is not saved yet, unless the run is saved-only. */
+const SAVED_VERIFICATION_RETRIEVAL_TOOLS = ['get_video', 'get_video_transcript', 'get_video_comments'] as const;
 const TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS = 40_000;
 // A single inspected video is answered from its whole transcript in one call, without a
 // stored-context pass. Projected transcripts measure 61 to 68 characters per video second,
@@ -447,7 +450,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const savedEvidenceSkill = usesSavedEvidenceSkill(options.decision);
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME)
+    .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
+      || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
     .filter(name => !options.decision.savedOnly || name.startsWith('analyze_') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !VISUAL_TOOL_NAMES.includes(name) || options.decision.useStoryboard !== false);
   // With a configured finalizer, research only signals completion. The finalizer writes
@@ -473,6 +477,20 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       .map((packet) => [packet.packetId, packet]),
   );
   const unreadOriginals = () => unreadOriginalSources(options.decision, options.context.session?.brief(), evidence.values());
+  // Evidence the user explicitly asked for, still missing from this run. Pending items block completion
+  // while they can still be obtained; unavailable ones become finalizer gaps.
+  const requestedKinds = requestedEvidenceKinds(options.decision);
+  let originalsReadable = false;
+  const outstandingRequested = () => requestedKinds.length ? outstandingRequestedEvidence({
+    decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
+    terminalVersions: new Set(options.context.session?.savedEvidenceReadState?.(options.context.runId).outcomes.map(outcome => outcome.assetVersion) ?? []),
+    canUse: tool => {
+      if (tool === 'search_originals') return originalsReadable;
+      const failed = [...toolFailures.values()].some(failure => failure.toolName === tool);
+      const provider = tool === 'get_video_comments' ? options.context.provider.comments : options.context.provider.transcript;
+      return (toolNames as readonly string[]).includes(tool) && !failed && !!provider;
+    },
+  }) : [];
   // Gaps the answer stage must disclose: required sources not read (skill runs), and on every route,
   // saved originals that could not be read, were withheld, or were left out of a search's results.
   const savedOriginalHandoffGaps = () => {
@@ -485,6 +503,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       // A required source's outcome is already in its not-read gap.
       ...(options.context.session?.savedOriginalGaps?.(options.context.runId, read) ?? [])
         .filter(gap => !('videoId' in gap) || !unread.includes(gap.videoId)),
+      // Requested evidence the run did not obtain, whether it became unavailable or limits ended research.
+      ...outstandingRequested().map(({ kind, videoId }) => ({ reason: 'requested_evidence_missing', kind, ...(videoId ? { videoId } : {}) })),
     ];
   };
   const pendingOriginals = () => pendingOriginalSources(options.decision, options.context.session?.brief(), evidence.values(),
@@ -730,6 +750,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           for (const packet of packets) evidence.set(packet.packetId, packet);
         }, () => signal.throwIfAborted()) } : {}),
       };
+      originalsReadable = !!sessionTools.search_originals;
       return runAgentCoreWithModel({
         traceToolCall: phaseContext.traceToolCall,
         model: options.model,
@@ -748,6 +769,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(savedEvidenceSkill && !verifySaved ? ['Reuse supplied visual observations. Saved visual analysis tools remain available only for requested visual facts that are still missing; they do not replace required original caption/comment reads.'] : []),
             ...(!verifySaved ? ['For exact quotations or source corrections, use search_originals: omit assetVersion to find which saved source says it, then read that source by its version. Analyst summaries are not verbatim evidence. Read original passages before completing research.'] : []),
             ...(options.decision.savedOnly ? ['This run is saved-only. Retrieval and discovery are disabled, including incidental metadata calls. Missing saved assets are gaps, not permission to fetch.'] : []),
+            ...(requestedKinds.length ? [requestedEvidenceGuidance(requestedKinds)] : []),
             // The skill accompanies exactly the visual tools this model can call.
             ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
@@ -774,6 +796,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(storyboardRetrievalBudget(options.researchDeadlineAt) < STORYBOARD_RETRIEVAL_MIN_MS ? ['get_video_storyboard'] : []),
             ...(!canAnalyzeStoryboard(options.researchDeadlineAt) ? ['analyze_video_storyboard'] : []),
             ...(needsVisualWork() ? [completionTool] : []),
+            ...(outstandingRequested().some(item => item.state === 'pending') ? [completionTool] : []),
             ...(pendingOriginals().length ? [completionTool] : []),
             // Do not burn the research window on legacy search while originals are required.
             ...(savedEvidenceSkill && sessionTools.search_originals && pendingOriginals().length
@@ -953,10 +976,10 @@ async function runUnifiedFinalizer(options: {
     : options.decision.route === 'inspect_video' ? INSPECTION_FINALIZER_EVIDENCE_CHARACTERS : TIMEOUT_FINALIZER_EVIDENCE_CHARACTERS;
   const prepared = finalizationEvidenceForModel(options.evidence, evidenceBudget, comparisonVideoIds,
     options.context.evidenceRunRecords?.(options.evidence.map(packet => packet.packetId)));
-  // With no admitted passages, verification can report its access gap but cannot
+  // With no admitted passages, the run can report the gap in requested or required evidence, but cannot
   // produce a cited research finding. Use the existing context-only answer contract.
-  const savedOriginalsUnavailable = usesSavedEvidenceSkill(options.decision) && prepared.fullIds.size === 0
-    && options.handoffGaps?.some(gap => gap.reason === 'saved_original_not_read');
+  const savedOriginalsUnavailable = prepared.fullIds.size === 0 && (options.handoffGaps?.some(gap => gap.reason === 'requested_evidence_missing'
+    || (gap.reason === 'saved_original_not_read' && usesSavedEvidenceSkill(options.decision))) ?? false);
   const intent = savedOriginalsUnavailable ? 'context_answer'
     : options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
@@ -1046,7 +1069,7 @@ async function runUnifiedFinalizer(options: {
           description: 'Answer blocks with supporting evidenceIds from the supplied evidence.' }),
         system: [
           'You are the finalizer for a YouTube research run.',
-          ...(savedOriginalsUnavailable ? ['No original passages were admitted. Explain the recorded access or empty-source gap only. Do not assert video facts, fabricate quotations, or claim that the requested quotation does not exist.'] : []),
+          ...(savedOriginalsUnavailable ? ['No source passages were admitted. Explain the recorded gaps in the requested evidence only. Do not assert video facts, fabricate quotations, or claim that the requested quotation or comments do not exist.'] : []),
           ...(usesSavedEvidenceSkill(options.decision) ? [SAVED_EVIDENCE_ANSWER_SKILL] : []),
           'Prefer current assets over superseded versions unless the user asks for a historical comparison. A failed refresh does not make an old snapshot fresh; retain its collection time and explain the failure.',
           'Packets with savedEvidence contain selected original captions or comments, not analyst paraphrases. Use their exact text for requested quotations. Put supporting references only in each block\'s evidenceIds array; the application renders precise passage links from segment startMs. Do not put asset IDs, excerpt IDs, startMs/endMs fields, millisecond values or hand-written timestamp URLs into the prose. Preserve source identity. Do not claim timestamps or captions are absent when these packets supply them. A quote spanning several segments must cite those segments; do not guess corrected brand spellings from noisy captions. Coverage describes a selected page, not a complete transcript review.',

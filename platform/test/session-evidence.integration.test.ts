@@ -5,7 +5,7 @@ import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools
 import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { expect, test, vi } from 'vitest';
-import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
+import { evidencePacketSchema, type CapabilityRouteDecision, type EvidencePacket } from '../src/agents/contracts';
 import type { Comment, CommentsPage, Transcript } from 'all-things-youtube';
 import { SessionEvidenceStore, versionEvidencePacket } from '../src/agents/runtime/session-evidence';
 import { remember } from './fixtures/memory';
@@ -2188,4 +2188,90 @@ test('a word longer than a chunk is never indexed as its own suffix', async () =
     expect(chunks.map(chunk => chunk.search_text)).toEqual([`${'x'.repeat(3000)}lighthouse reader`, '', '']);
     const found = await searchSavedEvidence(reopen(), { query: 'lighthouse' });
     expect(found.packets[0]!.excerpts.map(excerpt => excerpt.id)).toEqual([`saved:${version}:comment:1:0`]);
+  }));
+
+// Requested evidence: research cannot complete while a requested kind can still be obtained.
+async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider, decision: Extract<CapabilityRouteDecision, { route: 'inspect_video' | 'topic_research' }>,
+  steps: Array<{ tool: string; input?: object }>) {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+  const offered: string[][] = [];
+  const core = new MockLanguageModelV4({ doGenerate: async call => {
+    offered.push((call.tools ?? []).map(tool => tool.name));
+    const step = steps[offered.length - 1] ?? { tool: 'complete_research' };
+    return { content: [{ type: 'tool-call', toolCallId: `step-${offered.length}`, toolName: step.tool, input: JSON.stringify(step.input ?? {}) }],
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+  } });
+  let supplied: { missingInputs: Array<Record<string, unknown>> } | undefined;
+  let cite = false;
+  const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+    const payload = call.prompt.find(message => message.role === 'user')!.content;
+    const text = Array.isArray(payload) ? (payload[0] as { text: string }).text : payload as string;
+    supplied ??= JSON.parse(text);
+    cite ||= text.includes('ref_1');
+    return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+      blocks: [{ text: 'The saved sources were reviewed as requested.', evidenceIds: cite ? ['ref_1'] : [] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+  const ctx = context(store, p);
+  ctx.finalize = vi.fn(async (_tool, input) => buildAgentTurnResult({ runId: ctx.runId, conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 100 }, input, store.evidence(), 0));
+  await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence: [],
+    message: 'Explain the opening with exact quotes, and what do commenters say?' });
+  expect(ctx.finalize).toHaveBeenCalledOnce();
+  return { offered, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
+}
+const withComments = (store: SessionEvidenceStore, comments = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Viewer note ${index + 1}`) }))) => {
+  const p = { ...provider(), comments } as unknown as YouTubeAgentProvider;
+  return { p: sessionProvider(p, store), comments };
+};
+
+test('requested comments keep research open until they are read', async () =>
+  within('requested-comments', async store => {
+    await saveCaptions(store, id, 'A clear opening sentence.');
+    const { p, comments } = withComments(store);
+    const { offered, missing } = await runRequested(store, p, { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'get_video_comments', input: { videoId: id } }, { tool: 'complete_research' }]);
+    expect(offered[0]).not.toContain('complete_research');
+    expect(offered[1]).toContain('complete_research');
+    expect(comments).toHaveBeenCalledOnce();
+    expect(missing).toEqual([]);
+  }));
+
+test('requested quotations keep research open until original captions are read', async () =>
+  within('requested-quotes', async store => {
+    await saveCaptions(store, id, 'A clear opening sentence.');
+    const { offered, missing } = await runRequested(store, withComments(store).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'search_originals', input: { query: 'clear opening' } }, { tool: 'complete_research' }]);
+    expect(offered[0]).not.toContain('complete_research');
+    expect(offered[1]).toContain('complete_research');
+    expect(missing).toEqual([]);
+  }));
+
+test('requested evidence that cannot be obtained does not block research and reaches the finalizer as a gap', async () =>
+  within('requested-unavailable', async store => {
+    await saveCaptions(store, id, 'A clear opening sentence.');
+    // Saved-only, and no comments were ever saved: comments cannot be obtained in this run.
+    const { offered, missing } = await runRequested(store, withComments(store).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, savedOnly: true, requestedEvidence: ['comments'] }, [{ tool: 'complete_research' }]);
+    expect(offered[0]).toContain('complete_research');
+    expect(missing).toEqual([{ reason: 'requested_evidence_missing', kind: 'comments', videoId: id }]);
+  }));
+
+test('the saved-evidence skill without saved-only reads originals first, then still fetches requested comments', async () =>
+  within('requested-skill-retrieval', async store => {
+    const version = await saveCaptions(store, id, 'A clear opening sentence.');
+    const { p, comments } = withComments(store);
+    const { offered, missing } = await runRequested(store, p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, skill: 'verify_saved_evidence', requestedEvidence: ['original_quotes', 'comments'] },
+      [{ tool: 'search_originals', input: { assetVersion: version } }, { tool: 'get_video_comments', input: { videoId: id } }, { tool: 'complete_research' }]);
+    // Originals come first; retrieval of the unsaved comments is then available, and completion only after them.
+    expect(offered[0]).toEqual(['search_originals']);
+    expect(offered[1]).toContain('get_video_comments');
+    expect(offered[1]).not.toContain('complete_research');
+    expect(offered[2]).toContain('complete_research');
+    expect(comments).toHaveBeenCalledOnce();
+    expect(missing).toEqual([]);
   }));
