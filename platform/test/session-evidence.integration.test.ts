@@ -2352,14 +2352,23 @@ test('a comment search with no matches does not satisfy requested comments', asy
 
 test('a comment fetch that returns no comments satisfies requested comments', async () =>
   within('requested-comments-none-exist', async store => {
-    // The run also reads a caption, so the answer has something to cite besides the empty comment page.
-    await saveCaptions(store, id, 'A clear opening sentence.');
+    // The empty page is the whole finding: the answer says so without anything to cite.
     const none = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(0, () => '') }));
     const { offered, missing } = await runRequested(store, withComments(store, none).p,
       { route: 'inspect_video', videoId: id, useStoryboard: false, requestedEvidence: ['comments'] },
-      [{ tool: 'search_originals', input: { query: 'clear opening' } }, { tool: 'get_video_comments', input: { videoId: id } }, { tool: 'complete_research' }]);
-    expect(offered[1]).not.toContain('complete_research');
-    expect(offered[2]).toContain('complete_research');
+      [{ tool: 'get_video_comments', input: { videoId: id } }, { tool: 'complete_research' }]);
+    expect(offered[1]).toContain('complete_research');
     expect(none).toHaveBeenCalledOnce();
+    expect(missing).toEqual([]);
+  }));
+
+test('a saved-only run whose only evidence is an empty comments page can say so without citations', async () =>
+  within('requested-comments-confirmed-empty', async store => {
+    const empty = await saveComments(store, commentPage(0, () => ''));
+    const { offered, missing } = await runRequested(store, withComments(store).p,
+      { route: 'inspect_video', videoId: id, useStoryboard: false, savedOnly: true, requestedEvidence: ['comments'] },
+      [{ tool: 'search_originals', input: { assetVersion: empty } }, { tool: 'complete_research' }]);
+    // runRequested asserts the answer was accepted; there is nothing to cite and no gap to report.
+    expect(offered[1]).toContain('complete_research');
     expect(missing).toEqual([]);
   }));

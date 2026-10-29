@@ -64,9 +64,16 @@ function captionTextRead(packet: EvidencePacket): boolean {
 
 /** Comments that were read, or a source that genuinely has none: never a filtered read with no matches. */
 function commentsRead(packet: EvidencePacket): boolean {
-  if (packet.kind !== 'youtube_comments') return false;
-  if (packet.excerpts.length) return true;
-  return packet.artifacts.some(artifact => (artifact.type === SAVED_EVIDENCE_ARTIFACT && artifact.data.totalExcerpts === 0)
+  return packet.kind === 'youtube_comments' && (packet.excerpts.length > 0 || confirmedEmptySource(packet));
+}
+
+/**
+ * A source that was read and genuinely holds no entries: a comment fetch that got none from YouTube,
+ * or a saved caption or comment page with no excerpts. A filtered read with no matches is not empty.
+ */
+export function confirmedEmptySource(packet: EvidencePacket): boolean {
+  return packet.excerpts.length === 0 && packet.artifacts.some(artifact =>
+    (artifact.type === SAVED_EVIDENCE_ARTIFACT && artifact.data.totalExcerpts === 0)
     || (artifact.type === 'youtube_comments' && (artifact.data.collection as { fetchedCount?: unknown } | undefined)?.fetchedCount === 0));
 }
 

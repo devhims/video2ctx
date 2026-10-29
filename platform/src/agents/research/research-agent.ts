@@ -76,7 +76,7 @@ import { capabilityRegistry, describeCapabilities } from './capability-registry'
 import { createCapabilityProvider, savedOnlyProvider } from './capability-provider';
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
-import { outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds } from './requested-evidence';
+import { confirmedEmptySource, outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds } from './requested-evidence';
 import { evidenceToolVideoId } from '../providers/youtube/tool-context';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
@@ -988,7 +988,9 @@ async function runUnifiedFinalizer(options: {
   // produce a cited research finding. Use the existing context-only answer contract.
   const savedOriginalsUnavailable = prepared.fullIds.size === 0 && (options.handoffGaps?.some(gap => gap.reason === 'requested_evidence_missing'
     || (gap.reason === 'saved_original_not_read' && usesSavedEvidenceSkill(options.decision))) ?? false);
-  const intent = savedOriginalsUnavailable ? 'context_answer'
+  // A source read and confirmed empty is a finding with nothing to cite, such as a page with no comments.
+  const confirmedEmpty = prepared.fullIds.size === 0 && options.evidence.some(confirmedEmptySource);
+  const intent = savedOriginalsUnavailable || confirmedEmpty ? 'context_answer'
     : options.decision.route === 'finalize' ? options.decision.responseIntent : options.decision.route;
   const conversational = intent === 'clarification' || intent === 'rejected';
   // Inspection records come only from this turn and the earlier turns on this conversation
@@ -1078,6 +1080,7 @@ async function runUnifiedFinalizer(options: {
         system: [
           'You are the finalizer for a YouTube research run.',
           ...(savedOriginalsUnavailable ? ['No source passages were admitted. Explain the recorded gaps in the requested evidence only. Do not assert video facts, fabricate quotations, or claim that the requested quotation or comments do not exist.'] : []),
+          ...(confirmedEmpty ? ['A requested source was read and contains no entries, for example a saved comments page with no comments. State that result plainly, naming the source. It needs no citation. Do not assert other video facts or invent content.'] : []),
           ...(usesSavedEvidenceSkill(options.decision) ? [SAVED_EVIDENCE_ANSWER_SKILL] : []),
           'Prefer current assets over superseded versions unless the user asks for a historical comparison. A failed refresh does not make an old snapshot fresh; retain its collection time and explain the failure.',
           'Packets with savedEvidence contain selected original captions or comments, not analyst paraphrases. Use their exact text for requested quotations. Put supporting references only in each block\'s evidenceIds array; the application renders precise passage links from segment startMs. Do not put asset IDs, excerpt IDs, startMs/endMs fields, millisecond values or hand-written timestamp URLs into the prose. Preserve source identity. Do not claim timestamps or captions are absent when these packets supply them. A quote spanning several segments must cite those segments; do not guess corrected brand spellings from noisy captions. Coverage describes a selected page, not a complete transcript review.',
