@@ -15,7 +15,7 @@ export function usesSavedEvidenceVerification(decision: CapabilityRouteDecision)
 
 export const SAVED_EVIDENCE_VERIFICATION_SKILL = `
 Active skill: verify_saved_evidence.
-Your task is to verify a follow-up from saved original captions or comments. The finalizer writes the answer.
+Your task is to verify a follow-up from saved evidence. For playlist listing facts (positions, titles, durations and links), load the retained playlist packet from priorEvidence with read_prior_evidence. Listing metadata is not caption or comment content and does not require retrieving or reviewing videos. For original quotations, use the saved captions or comments. The finalizer writes the answer.
 
 1. Resolve the request. Read the conversation's user messages for the latest name, format and corrections. Identify every requested quote, fact, source and calculation premise. Earlier assistant claims and memory are leads, not proof. Keep facts about different demonstrations within one video separate.
 2. Cover all requested items before polishing any one of them. Use the asset inventory to select each source by immutable version, or omit assetVersion to find which saved sources contain a word. Batch independent search_originals calls. Search an entire asset for a fact you have not located yet; do not invent a timestamp range. For requested wording, start with one distinctive word copied exactly from the request. Search requires every query word, matched by stem (mixing finds mix) but never by synonym, so do not combine several conceptual clues. After an empty result, simplify the query instead of concluding absence. For an unknown material name, search its category and compare all relevant occurrences, including the introduction.

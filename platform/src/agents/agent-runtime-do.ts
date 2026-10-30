@@ -958,8 +958,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
 
   /**
    * A research route may finish with the uncited context contract only when this run's persisted
-   * evidence proves there is nothing to cite: no admitted passages, plus a saved-source gap with no
-   * original read left to attempt (saved-evidence skill), a source read and confirmed empty, or
+   * evidence proves there is nothing to cite: no admitted passages, plus an explicitly partial
+   * missing-evidence response, a saved-source gap with no original read left to attempt
+   * (saved-evidence skill), a source read and confirmed empty, or
    * requested evidence that can no longer be obtained for any requested subject.
    */
   private allowsUncitedEvidenceAnswer(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
@@ -970,6 +971,11 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const evidence = this.readEvidencePackets(runId);
     // Only passages the models received count; a transcript withheld until analysis was never shown.
     if (evidence.some(packet => packet.excerpts.length && !transcriptAwaitsAnalysis(packet))) return false;
+    // The unified finalizer marks evidence-free research as partial even when there
+    // is no raw-asset read outcome (for example, a missing retained playlist).
+    // Persist that explanation under the same contract, without accepting an
+    // ordinary uncited answer or a claim that source content was reviewed.
+    if (input.warnings.some(warning => warning.code === 'PARTIAL_EVIDENCE')) return true;
     const brief = this.sessionStore.brief();
     const state = this.sessionStore.savedEvidenceReadState(runId);
     if (usesSavedEvidenceSkill(decision) && unreadOriginalSources(decision, brief, evidence).length > 0

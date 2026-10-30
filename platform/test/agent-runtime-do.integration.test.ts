@@ -2496,6 +2496,58 @@ test.each(['empty', 'withheld', 'unavailable', 'exhausted'] as const)(
   });
 
 
+test.each(['topic_research', 'inspect_video'] as const)(
+  'missing listing evidence persists a partial answer through the %s runtime boundary', async route => {
+    const { MockLanguageModelV4 } = await import('ai/test');
+    const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+    const { savedOnlyProvider } = await import('../src/agents/research/capability-provider');
+    const { compactAgentResult } = await import('../src/agents/response');
+    const { runtime, runId } = await seed(`missing-listing-boundary-${route}`, 'running');
+    const decision = { ...(route === 'inspect_video' ? { route, videoId: 'rfG8ce4nNh0' } : { route }),
+      savedOnly: true, skill: 'verify_saved_evidence' as const, useStoryboard: false };
+    const answer = 'The saved playlist rows for positions 8 and 9 are unavailable in this turn. I cannot establish their titles, durations or links, or calculate whether they fit in 35 minutes.';
+    await runInDurableObject(runtime, async instance => {
+      instance.sql`INSERT INTO agent_routes VALUES (${runId},${JSON.stringify(decision)},0)`;
+      const writer = instance as unknown as {
+        sessionStore: import('../src/agents/runtime/session-evidence').SessionEvidenceStore;
+        performFinalizeRun(runId: string, toolId: string, input: FinalizeAnswerInput): Promise<AgentTurnResult>;
+      };
+      // No raw assets, outcome records, or current-run evidence: this was missed by
+      // both the saved-original gap exception and the fixture-only finalizer tests.
+      expect(writer.sessionStore.brief().assets).toEqual([]);
+      expect(writer.sessionStore.savedEvidenceReadState(runId).outcomes).toEqual([]);
+      const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 1, text: 1, reasoning: 0 } };
+      const core = new MockLanguageModelV4({ doGenerate: async () => ({
+        content: [{ type: 'tool-call', toolCallId: 'complete', toolName: 'complete_research', input: '{}' }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+      }) });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({
+        content: [{ type: 'text', text: JSON.stringify({ confidence: 'low', warnings: [], blocks: [{ text: answer, evidenceIds: [] }] }) }],
+        finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
+      }) });
+      const finalize = vi.fn((toolId: string, input: FinalizeAnswerInput) => writer.performFinalizeRun(runId, toolId, input));
+      const retrieve = vi.fn(async (): Promise<never> => { throw new Error('Fresh retrieval prohibited'); });
+      await runResearchAgentWithModel({ message: 'Use the saved playlist only for positions 8 and 9 and the 35 minute calculation.',
+        decision, model: core, finalizationModel: finalizer, recoveredEvidence: [], inheritedResolved: true,
+        context: { runId, signal: new AbortController().signal, session: writer.sessionStore,
+          provider: savedOnlyProvider(), transcriptPolicy: { mode: 'complete_transcript' }, executeEvidenceTool: retrieve, finalize },
+      });
+      expect(finalize).toHaveBeenCalledOnce();
+      expect(finalizer.doGenerateCalls).toHaveLength(1);
+      expect(retrieve).not.toHaveBeenCalled();
+    });
+    // Verify the stored result in a separate access, not just the callback return.
+    await runInDurableObject(runtime, async instance => {
+      const row = instance.sql<{ status: string; result_json: string }>`SELECT status,result_json FROM agent_runs WHERE id=${runId}`[0]!;
+      expect(row.status).toBe('completed');
+      const result = JSON.parse(row.result_json) as AgentTurnResult;
+      expect(result).toMatchObject({ intent: 'context_answer', citations: [], answer });
+      expect(result.warnings).toContainEqual(expect.objectContaining({ code: 'PARTIAL_EVIDENCE' }));
+      expect(compactAgentResult(result).outcome).toBe('partial');
+    });
+  });
+
 test.each(['ordinary', 'pending', 'other-run', 'deleted', 'another-original', 'citation', 'artifact', 'claimed-coverage', 'admitted-content'] as const)(
   'saved-gap exception rejects %s context-answer substitution', async mode => {
     const { SessionEvidenceStore } = await import('../src/agents/runtime/session-evidence');
@@ -2531,7 +2583,9 @@ test.each(['ordinary', 'pending', 'other-run', 'deleted', 'another-original', 'c
         answer: 'The saved source is unavailable.' + (mode === 'citation' ? ' [cite:fake]' : ''),
         citations: [], artifacts: mode === 'artifact' ? [{ type: 'youtube_video', data: { videoId } }]
           : mode === 'claimed-coverage' ? [{ type: 'research_coverage', data: { targetVideos: 1, reviewedVideos: 1 } }] : [],
-        warnings: [] })).rejects.toMatchObject({ code: 'AGENT_INTENT_MISMATCH' });
+        warnings: ['citation', 'artifact', 'claimed-coverage', 'admitted-content'].includes(mode)
+          ? [{ code: 'PARTIAL_EVIDENCE', message: 'No citable source evidence was available.' }] : [],
+      })).rejects.toMatchObject({ code: 'AGENT_INTENT_MISMATCH' });
       expect(instance.sql<{ result_json: string | null }>`SELECT result_json FROM agent_runs WHERE id=${runId}`[0]!.result_json).toBeNull();
     });
   });
