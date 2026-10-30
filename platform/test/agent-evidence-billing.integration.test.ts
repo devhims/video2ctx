@@ -923,7 +923,7 @@ test('a recovered comment failure for one video keeps another video\'s requested
 // Uncited answers cross the real finalization boundary only when persisted evidence leaves nothing to cite.
 async function researchThroughRuntime(name: string, decision: Record<string, unknown>,
   steps: Array<{ tool: string; input?: object }>, commentPage: (videoId: string) => unknown, answer: string,
-  options: { transcript?: (videoId: string) => unknown; withholdTranscripts?: boolean } = {}) {
+  options: { transcript?: (videoId: string) => unknown; video?: (videoId: string) => unknown; withholdTranscripts?: boolean } = {}) {
   const { MockLanguageModelV4 } = await import('ai/test');
   const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
   const { vi } = await import('vitest');
@@ -945,11 +945,16 @@ async function researchThroughRuntime(name: string, decision: Record<string, unk
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
     const store = internals.sessionStore;
     const comments = vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentPage(videoId) }));
-    const transcript = options.transcript && vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: options.transcript!(videoId) }));
+    const transcript = options.transcript && vi.fn(async (videoId: string) => {
+      const value = options.transcript!(videoId);
+      if (value instanceof Error) throw value;
+      return { cacheStatus: 'miss' as const, value };
+    });
     await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
       message: 'What do commenters say about this video?', decision: decision as never,
       context: { runId: runId!, signal: new AbortController().signal, session: store,
-        provider: sessionProvider({ comments, ...(transcript ? { transcript } : {}) } as unknown as AgentToolContext['provider'], store),
+        provider: sessionProvider({ comments, ...(transcript ? { transcript } : {}),
+          ...(options.video ? { video: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: options.video!(videoId) }) } : {}) } as unknown as AgentToolContext['provider'], store),
         getEvidence: () => store.evidence(),
         // Topic research withholds a fetched transcript's text from the models until it is analyzed.
         transcriptPolicy: options.withholdTranscripts ? { mode: 'contextual_analysis', researchQuestion: 'What do commenters say?',
@@ -1011,4 +1016,23 @@ test('a withheld transcript plus empty comment pages still allows the truthful n
   // Transcripts withheld for analysis were not reviewed.
   expect(finalInput.artifacts.find(artifact => artifact.type === 'research_coverage')?.data.reviewedVideos).toBe(0);
   expect(status).toBe('completed');
+});
+
+test('a video with no captions and no comments gets those outcomes, not discovery text or a failed run', async () => {
+  const noCaptions = () => Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' });
+  const { finalInput, status } = await researchThroughRuntime('no-captions-no-comments',
+    { route: 'inspect_video', videoId: VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes', 'comments'] },
+    [{ tool: 'get_video', input: { videoId: VIDEO } }, { tool: 'get_video_transcript', input: { videoId: VIDEO } }, { tool: 'get_video_comments', input: { videoId: VIDEO } }],
+    commentsPage(0), 'unused: the application answers from the recorded outcomes', { transcript: noCaptions,
+      // Live runs always have the video's metadata, which has text but is not video content.
+      video: videoId => ({ type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.', thumbnails: [], keywords: [],
+        channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1, viewCountText: '1 view',
+        publishedTimeText: '1 year ago', durationSeconds: 136, durationText: '2:16', isLive: false, hasCaptions: false,
+        url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+        captionAvailability: { status: 'unavailable', languages: [], checkedAt: new Date().toISOString() },
+        meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } }) });
+  expect(status).toBe('completed');
+  expect(finalInput.answer).toContain('no captions are available');
+  expect(finalInput.answer).toContain('returned no comments');
+  expect(finalInput.answer).not.toContain('potentially relevant videos');
 });

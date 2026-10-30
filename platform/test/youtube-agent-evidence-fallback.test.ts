@@ -105,3 +105,63 @@ it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('preserves skipped transc
   expect(result.warnings).toContainEqual(skipped.warnings[0]);
   expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(true);
 });
+
+// A video without captions or comments: report those outcomes instead of discovery boilerplate.
+describe('empty or unavailable caption and comment outcomes', () => {
+  const videoId = 'XqZsoesa55w';
+  const metadata: EvidencePacket = { packetId: 'video', kind: 'youtube_video',
+    sources: [{ id: 'youtube:video:XqZsoesa55w', provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+    excerpts: [{ id: 'video:XqZsoesa55w', sourceId: 'youtube:video:XqZsoesa55w', text: 'Baby Shark Dance. Captions: unavailable.' }],
+    artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, captionAvailability: { status: 'unavailable', languages: [], checkedAt: '2026-10-30T09:00:00.000Z' } } }],
+    warnings: [], usage: [] };
+  const emptyComments = (fetchedCount: number): EvidencePacket => ({ packetId: `comments:${fetchedCount}`, kind: 'youtube_comments',
+    sources: [{ id: 'youtube:XqZsoesa55w:comments', provider: 'youtube', kind: 'comments', videoId }], excerpts: [],
+    artifacts: [{ type: 'youtube_comments', data: { returnedCount: 0, collection: { version: 1, fetchedCount, retainedCount: 0, morePages: false, continuationAccepted: true } } }],
+    warnings: [], usage: [] });
+  const captionsFailure = { toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId };
+
+  it('reports missing captions and an empty comment page, not potentially relevant videos', () => {
+    const result = evidenceFallback([metadata, emptyComments(0)], 'inspect_video', undefined, undefined, [captionsFailure], [videoId])!;
+    expect(result.answer).not.toContain('potentially relevant videos');
+    expect(result.answer).toContain('Baby Shark Dance');
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).toContain('returned no comments');
+    // The claims cite the video's own metadata, so the answer is a normal cited research answer.
+    expect(result.answer).toContain('[cite:video:XqZsoesa55w]');
+    expect(buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'user', creditsRemaining: 10 }, result, [metadata, emptyComments(0)], 0).citations).toHaveLength(1);
+  });
+
+  it('reports missing captions from a transcript failure alone', () => {
+    const plain = { ...metadata, artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId } }] };
+    const result = evidenceFallback([plain], 'inspect_video', undefined, undefined, [captionsFailure], [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).not.toContain('comments');
+  });
+
+  it('does not treat a comment read with nothing retained as an empty comment page', () => {
+    const plain = { ...metadata, artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId } }] };
+    const result = evidenceFallback([plain, emptyComments(20)], 'inspect_video', undefined, undefined, [], [videoId])!;
+    expect(result.answer).not.toContain('returned no comments');
+    expect(result.answer).toContain('potentially relevant videos');
+  });
+});
+
+describe('uncited outcome report at the persistence check', () => {
+  it('accepts only the exact regenerated report when nothing can be cited', async () => {
+    const { isDurationLimitFallback } = await import('../src/agents/research/duration-limit-answer');
+    const videoId = 'XqZsoesa55w';
+    const emptyComments: EvidencePacket = { packetId: 'comments', kind: 'youtube_comments',
+      sources: [{ id: 'youtube:XqZsoesa55w:comments', provider: 'youtube', kind: 'comments', videoId }], excerpts: [],
+      artifacts: [{ type: 'youtube_comments', data: { collection: { version: 1, fetchedCount: 0, retainedCount: 0, morePages: false, continuationAccepted: true } } }],
+      warnings: [], usage: [] };
+    const failures = [{ toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId }];
+    const report = evidenceFallback([emptyComments], 'inspect_video', undefined, undefined, failures, [videoId])!;
+    expect(report.answer).not.toContain('[cite:');
+    const context = { failures, requestedVideoIds: [videoId] };
+    expect(isDurationLimitFallback(report, [emptyComments], context)).toBe(true);
+    expect(isDurationLimitFallback({ ...report, answer: `${report.answer} Viewers loved it.` }, [emptyComments], context)).toBe(false);
+    // Without the recorded failure, the report cannot be regenerated, so the same text is not accepted.
+    expect(isDurationLimitFallback(report, [emptyComments], { failures: [], requestedVideoIds: [videoId] })).toBe(false);
+  });
+});
