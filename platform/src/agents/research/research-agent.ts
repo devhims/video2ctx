@@ -518,6 +518,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const toolFailures = new Map(
     (options.recoveredToolFailures ?? []).map((failure) => [failure.toolCallId, failure]),
   );
+  // The videos the user asked about, as the runtime derives them from the persisted route.
+  const requestedVideoIds = options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds ?? [];
   const currentDurationNotice = () => durationLimitNotice([...toolFailures.values()], [...evidence.values()],
     options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds);
   const pendingTools = new Map<string, Pick<EvidenceToolExecution, 'toolCallId' | 'toolName' | 'operation'> & { videoId?: string }>();
@@ -861,7 +863,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && transcriptRequested
       && !options.context.session?.brief().assets.some(asset=>asset.kind==='transcript'
         && (options.decision.route!=='inspect_video' || asset.videoId===options.decision.videoId))) {
-      const unavailable = evidenceFallback([...evidence.values()], options.decision.route, undefined, currentDurationNotice());
+      const unavailable = evidenceFallback([...evidence.values()], options.decision.route, undefined, currentDurationNotice(), [...toolFailures.values()], requestedVideoIds);
       if (unavailable) {
         unavailable.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-unavailable:${options.context.runId}`, unavailable);
@@ -907,7 +909,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       if (modelRequestExhaustion(finalizationError) || errorMessage(finalizationError) === 'Persistence phase timeout.') throw finalizationError;
       options.context.signal.throwIfAborted();
       const failure = finalizationFailure(finalizationError, finalizationFailures);
-      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice());
+      const partial = evidenceFallback([...evidence.values()], options.decision.route, failure.message, currentDurationNotice(), [...toolFailures.values()], requestedVideoIds);
       if (partial) {
         partial.warnings.push(...toolFailureWarnings([...toolFailures.values()]));
         await trackedContext.finalize(`evidence-fallback:${options.context.runId}`, partial);

@@ -1037,6 +1037,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     decision.route === 'inspect_video' || decision.route === 'topic_research' ? {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
+      // An application fallback is checked against what this run had, not earlier turns' cited content.
+      runPackets: this.admittedRunEvidence(runId, history),
     } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
@@ -1490,6 +1492,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(this.prepareResearchContext(context))} WHERE id=${runId}`;
   }
 
+  /**
+   * This run's evidence plus only the conversation metadata it admitted, the scope its research saw.
+   * A refresh route keeps earlier snapshots as unloaded pointers, so they stay out unless loaded.
+   */
+  private admittedRunEvidence(runId: string, history: readonly ConversationTurn[]): EvidencePacket[] {
+    const packets = this.readEvidencePackets(runId);
+    const own = new Set(packets.map(packet => packet.packetId));
+    const metadata = evidenceWithConversationMetadata(packets, history).filter(packet => !own.has(packet.packetId));
+    const admitted = this.evidenceLedger.packetOperations(runId, metadata.map(packet => packet.packetId));
+    return [...packets, ...metadata.filter(packet => admitted.has(packet.packetId))];
+  }
+
   private readEvidencePackets(runId: string): EvidencePacket[] {
     const packets = this.sql<{ packet_json: string }>`
       SELECT packet_json FROM agent_evidence_packets WHERE run_id = ${runId} ORDER BY created_at ASC
@@ -1497,11 +1511,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // Original reads live in session_packets, not the provider-tool audit table.
     // Restore only pages this run admitted. The ledger is the existing billing
     // receipt, so recovery neither redelivers evidence nor charges for it again.
+    // An empty page is admitted free and recorded only as an operation; it still
+    // proves the source was read, so it is restored too.
     const store = this.sessionStore;
     const originals = this.sql<{ packet_json: string }>`
       SELECT p.packet_json FROM session_packets p
-      JOIN agent_evidence_delivered_packets d ON d.packet_id = p.packet_id
-      WHERE d.run_id = ${runId} AND EXISTS (
+      JOIN (
+        SELECT packet_id, MIN(created_at) AS created_at FROM (
+          SELECT packet_id, created_at FROM agent_evidence_delivered_packets WHERE run_id = ${runId}
+          UNION ALL SELECT packet_id, created_at FROM agent_evidence_packet_operations WHERE run_id = ${runId}
+        ) GROUP BY packet_id
+      ) d ON d.packet_id = p.packet_id
+      WHERE EXISTS (
         SELECT 1 FROM json_each(p.packet_json, '$.artifacts')
         WHERE json_extract(value, '$.type') = 'saved_original_evidence'
       ) ORDER BY d.created_at ASC

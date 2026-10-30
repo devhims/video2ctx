@@ -58,8 +58,12 @@ describe('YouTube AgentCore loop control', () => {
     const run = runResearchAgentWithModel({ model, message: 'Research tasks', context,
       recoveredEvidence: [discovery], decision: { route: 'topic_research', researchVideoCount: 2,
         ...(comparison ? { comparisonVideoIds: ['video000001', 'video000002'] } : {}) } });
-    if (expected.length) await run;
+    // Two requested comparison videos without captions get an honest report rather than a failed run.
+    const reportsOutcome = code === 'CAPTIONS_UNAVAILABLE' && comparison;
+    if (expected.length || reportsOutcome) await run;
     else await expect(run).rejects.toThrow(code === 'UPSTREAM_ERROR' ? 'YouTube is not available right now.' : 'Evidence collection failed');
+    if (reportsOutcome) expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      answer: expect.stringContaining('no captions are available') }));
     expect(vi.mocked(context.provider.transcript).mock.calls.map(([id]) => id)).toEqual(['video000001', 'video000002', ...expected]);
     if (context.transcriptPolicy.mode !== 'contextual_analysis') throw new Error('Missing analyst');
     expect(context.transcriptPolicy.analyze).toHaveBeenCalledTimes(expected.length);

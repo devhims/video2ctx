@@ -923,7 +923,7 @@ test('a recovered comment failure for one video keeps another video\'s requested
 // Uncited answers cross the real finalization boundary only when persisted evidence leaves nothing to cite.
 async function researchThroughRuntime(name: string, decision: Record<string, unknown>,
   steps: Array<{ tool: string; input?: object }>, commentPage: (videoId: string) => unknown, answer: string,
-  options: { transcript?: (videoId: string) => unknown; withholdTranscripts?: boolean } = {}) {
+  options: { transcript?: (videoId: string) => unknown; video?: (videoId: string) => unknown; withholdTranscripts?: boolean } = {}) {
   const { MockLanguageModelV4 } = await import('ai/test');
   const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
   const { vi } = await import('vitest');
@@ -945,11 +945,16 @@ async function researchThroughRuntime(name: string, decision: Record<string, unk
       finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
     const store = internals.sessionStore;
     const comments = vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentPage(videoId) }));
-    const transcript = options.transcript && vi.fn(async (videoId: string) => ({ cacheStatus: 'miss' as const, value: options.transcript!(videoId) }));
+    const transcript = options.transcript && vi.fn(async (videoId: string) => {
+      const value = options.transcript!(videoId);
+      if (value instanceof Error) throw value;
+      return { cacheStatus: 'miss' as const, value };
+    });
     await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
       message: 'What do commenters say about this video?', decision: decision as never,
       context: { runId: runId!, signal: new AbortController().signal, session: store,
-        provider: sessionProvider({ comments, ...(transcript ? { transcript } : {}) } as unknown as AgentToolContext['provider'], store),
+        provider: sessionProvider({ comments, ...(transcript ? { transcript } : {}),
+          ...(options.video ? { video: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: options.video!(videoId) }) } : {}) } as unknown as AgentToolContext['provider'], store),
         getEvidence: () => store.evidence(),
         // Topic research withholds a fetched transcript's text from the models until it is analyzed.
         transcriptPolicy: options.withholdTranscripts ? { mode: 'contextual_analysis', researchQuestion: 'What do commenters say?',
@@ -1011,4 +1016,280 @@ test('a withheld transcript plus empty comment pages still allows the truthful n
   // Transcripts withheld for analysis were not reviewed.
   expect(finalInput.artifacts.find(artifact => artifact.type === 'research_coverage')?.data.reviewedVideos).toBe(0);
   expect(status).toBe('completed');
+});
+
+test('a video with no captions and no comments gets those outcomes, not discovery text or a failed run', async () => {
+  const noCaptions = () => Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' });
+  const { finalInput, status } = await researchThroughRuntime('no-captions-no-comments',
+    { route: 'inspect_video', videoId: VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes', 'comments'] },
+    [{ tool: 'get_video', input: { videoId: VIDEO } }, { tool: 'get_video_transcript', input: { videoId: VIDEO } }, { tool: 'get_video_comments', input: { videoId: VIDEO } }],
+    commentsPage(0), 'unused: the application answers from the recorded outcomes', { transcript: noCaptions,
+      // Live runs always have the video's metadata, which has text but is not video content.
+      video: videoId => ({ type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.', thumbnails: [], keywords: [],
+        channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1, viewCountText: '1 view',
+        publishedTimeText: '1 year ago', durationSeconds: 136, durationText: '2:16', isLive: false, hasCaptions: false,
+        url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+        captionAvailability: { status: 'unavailable', languages: [], checkedAt: new Date().toISOString() },
+        meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } }) });
+  expect(status).toBe('completed');
+  expect(finalInput.answer).toContain('no captions are available');
+  expect(finalInput.answer).toContain('returned no comments');
+  expect(finalInput.answer).not.toContain('potentially relevant videos');
+});
+
+test('a caption-quotes follow-up after a comments answer can report missing captions at the real boundary', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { vi } = await import('vitest');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [first, second] } = await seedRuns('followup-no-captions', 2);
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readConversationHistory(run: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
+    const store = internals.sessionStore;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const turn = async (runId: string, decision: Record<string, unknown>, steps: Array<{ tool: string; input?: object }>,
+      provider: Record<string, unknown>, conversationHistory?: import('../src/agents/runtime/conversation-memory').ConversationTurn[], inherited?: EvidencePacket[]) => {
+      internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId}, ${JSON.stringify(decision)}, 0)`;
+      let step = 0;
+      const core = new MockLanguageModelV4({ doGenerate: async () => {
+        const next = steps[step++] ?? { tool: 'complete_research' };
+        return { content: [{ type: 'tool-call', toolCallId: `${runId}-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+      } });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+        const text = JSON.stringify(call.prompt);
+        return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+          blocks: [{ text: 'Viewers praised the explanation.', evidenceIds: [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12) }] }) }],
+          finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      } });
+      let finalInput: FinalizeAnswerInput | undefined;
+      await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, conversationHistory,
+        // A follow-up resolves earlier-turn evidence before research; here it inherits metadata only.
+        ...(inherited ? { recoveredEvidence: inherited, inheritedResolved: true } : { recoveredEvidence: [] }),
+        message: 'Follow-up', decision: decision as never,
+        context: { runId, signal: new AbortController().signal, session: store,
+          provider: sessionProvider(provider as unknown as AgentToolContext['provider'], store),
+          getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+          executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId, execution),
+          deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets),
+          finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId, toolId, input); },
+        } as unknown as AgentToolContext });
+      return { finalInput: finalInput!, status: internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId}`[0]?.status };
+    };
+    const video = (videoId: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.',
+      thumbnails: [], keywords: [], channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1,
+      viewCountText: '1 view', publishedTimeText: '1 year ago', durationSeconds: 136, durationText: '2:16', isLive: false, hasCaptions: false,
+      url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } });
+    // Turn 1 answers from a cited viewer comment; no transcript is saved.
+    const one = await turn(first!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_comments', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video, comments: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentsPage(1)(videoId) }) });
+    expect(one.status).toBe('completed');
+    // Turn 2 follows turn 1 and asks for caption quotations; the caption lookup finds none.
+    internals.sql`UPDATE agent_runs SET parent_message_id = (SELECT agent_message_id FROM agent_runs WHERE id = ${first!}) WHERE id = ${second!}`;
+    const history = internals.readConversationHistory(internals.sql`SELECT * FROM agent_runs WHERE id = ${second!}`[0]);
+    expect(history.flatMap(entry => entry.evidence ?? []).some(packet => packet.kind === 'youtube_comments' && packet.excerpts.length)).toBe(true);
+    const noCaptions = async () => { throw Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' }); };
+    const two = await turn(second!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }], { transcript: noCaptions }, history,
+      (await import('../src/agents/runtime/conversation-metadata')).evidenceWithConversationMetadata([], history));
+    expect(two.status).toBe('completed');
+    expect(two.finalInput.answer).toContain('no captions are available');
+  });
+});
+
+test('a refresh follow-up whose metadata fetch fails can still report missing captions at the real boundary', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { preparePriorEvidence } = await import('../src/agents/runtime/prior-evidence');
+  const { vi } = await import('vitest');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [first, second] } = await seedRuns('refresh-followup-no-captions', 2);
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readConversationHistory(run: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
+    const store = internals.sessionStore;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const turn = async (runId: string, decision: Record<string, unknown>, steps: Array<{ tool: string; input?: object }>,
+      provider: Record<string, unknown>, conversationHistory?: import('../src/agents/runtime/conversation-memory').ConversationTurn[]) => {
+      internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId}, ${JSON.stringify(decision)}, 0)`;
+      let step = 0;
+      const core = new MockLanguageModelV4({ doGenerate: async () => {
+        const next = steps[step++] ?? { tool: 'complete_research' };
+        return { content: [{ type: 'tool-call', toolCallId: `${runId}-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+      } });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+        const text = JSON.stringify(call.prompt);
+        return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+          blocks: [{ text: 'Viewers praised the explanation.', evidenceIds: [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12) }] }) }],
+          finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      } });
+      let finalInput: FinalizeAnswerInput | undefined;
+      await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, conversationHistory,
+        // As in production, earlier-turn evidence is admitted through preparePriorEvidence before research.
+        ...(() => {
+          const prior = preparePriorEvidence({ current: [], history: conversationHistory ?? [], decision: decision as never, byReference: true,
+            deliver: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets) as never });
+          return { recoveredEvidence: prior.content, inheritedResolved: true, ...(prior.access ? { prior: prior.access } : {}) };
+        })(),
+        message: 'Follow-up', decision: decision as never,
+        context: { runId, signal: new AbortController().signal, session: store,
+          provider: sessionProvider(provider as unknown as AgentToolContext['provider'], store),
+          getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+          executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId, execution),
+          deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets),
+          finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId, toolId, input); },
+        } as unknown as AgentToolContext });
+      return { finalInput: finalInput!, status: internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId}`[0]?.status };
+    };
+    const video = (videoId: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.',
+      thumbnails: [], keywords: [], channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1,
+      viewCountText: '1 view', publishedTimeText: '1 year ago', durationSeconds: 136, durationText: '2:16', isLive: false, hasCaptions: false,
+      url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } });
+    // Turn 1 answers from a cited viewer comment; no transcript is saved.
+    const one = await turn(first!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_comments', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video, comments: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentsPage(1)(videoId) }) });
+    expect(one.status).toBe('completed');
+    // Turn 2 follows turn 1 and asks for caption quotations; the caption lookup finds none.
+    internals.sql`UPDATE agent_runs SET parent_message_id = (SELECT agent_message_id FROM agent_runs WHERE id = ${first!}) WHERE id = ${second!}`;
+    const history = internals.readConversationHistory(internals.sql`SELECT * FROM agent_runs WHERE id = ${second!}`[0]);
+    expect(history.flatMap(entry => entry.evidence ?? []).some(packet => packet.kind === 'youtube_comments' && packet.excerpts.length)).toBe(true);
+    const noCaptions = async () => { throw Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' }); };
+    // A refresh route keeps earlier metadata as an unloaded pointer: research admits none of it.
+    const failingVideo = async () => { throw new Error('Video metadata is temporarily unavailable.'); };
+    const two = await turn(second!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, refreshEvidence: true, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video: failingVideo, transcript: noCaptions }, history);
+    expect(two.status).toBe('completed');
+    expect(two.finalInput.answer).toContain('no captions are available');
+    // Without current metadata the video is named by its URL, never by a historical title.
+    expect(two.finalInput.answer).toContain(`https://www.youtube.com/watch?v=${NO_CAPTIONS_VIDEO}`);
+  });
+});
+
+test('a refresh follow-up checks its duration notice against the metadata it admitted, not every snapshot', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { preparePriorEvidence } = await import('../src/agents/runtime/prior-evidence');
+  const { vi } = await import('vitest');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [first, second] } = await seedRuns('refresh-followup-duration', 2);
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readConversationHistory(run: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
+    const store = internals.sessionStore;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const turn = async (runId: string, decision: Record<string, unknown>, steps: Array<{ tool: string; input?: object }>,
+      provider: Record<string, unknown>, conversationHistory?: import('../src/agents/runtime/conversation-memory').ConversationTurn[]) => {
+      internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId}, ${JSON.stringify(decision)}, 0)`;
+      let step = 0;
+      const core = new MockLanguageModelV4({ doGenerate: async () => {
+        const next = steps[step++] ?? { tool: 'complete_research' };
+        return { content: [{ type: 'tool-call', toolCallId: `${runId}-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+      } });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+        const text = JSON.stringify(call.prompt);
+        return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+          blocks: [{ text: 'Viewers praised the explanation.', evidenceIds: [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12) }] }) }],
+          finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      } });
+      let finalInput: FinalizeAnswerInput | undefined;
+      await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, conversationHistory,
+        // As in production, earlier-turn evidence is admitted through preparePriorEvidence before research.
+        ...(() => {
+          const prior = preparePriorEvidence({ current: [], history: conversationHistory ?? [], decision: decision as never, byReference: true,
+            deliver: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets) as never });
+          return { recoveredEvidence: prior.content, inheritedResolved: true, ...(prior.access ? { prior: prior.access } : {}) };
+        })(),
+        message: 'Follow-up', decision: decision as never,
+        context: { runId, signal: new AbortController().signal, session: store,
+          provider: sessionProvider(provider as unknown as AgentToolContext['provider'], store),
+          getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+          executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId, execution),
+          deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets),
+          finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId, toolId, input); },
+        } as unknown as AgentToolContext });
+      return { finalInput: finalInput!, status: internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId}`[0]?.status };
+    };
+    const video = (videoId: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.',
+      thumbnails: [], keywords: [], channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1,
+      viewCountText: '1 view', publishedTimeText: '1 year ago', durationSeconds: 16012, durationText: '4:26:52', isLive: false, hasCaptions: false,
+      url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } });
+    // Turn 1 answers from a cited viewer comment; no transcript is saved.
+    const one = await turn(first!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_comments', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video, comments: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentsPage(1)(videoId) }) });
+    expect(one.status).toBe('completed');
+    // Turn 2 follows turn 1 and asks for caption quotations; the caption lookup finds none.
+    internals.sql`UPDATE agent_runs SET parent_message_id = (SELECT agent_message_id FROM agent_runs WHERE id = ${first!}) WHERE id = ${second!}`;
+    const history = internals.readConversationHistory(internals.sql`SELECT * FROM agent_runs WHERE id = ${second!}`[0]);
+    expect(history.flatMap(entry => entry.evidence ?? []).some(packet => packet.kind === 'youtube_comments' && packet.excerpts.length)).toBe(true);
+    const { VideoTooLongError } = await import('../src/agents/runtime/video-duration-limit');
+    const tooLong = async () => { throw new VideoTooLongError(NO_CAPTIONS_VIDEO, 16012, 7200); };
+    // A refresh route keeps earlier metadata as an unloaded pointer: research admits none of it.
+    const failingVideo = async () => { throw new Error('Video metadata is temporarily unavailable.'); };
+    const two = await turn(second!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, refreshEvidence: true, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video: failingVideo, transcript: tooLong }, history);
+    expect(two.status).toBe('completed');
+    // Research never loaded turn 1's recorded length, so its notice states the transcript's reach.
+    expect(two.finalInput.answer).toContain('The transcript for this video reaches');
+    expect(two.finalInput.citations).toEqual([]);
+  });
+});
+
+test('an empty saved comments read counts toward the fallback report at the real boundary and after a restart', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [runId] } = await seedRuns('empty-saved-comments-fallback');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readEvidencePackets(runId: string): EvidencePacket[] };
+    const store = internals.sessionStore;
+    // Comments saved earlier, when the video had none.
+    const saved = await store.retrieve(`comments:${NO_CAPTIONS_VIDEO}:false:`, 'comments', NO_CAPTIONS_VIDEO, false,
+      async () => ({ cacheStatus: 'miss' as const, value: commentsPage(0)(NO_CAPTIONS_VIDEO) }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const decision = { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes', 'comments'] };
+    internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId!}, ${JSON.stringify(decision)}, 0)`;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const steps: Array<{ tool: string; input?: object }> = [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'search_originals', input: { assetVersion } },
+      { tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }];
+    let step = 0;
+    const core = new MockLanguageModelV4({ doGenerate: async () => {
+      const next = steps[step++] ?? { tool: 'complete_research' };
+      return { content: [{ type: 'tool-call', toolCallId: `empty-saved-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text',
+      text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [{ text: 'Nothing to quote.', evidenceIds: [] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    let finalInput: FinalizeAnswerInput | undefined;
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
+      message: 'Quote the captions and the comments.', decision: decision as never,
+      context: { runId: runId!, signal: new AbortController().signal, session: store,
+        provider: sessionProvider({
+          video: async () => { throw new Error('Video metadata is temporarily unavailable.'); },
+          transcript: async () => { throw Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' }); },
+        } as unknown as AgentToolContext['provider'], store),
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
+        deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId!, source, packets),
+        finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId!, toolId, input); },
+      } as unknown as AgentToolContext });
+    expect(finalInput!.answer).toContain('no captions are available');
+    expect(finalInput!.answer).toContain('the comment lookup returned no comments');
+    expect(internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId!}`[0]?.status).toBe('completed');
+    // Recovery restores the empty read too, so a resumed run does not treat the comments as unread.
+    expect(internals.readEvidencePackets(runId!).some(packet => packet.kind === 'youtube_comments'
+      && packet.excerpts.length === 0 && packet.assetVersions?.includes(assetVersion))).toBe(true);
+  });
 });

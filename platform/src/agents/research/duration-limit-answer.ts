@@ -44,18 +44,27 @@ export function withDurationLimitNotice(input: FinalizeAnswerInput, notice: stri
 
 /** Supplied by the runtime from persisted failures and the saved route, never model input. */
 export interface DurationLimitAnswerContext {
-  failures: readonly { durationLimit?: VideoDurationFailure }[];
+  failures: readonly { durationLimit?: VideoDurationFailure; toolName?: string; message?: string; videoId?: string }[];
   requestedVideoIds: readonly string[];
+  /** This run's own evidence plus the conversation metadata it admitted, as research saw it. Earlier turns' cited content is excluded. */
+  runPackets?: readonly EvidencePacket[];
 }
 
-/** Only the application's exact guardrail fallback may omit research citations. */
+/**
+ * Only the application's exact guardrail fallbacks may omit research citations: the duration-limit
+ * notice, and the report of captions unavailable or comment pages empty. Both are regenerated here from
+ * persisted evidence and failures, so model text can never qualify.
+ */
 export function isDurationLimitFallback(
   input: FinalizeAnswerInput,
   packets: readonly EvidencePacket[],
   context?: DurationLimitAnswerContext,
 ): boolean {
-  if (!context || input.confidence !== 'low' || hasContentEvidence(packets)
-    || (input.intent !== 'inspect_video' && input.intent !== 'topic_research')) return false;
-  const notice = durationLimitNotice(context.failures, packets, context.requestedVideoIds);
-  return !!notice && input.answer === evidenceFallback(packets, input.intent, undefined, notice)?.answer;
+  // Regenerate from the scope research used: this run's evidence, not content cited in earlier turns.
+  const scope = context?.runPackets ?? packets;
+  if (!context || hasContentEvidence(scope) || (input.intent !== 'inspect_video' && input.intent !== 'topic_research')) return false;
+  const notice = durationLimitNotice(context.failures, scope, context.requestedVideoIds);
+  const fallback = evidenceFallback(scope, input.intent, undefined, notice || undefined, context.failures, context.requestedVideoIds);
+  // Every uncited fallback is one of these two; every other fallback answer carries citations.
+  return !!fallback && input.confidence === fallback.confidence && input.answer === fallback.answer;
 }

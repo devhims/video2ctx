@@ -105,3 +105,122 @@ it.each(['CAPTIONS_UNAVAILABLE', 'REGION_RESTRICTED'])('preserves skipped transc
   expect(result.warnings).toContainEqual(skipped.warnings[0]);
   expect(result.warnings.some(w => w.code === 'NO_CONTENT_EVIDENCE')).toBe(true);
 });
+
+// A video without captions or comments: report those outcomes instead of discovery boilerplate.
+describe('empty or unavailable caption and comment outcomes', () => {
+  const videoId = 'XqZsoesa55w';
+  const metadata: EvidencePacket = { packetId: 'video', kind: 'youtube_video',
+    sources: [{ id: 'youtube:video:XqZsoesa55w', provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+    excerpts: [{ id: 'video:XqZsoesa55w', sourceId: 'youtube:video:XqZsoesa55w', text: 'Baby Shark Dance. Captions: unavailable.' }],
+    artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, captionAvailability: { status: 'unavailable', languages: [], checkedAt: '2026-10-30T09:00:00.000Z' } } }],
+    warnings: [], usage: [] };
+  const emptyComments = (fetchedCount: number): EvidencePacket => ({ packetId: `comments:${fetchedCount}`, kind: 'youtube_comments',
+    sources: [{ id: 'youtube:XqZsoesa55w:comments', provider: 'youtube', kind: 'comments', videoId }], excerpts: [],
+    artifacts: [{ type: 'youtube_comments', data: { returnedCount: 0, collection: { version: 1, fetchedCount, retainedCount: 0, morePages: false, continuationAccepted: true } } }],
+    warnings: [], usage: [] });
+  const captionsFailure = { toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId };
+
+  it('reports missing captions and an empty comment page, not potentially relevant videos', () => {
+    const result = evidenceFallback([metadata, emptyComments(0)], 'inspect_video', undefined, undefined, [captionsFailure], [videoId])!;
+    expect(result.answer).not.toContain('potentially relevant videos');
+    expect(result.answer).toContain('Baby Shark Dance');
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).toContain('returned no comments');
+    // The claims cite the video's own metadata, so the answer is a normal cited research answer.
+    expect(result.answer).toContain('[cite:video:XqZsoesa55w]');
+    expect(buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'user', creditsRemaining: 10 }, result, [metadata, emptyComments(0)], 0).citations).toHaveLength(1);
+  });
+
+  it('reports missing captions from a transcript failure alone', () => {
+    const plain = { ...metadata, artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId } }] };
+    const result = evidenceFallback([plain], 'inspect_video', undefined, undefined, [captionsFailure], [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).not.toContain('comments');
+  });
+
+  it('does not treat a comment read with nothing retained as an empty comment page', () => {
+    const plain = { ...metadata, artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId } }] };
+    const result = evidenceFallback([plain, emptyComments(20)], 'inspect_video', undefined, undefined, [], [videoId])!;
+    expect(result.answer).not.toContain('returned no comments');
+    expect(result.answer).toContain('potentially relevant videos');
+  });
+});
+
+describe('uncited outcome report at the persistence check', () => {
+  it('accepts only the exact regenerated report when nothing can be cited', async () => {
+    const { isDurationLimitFallback } = await import('../src/agents/research/duration-limit-answer');
+    const videoId = 'XqZsoesa55w';
+    const emptyComments: EvidencePacket = { packetId: 'comments', kind: 'youtube_comments',
+      sources: [{ id: 'youtube:XqZsoesa55w:comments', provider: 'youtube', kind: 'comments', videoId }], excerpts: [],
+      artifacts: [{ type: 'youtube_comments', data: { collection: { version: 1, fetchedCount: 0, retainedCount: 0, morePages: false, continuationAccepted: true } } }],
+      warnings: [], usage: [] };
+    const failures = [{ toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId }];
+    const report = evidenceFallback([emptyComments], 'inspect_video', undefined, undefined, failures, [videoId])!;
+    expect(report.answer).not.toContain('[cite:');
+    const context = { failures, requestedVideoIds: [videoId] };
+    expect(isDurationLimitFallback(report, [emptyComments], context)).toBe(true);
+    expect(isDurationLimitFallback({ ...report, answer: `${report.answer} Viewers loved it.` }, [emptyComments], context)).toBe(false);
+    // Without the recorded failure, the report cannot be regenerated, so the same text is not accepted.
+    expect(isDurationLimitFallback(report, [emptyComments], { failures: [], requestedVideoIds: [videoId] })).toBe(false);
+  });
+});
+
+// Only a current, affirmative observation proves captions are absent.
+describe('caption absence needs current, affirmative evidence', () => {
+  const videoId = 'XqZsoesa55w';
+  const meta = (partial: boolean, warnings: string[] = []) => ({ source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial, warnings });
+  const tracksPacket = async (partial: boolean, warnings: string[] = []) => {
+    const { executeGetVideoTracks } = await import('../src/agents/providers/youtube/tools/get-video-tracks');
+    const provider = { tracks: async () => ({ cacheStatus: 'miss' as const, value: { tracks: [], sourceTracks: [], translationLanguages: [],
+      autoTranslationTargets: [], defaultTrackId: undefined, meta: meta(partial, warnings) } }) };
+    return executeGetVideoTracks({ videoId }, { runId: crypto.randomUUID(), provider, transcriptPolicy: { mode: 'complete_transcript' },
+      signal: new AbortController().signal, executeEvidenceTool: (execution: { execute: () => unknown }) => execution.execute(), finalize: async () => { throw new Error('unexpected'); } } as never, 'tracks');
+  };
+
+  it('does not claim absence from a partial track lookup that filtered out unusable tracks', async () => {
+    const partial = await tracksPacket(true, ['Some caption tracks had unusable URLs.']);
+    expect(partial.warnings.map(warning => warning.code)).toContain('PARTIAL_CAPTION_TRACKS');
+    const result = evidenceFallback([partial], 'inspect_video', undefined, undefined, [], [videoId]);
+    expect(result?.answer ?? '').not.toContain('no captions are available');
+  });
+
+  it('claims absence from a complete track lookup that returned no tracks', async () => {
+    const complete = await tracksPacket(false);
+    const result = evidenceFallback([complete], 'inspect_video', undefined, undefined, [], [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).toContain(`[cite:${complete.excerpts[0]!.id}]`);
+  });
+
+  it('does not promote a historical caption observation to a current absence claim', async () => {
+    const { metadataForConversation } = await import('../src/agents/runtime/conversation-metadata');
+    const yesterday = Date.now() - 86_400_000;
+    const current: EvidencePacket = { packetId: 'video-earlier', kind: 'youtube_video',
+      sources: [{ id: `youtube:video:${videoId}`, provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+      excerpts: [{ id: `video:${videoId}`, sourceId: `youtube:video:${videoId}`, text: 'Baby Shark Dance' }],
+      artifacts: [{ type: 'youtube_video_metadata', title: 'Baby Shark Dance', data: { id: videoId, title: 'Baby Shark Dance',
+        captionAvailability: { status: 'unavailable', languages: [], checkedAt: new Date(yesterday).toISOString() }, freshness: { state: 'fresh', fetchedAt: yesterday } } }],
+      warnings: [], usage: [] };
+    const historical = metadataForConversation([{ packet: current, recordedAt: yesterday }]);
+    expect(historical[0]?.artifacts[0]?.data.historical).toBe(true);
+    // A current transcript lookup that failed for another reason is inconclusive.
+    const failures = [{ toolName: 'get_video_transcript', message: 'YOUTUBE_UNAVAILABLE: YouTube is not available right now.', videoId }];
+    const result = evidenceFallback(historical, 'inspect_video', undefined, undefined, failures, [videoId]);
+    expect(result?.answer ?? '').not.toContain('no captions are available');
+  });
+
+  it('never cites a historical snapshot for an absence established by a current failure', async () => {
+    const { metadataForConversation } = await import('../src/agents/runtime/conversation-metadata');
+    const yesterday = Date.now() - 86_400_000;
+    const earlier: EvidencePacket = { packetId: 'video-earlier', kind: 'youtube_video',
+      sources: [{ id: `youtube:video:${videoId}`, provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+      excerpts: [{ id: `video:${videoId}`, sourceId: `youtube:video:${videoId}`, text: 'Baby Shark Dance' }],
+      artifacts: [{ type: 'youtube_video_metadata', title: 'Baby Shark Dance', data: { id: videoId, title: 'Baby Shark Dance', freshness: { state: 'fresh', fetchedAt: yesterday } } }],
+      warnings: [], usage: [] };
+    const historical = metadataForConversation([{ packet: earlier, recordedAt: yesterday }]);
+    const failures = [{ toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId }];
+    const result = evidenceFallback(historical, 'inspect_video', undefined, undefined, failures, [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).not.toContain('[cite:memory:');
+  });
+});
