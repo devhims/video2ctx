@@ -1036,3 +1036,66 @@ test('a video with no captions and no comments gets those outcomes, not discover
   expect(finalInput.answer).toContain('returned no comments');
   expect(finalInput.answer).not.toContain('potentially relevant videos');
 });
+
+test('a caption-quotes follow-up after a comments answer can report missing captions at the real boundary', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  const { vi } = await import('vitest');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [first, second] } = await seedRuns('followup-no-captions', 2);
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readConversationHistory(run: unknown): import('../src/agents/runtime/conversation-memory').ConversationTurn[] };
+    const store = internals.sessionStore;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const turn = async (runId: string, decision: Record<string, unknown>, steps: Array<{ tool: string; input?: object }>,
+      provider: Record<string, unknown>, conversationHistory?: import('../src/agents/runtime/conversation-memory').ConversationTurn[], inherited?: EvidencePacket[]) => {
+      internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId}, ${JSON.stringify(decision)}, 0)`;
+      let step = 0;
+      const core = new MockLanguageModelV4({ doGenerate: async () => {
+        const next = steps[step++] ?? { tool: 'complete_research' };
+        return { content: [{ type: 'tool-call', toolCallId: `${runId}-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+          finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+      } });
+      const finalizer = new MockLanguageModelV4({ doGenerate: async call => {
+        const text = JSON.stringify(call.prompt);
+        return { content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
+          blocks: [{ text: 'Viewers praised the explanation.', evidenceIds: [...new Set(text.match(/ref_\d+/g) ?? [])].slice(0, 12) }] }) }],
+          finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+      } });
+      let finalInput: FinalizeAnswerInput | undefined;
+      await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, conversationHistory,
+        // A follow-up resolves earlier-turn evidence before research; here it inherits metadata only.
+        ...(inherited ? { recoveredEvidence: inherited, inheritedResolved: true } : { recoveredEvidence: [] }),
+        message: 'Follow-up', decision: decision as never,
+        context: { runId, signal: new AbortController().signal, session: store,
+          provider: sessionProvider(provider as unknown as AgentToolContext['provider'], store),
+          getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+          executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId, execution),
+          deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId, source, packets),
+          finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId, toolId, input); },
+        } as unknown as AgentToolContext });
+      return { finalInput: finalInput!, status: internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId}`[0]?.status };
+    };
+    const video = (videoId: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id: videoId, title: 'Baby Shark Dance', description: 'Sing along.',
+      thumbnails: [], keywords: [], channel: { id: 'channel-1', name: 'Pinkfong', url: 'https://www.youtube.com/channel/channel-1' }, viewCount: 1,
+      viewCountText: '1 view', publishedTimeText: '1 year ago', durationSeconds: 136, durationText: '2:16', isLive: false, hasCaptions: false,
+      url: `https://www.youtube.com/watch?v=${videoId}`, availability: { status: 'OK', playable: true, embeddable: true, isPrivate: false, isLive: false },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } });
+    // Turn 1 answers from a cited viewer comment; no transcript is saved.
+    const one = await turn(first!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['comments'] },
+      [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'get_video_comments', input: { videoId: NO_CAPTIONS_VIDEO } }],
+      { video, comments: async (videoId: string) => ({ cacheStatus: 'miss' as const, value: commentsPage(1)(videoId) }) });
+    expect(one.status).toBe('completed');
+    // Turn 2 follows turn 1 and asks for caption quotations; the caption lookup finds none.
+    internals.sql`UPDATE agent_runs SET parent_message_id = (SELECT agent_message_id FROM agent_runs WHERE id = ${first!}) WHERE id = ${second!}`;
+    const history = internals.readConversationHistory(internals.sql`SELECT * FROM agent_runs WHERE id = ${second!}`[0]);
+    expect(history.flatMap(entry => entry.evidence ?? []).some(packet => packet.kind === 'youtube_comments' && packet.excerpts.length)).toBe(true);
+    const noCaptions = async () => { throw Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' }); };
+    const two = await turn(second!, { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes'] },
+      [{ tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }], { transcript: noCaptions }, history,
+      (await import('../src/agents/runtime/conversation-metadata')).evidenceWithConversationMetadata([], history));
+    expect(two.status).toBe('completed');
+    expect(two.finalInput.answer).toContain('no captions are available');
+  });
+});

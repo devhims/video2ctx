@@ -1037,6 +1037,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     decision.route === 'inspect_video' || decision.route === 'topic_research' ? {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
+      // An application fallback is checked against what this run had, not earlier turns' cited content.
+      runPackets: evidenceWithConversationMetadata(this.readEvidencePackets(runId), history),
     } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
