@@ -2,10 +2,9 @@ import type { CapabilityRouteDecision, EvidencePacket } from '../../contracts';
 import type { SessionBrief, SavedEvidenceReadState } from '../../runtime/session-evidence';
 import { SAVED_EVIDENCE_ARTIFACT, SAVED_EVIDENCE_READ_LIMIT } from '../../runtime/saved-evidence-contract';
 
-/** Saved text and visual follow-ups share the original-evidence workflow. */
+/** Saved text and visual follow-ups share the original-evidence workflow. Saved-only is a separate restriction. */
 export function usesSavedEvidenceSkill(decision: CapabilityRouteDecision): boolean {
-  return 'skill' in decision && decision.skill === 'verify_saved_evidence'
-    && 'savedOnly' in decision && decision.savedOnly === true;
+  return 'skill' in decision && decision.skill === 'verify_saved_evidence';
 }
 
 /** A runtime skill for text-source follow-ups. It replaces discovery/analyst instructions. */
@@ -22,7 +21,7 @@ Your task is to verify a follow-up from saved original captions or comments. The
 2. Cover all requested items before polishing any one of them. Use the asset inventory to select each source by immutable version, or omit assetVersion to find which saved sources contain a word. Batch independent search_originals calls. Search an entire asset for a fact you have not located yet; do not invent a timestamp range. For requested wording, start with one distinctive word copied exactly from the request. Search requires every query word, matched by stem (mixing finds mix) but never by synonym, so do not combine several conceptual clues. After an empty result, simplify the query instead of concluding absence. For an unknown material name, search its category and compare all relevant occurrences, including the introduction.
 3. Read context. A match is a location, not a complete explanation. Read the surrounding time range when a sentence is split across captions. If nextOffset is present, later matches remain unread. Paginate or narrow the query before claiming absence or choosing among different examples. Use remainingReads to prioritize missing requested items instead of rereading completed ones.
 4. Verify quotations and calculations. Preserve caption wording, source identity and segment times. Identify the requested experiment or event before extracting its values. For elapsed intervals, read both endpoints and their context, then subtract like units. Video timestamps locate evidence; they are not elapsed experiment values. Never substitute an earlier similar phrase for a requested later event.
-5. Check coverage before complete_research. Every requested source must have original evidence. Every requested quote and factual detail should have a supporting passage, or a specific remaining gap. Do not guess a material from an unrelated demonstration. Do not analyze transcripts again or retrieve YouTube. Do not write the answer during research.
+5. Check coverage before complete_research. Every requested source must have original evidence. Every requested quote and factual detail should have a supporting passage, or a specific remaining gap. Do not guess a material from an unrelated demonstration. Do not analyze transcripts again. Retrieve from YouTube only requested evidence that is not saved, such as comments; a saved-only run cannot retrieve. Do not write the answer during research.
 `.trim();
 
 export const SAVED_EVIDENCE_ANSWER_SKILL = `

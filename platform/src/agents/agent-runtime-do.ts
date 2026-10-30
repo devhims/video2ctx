@@ -1,4 +1,5 @@
 import { pendingOriginalSources, unreadOriginalSources, usesSavedEvidenceSkill } from './research/skills/verify-saved-evidence';
+import { confirmedEmptySource, outstandingRequestedEvidence } from './research/requested-evidence';
 import { reconcileResearchMemory, type ResearchContext } from './runtime/context-handoff';
 import { answerCitationIds, mapCitationProse } from './markdown-citations';
 import { parseVideoDurationFailure, videoDurationFailure } from './runtime/video-duration-limit';
@@ -73,7 +74,7 @@ import {
   type AgentRequest,
 } from './contracts';
 import { buildAgentTurnResult } from './finalizer';
-import type { EvidenceRunRecord } from './runtime/model-evidence';
+import { transcriptAwaitsAnalysis, type EvidenceRunRecord } from './runtime/model-evidence';
 import { metadataForConversation, unambiguousMetadataRecords, evidenceWithConversationMetadata } from './runtime/conversation-metadata';
 import { isInspectionPacket } from './runtime/inspection-records';
 import { AGENT_MODEL_ID, createAgentModel, estimateAgentModelCostMicros } from './model';
@@ -83,7 +84,7 @@ import {
   type AgentModelCostBudget,
   type AgentModelUsageEntry,
 } from './runtime/model-budget';
-import type { EvidenceToolExecution } from './providers/youtube/tool-context';
+import { evidenceToolVideoId, type EvidenceToolExecution } from './providers/youtube/tool-context';
 import { currentDateGuidance } from './runtime/current-date';
 import {
   conversationReadInputSchema,
@@ -138,6 +139,8 @@ interface ToolCallRow {
   result_json: string | null;
   error: string | null;
   error_context_json: string | null;
+  /** The single video the call targeted, so a recovered failure releases only that video's requested evidence. */
+  video_id: string | null;
   credits: number;
   created_at: number;
   updated_at: number;
@@ -880,15 +883,16 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     this.sql`
       INSERT INTO agent_tool_calls (
         run_id, tool_call_id, semantic_key, tool_name, operation, status,
-        result_json, error, credits, created_at, updated_at
+        result_json, error, credits, created_at, updated_at, video_id
       ) VALUES (
         ${runId}, ${execution.toolCallId}, ${execution.semanticKey}, ${execution.toolName},
-        ${execution.operation}, 'running', null, null, 0, ${timestamp}, ${timestamp}
+        ${execution.operation}, 'running', null, null, 0, ${timestamp}, ${timestamp}, ${evidenceToolVideoId(execution) ?? null}
       )
       ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
         semantic_key = excluded.semantic_key,
         tool_name = excluded.tool_name,
         operation = excluded.operation,
+        video_id = excluded.video_id,
         status = 'running',
         error = null,
         error_context_json = null,
@@ -952,19 +956,32 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       execute: () => this.performFinalizeRun(runId, toolCallId, input) });
   }
 
-  /** A saved-source limitation may use the uncited context contract only when this
-   * run's persisted read state proves there is no remaining original read to attempt. */
-  private allowsSavedEvidenceGap(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
-    if (!usesSavedEvidenceSkill(decision) || (decision.route !== 'inspect_video' && decision.route !== 'topic_research')
+  /**
+   * A research route may finish with the uncited context contract only when this run's persisted
+   * evidence proves there is nothing to cite: no admitted passages, plus a saved-source gap with no
+   * original read left to attempt (saved-evidence skill), a source read and confirmed empty, or
+   * requested evidence that can no longer be obtained for any requested subject.
+   */
+  private allowsUncitedEvidenceAnswer(runId: string, decision: CapabilityRouteDecision, input: FinalizeAnswerInput): boolean {
+    if ((decision.route !== 'inspect_video' && decision.route !== 'topic_research')
       || input.intent !== 'context_answer' || input.citations.length
       || input.artifacts.some(artifact => artifact.type !== 'research_coverage' || artifact.data.reviewedVideos !== 0)
       || answerCitationIds(input.answer).length) return false;
     const evidence = this.readEvidencePackets(runId);
-    if (evidence.some(packet => packet.excerpts.length)) return false;
+    // Only passages the models received count; a transcript withheld until analysis was never shown.
+    if (evidence.some(packet => packet.excerpts.length && !transcriptAwaitsAnalysis(packet))) return false;
     const brief = this.sessionStore.brief();
     const state = this.sessionStore.savedEvidenceReadState(runId);
-    return unreadOriginalSources(decision, brief, evidence).length > 0
-      && pendingOriginalSources(decision, brief, evidence, state).length === 0;
+    if (usesSavedEvidenceSkill(decision) && unreadOriginalSources(decision, brief, evidence).length > 0
+      && pendingOriginalSources(decision, brief, evidence, state).length === 0) return true;
+    // Empty saved reads are recorded as read outcomes; empty fetches persist as packets.
+    if (evidence.some(confirmedEmptySource) || state.outcomes.some(outcome => outcome.reason === 'empty')) return true;
+    const failures = this.readEvidenceToolFailures(runId);
+    const outstanding = outstandingRequestedEvidence({ decision, brief, packets: evidence,
+      terminalVersions: new Set(state.outcomes.map(outcome => outcome.assetVersion)),
+      canUse: (tool, videoId) => tool === 'search_originals' || !failures.some(failure => failure.toolName === tool
+        && (failure.videoId === undefined || videoId === undefined || failure.videoId === videoId)) });
+    return outstanding.length > 0 && outstanding.every(item => item.state === 'unavailable');
   }
 
   private async performFinalizeRun(
@@ -995,7 +1012,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       throw new ApiError(422, 'AGENT_ROUTE_MISSING', 'The agent run has no persisted capability route.');
     }
     if (!finalIntentMatchesRoute(decision, parsedInput.intent)
-      && !this.allowsSavedEvidenceGap(runId, decision, parsedInput)) {
+      && !this.allowsUncitedEvidenceAnswer(runId, decision, parsedInput)) {
       throw new ApiError(
         422,
         'AGENT_INTENT_MISMATCH',
@@ -1494,8 +1511,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   }
 
   private readEvidenceToolFailures(runId: string): EvidenceToolFailure[] {
-    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json'>>`
-      SELECT tool_call_id, tool_name, operation, error, error_context_json
+    return this.sql<Pick<ToolCallRow, 'tool_call_id' | 'tool_name' | 'operation' | 'error' | 'error_context_json' | 'video_id'>>`
+      SELECT tool_call_id, tool_name, operation, error, error_context_json, video_id
       FROM agent_tool_calls
       WHERE run_id = ${runId} AND status = 'failed' AND error IS NOT NULL
       ORDER BY created_at ASC
@@ -1508,6 +1525,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         operation: operation.data,
         message: row.error,
         durationLimit: parseVideoDurationFailure(row.error_context_json),
+        // Rows written before this column existed have no video, so they keep releasing every subject.
+        ...(row.video_id ? { videoId: row.video_id } : {}),
       }];
     });
   }
@@ -2004,8 +2023,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         PRIMARY KEY (run_id, tool_call_id)
       )
     `;
-    if (!this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`.some(column => column.name === 'error_context_json')) {
+    const toolCallColumns = this.sql<{ name: string }>`PRAGMA table_info(agent_tool_calls)`;
+    if (!toolCallColumns.some(column => column.name === 'error_context_json')) {
       this.sql`ALTER TABLE agent_tool_calls ADD COLUMN error_context_json TEXT`;
+    }
+    if (!toolCallColumns.some(column => column.name === 'video_id')) {
+      this.sql`ALTER TABLE agent_tool_calls ADD COLUMN video_id TEXT`;
     }
     this.evidenceLedger.initialize();
     this.sql`

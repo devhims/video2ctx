@@ -15,6 +15,12 @@ export interface TranscriptAnalysisBudget {
   isExhausted(): boolean;
 }
 
+/** The single video an evidence tool call targets, when its input names one. */
+export function evidenceToolVideoId(execution: Pick<EvidenceToolExecution, 'input'>): string | undefined {
+  const videoId = (execution.input as { videoId?: unknown } | undefined)?.videoId;
+  return typeof videoId === 'string' ? videoId : undefined;
+}
+
 export interface EvidenceToolExecution {
   toolCallId: string;
   toolName: YouTubeEvidenceToolName;
