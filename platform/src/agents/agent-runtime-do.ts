@@ -1038,7 +1038,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       failures: this.readEvidenceToolFailures(runId),
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
       // An application fallback is checked against what this run had, not earlier turns' cited content.
-      runPackets: evidenceWithConversationMetadata(this.readEvidencePackets(runId), history),
+      runPackets: this.admittedRunEvidence(runId, history),
     } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
@@ -1490,6 +1490,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   private persistResearchContext(runId: string, context: ResearchContext) {
     this.assertRunActive(runId);
     this.sql`UPDATE agent_runs SET research_context_json=${JSON.stringify(this.prepareResearchContext(context))} WHERE id=${runId}`;
+  }
+
+  /**
+   * This run's evidence plus only the conversation metadata it admitted, the scope its research saw.
+   * A refresh route keeps earlier snapshots as unloaded pointers, so they stay out unless loaded.
+   */
+  private admittedRunEvidence(runId: string, history: readonly ConversationTurn[]): EvidencePacket[] {
+    const packets = this.readEvidencePackets(runId);
+    const own = new Set(packets.map(packet => packet.packetId));
+    const metadata = evidenceWithConversationMetadata(packets, history).filter(packet => !own.has(packet.packetId));
+    const admitted = this.evidenceLedger.packetOperations(runId, metadata.map(packet => packet.packetId));
+    return [...packets, ...metadata.filter(packet => admitted.has(packet.packetId))];
   }
 
   private readEvidencePackets(runId: string): EvidencePacket[] {

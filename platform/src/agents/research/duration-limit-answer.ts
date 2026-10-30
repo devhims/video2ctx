@@ -46,7 +46,7 @@ export function withDurationLimitNotice(input: FinalizeAnswerInput, notice: stri
 export interface DurationLimitAnswerContext {
   failures: readonly { durationLimit?: VideoDurationFailure; toolName?: string; message?: string; videoId?: string }[];
   requestedVideoIds: readonly string[];
-  /** This run's own evidence plus conversation metadata, as research saw it. Earlier turns' cited content is excluded. */
+  /** This run's own evidence plus the conversation metadata it admitted, as research saw it. Earlier turns' cited content is excluded. */
   runPackets?: readonly EvidencePacket[];
 }
 

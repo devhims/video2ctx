@@ -24,14 +24,15 @@ export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean 
  * needs a current, affirmative observation: a transcript tool's CAPTIONS_UNAVAILABLE failure, current
  * (not historical) metadata marking captions unavailable, or a complete caption-track lookup that returned
  * no tracks. A partial lookup, which can filter out unusable tracks, or a historical snapshot proves nothing
- * about the video now. A filtered comment read with nothing retained is not an empty page.
+ * about the video now. A filtered comment read with nothing retained is not an empty page. Historical
+ * packets never shape the report (proof, title or citation), so its text does not depend on which earlier
+ * snapshots a route admitted.
  */
 function emptySourceOutcomes(packets: readonly EvidencePacket[], failures: readonly FallbackToolFailure[], requestedVideoIds: readonly string[]) {
   const videoIds = [...new Set(requestedVideoIds)];
   const about = (packet: EvidencePacket, videoId: string) => packet.sources.some(source => source.videoId === videoId);
   return videoIds.flatMap(videoId => {
-    const own = packets.filter(packet => about(packet, videoId));
-    const current = own.filter(packet => !historicalPacket(packet));
+    const current = packets.filter(packet => about(packet, videoId) && !historicalPacket(packet));
     const proofs = current.filter(packet => packet.artifacts.some(artifact =>
       (artifact.type === 'youtube_video_metadata' && (artifact.data.captionAvailability as { status?: unknown } | undefined)?.status === 'unavailable')
       // Any warning (partial data, unusable track URLs) makes an empty track list inconclusive.
@@ -40,12 +41,12 @@ function emptySourceOutcomes(packets: readonly EvidencePacket[], failures: reado
     const captions = proofs.length > 0 || failures.some(failure => TRANSCRIPT_TOOLS.has(failure.toolName ?? '')
       && transcriptFailureCode(failure.message ?? '') === 'CAPTIONS_UNAVAILABLE'
       && (failure.videoId === videoId || (failure.videoId === undefined && videoIds.length === 1)));
-    const comments = own.some(packet => packet.kind === 'youtube_comments' && confirmedEmptySource(packet));
+    const comments = current.some(packet => packet.kind === 'youtube_comments' && confirmedEmptySource(packet));
     if (!captions && !comments) return [];
-    // Cite the current record that proves absence, else the video's current metadata; never a historical snapshot.
+    // Cite the current record that proves absence, else the video's current metadata. Without one, name the video by URL.
     const record = [...proofs, ...current.filter(packet => packet.kind === 'youtube_video')].find(packet => packet.excerpts.length);
     const citation = record?.excerpts.find(excerpt => /^[A-Za-z0-9:_-]+$/.test(excerpt.id) && record.sources.some(source => source.id === excerpt.sourceId))?.id;
-    const title = own.flatMap(packet => packet.sources).find(source => source.title)?.title;
+    const title = current.flatMap(packet => packet.sources).find(source => source.title)?.title;
     return [{ videoId, captions, comments, ...(citation ? { citation } : {}), ...(title ? { title } : {}) }];
   });
 }
