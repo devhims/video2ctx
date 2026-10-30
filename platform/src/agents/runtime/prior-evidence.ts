@@ -71,8 +71,10 @@ export function priorEvidencePointer(packet: EvidencePacket): PriorEvidencePoint
 
 /**
  * Earlier-turn source content this route would previously have received automatically.
- * Finalize routes inherit cited packets and recorded metadata; research routes inherit
- * recorded metadata only. Packets already produced by this run are excluded.
+ * Finalize routes inherit cited packets and recorded metadata. Saved-only research
+ * also exposes cited playlist listings: these live in run history, not the caption/
+ * comment asset store. Other research routes inherit recorded metadata only.
+ * Packets already produced by this run are excluded.
  */
 export function inheritedEvidence(
   current: readonly EvidencePacket[],
@@ -81,7 +83,8 @@ export function inheritedEvidence(
 ): EvidencePacket[] {
   const currentIds = new Set(current.map(packet => packet.packetId));
   const metadata = evidenceWithConversationMetadata(current, history).filter(packet => !currentIds.has(packet.packetId));
-  const cited = decision.route === 'finalize' ? conversationEvidence([], history) : [];
+  const cited = conversationEvidence([], history).filter(packet => decision.route === 'finalize'
+    || ('savedOnly' in decision && decision.savedOnly && packet.kind === 'youtube_playlist'));
   const selected = new Map<string, EvidencePacket>();
   for (const packet of [...metadata, ...cited]) if (!currentIds.has(packet.packetId)) selected.set(packet.packetId, packet);
   return [...selected.values()];
@@ -147,7 +150,7 @@ export const PRIOR_EVIDENCE_GUIDANCE = `Earlier-turn evidence listed in priorEvi
 /** Load referenced earlier-turn evidence. Delivered packets are reported through onLoaded. */
 export function createReadPriorEvidenceTool(
   access: PriorEvidenceAccess,
-  onLoaded: (packets: EvidencePacket[]) => void,
+  onLoaded: (packets: EvidencePacket[], requestedIds: readonly string[]) => void,
   check: () => void = () => {},
 ) {
   return tool({
@@ -157,7 +160,7 @@ export function createReadPriorEvidenceTool(
       check();
       const result = access.read(ids);
       check();
-      onLoaded(result.packets);
+      onLoaded(result.packets, ids);
       return {
         evidence: result.packets.map(evidencePacketForModel),
         ...(result.withheld.length ? { withheld: result.withheld,
