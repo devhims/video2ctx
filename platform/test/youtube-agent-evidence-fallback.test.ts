@@ -165,3 +165,62 @@ describe('uncited outcome report at the persistence check', () => {
     expect(isDurationLimitFallback(report, [emptyComments], { failures: [], requestedVideoIds: [videoId] })).toBe(false);
   });
 });
+
+// Only a current, affirmative observation proves captions are absent.
+describe('caption absence needs current, affirmative evidence', () => {
+  const videoId = 'XqZsoesa55w';
+  const meta = (partial: boolean, warnings: string[] = []) => ({ source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial, warnings });
+  const tracksPacket = async (partial: boolean, warnings: string[] = []) => {
+    const { executeGetVideoTracks } = await import('../src/agents/providers/youtube/tools/get-video-tracks');
+    const provider = { tracks: async () => ({ cacheStatus: 'miss' as const, value: { tracks: [], sourceTracks: [], translationLanguages: [],
+      autoTranslationTargets: [], defaultTrackId: undefined, meta: meta(partial, warnings) } }) };
+    return executeGetVideoTracks({ videoId }, { runId: crypto.randomUUID(), provider, transcriptPolicy: { mode: 'complete_transcript' },
+      signal: new AbortController().signal, executeEvidenceTool: (execution: { execute: () => unknown }) => execution.execute(), finalize: async () => { throw new Error('unexpected'); } } as never, 'tracks');
+  };
+
+  it('does not claim absence from a partial track lookup that filtered out unusable tracks', async () => {
+    const partial = await tracksPacket(true, ['Some caption tracks had unusable URLs.']);
+    expect(partial.warnings.map(warning => warning.code)).toContain('PARTIAL_CAPTION_TRACKS');
+    const result = evidenceFallback([partial], 'inspect_video', undefined, undefined, [], [videoId]);
+    expect(result?.answer ?? '').not.toContain('no captions are available');
+  });
+
+  it('claims absence from a complete track lookup that returned no tracks', async () => {
+    const complete = await tracksPacket(false);
+    const result = evidenceFallback([complete], 'inspect_video', undefined, undefined, [], [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).toContain(`[cite:${complete.excerpts[0]!.id}]`);
+  });
+
+  it('does not promote a historical caption observation to a current absence claim', async () => {
+    const { metadataForConversation } = await import('../src/agents/runtime/conversation-metadata');
+    const yesterday = Date.now() - 86_400_000;
+    const current: EvidencePacket = { packetId: 'video-earlier', kind: 'youtube_video',
+      sources: [{ id: `youtube:video:${videoId}`, provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+      excerpts: [{ id: `video:${videoId}`, sourceId: `youtube:video:${videoId}`, text: 'Baby Shark Dance' }],
+      artifacts: [{ type: 'youtube_video_metadata', title: 'Baby Shark Dance', data: { id: videoId, title: 'Baby Shark Dance',
+        captionAvailability: { status: 'unavailable', languages: [], checkedAt: new Date(yesterday).toISOString() }, freshness: { state: 'fresh', fetchedAt: yesterday } } }],
+      warnings: [], usage: [] };
+    const historical = metadataForConversation([{ packet: current, recordedAt: yesterday }]);
+    expect(historical[0]?.artifacts[0]?.data.historical).toBe(true);
+    // A current transcript lookup that failed for another reason is inconclusive.
+    const failures = [{ toolName: 'get_video_transcript', message: 'YOUTUBE_UNAVAILABLE: YouTube is not available right now.', videoId }];
+    const result = evidenceFallback(historical, 'inspect_video', undefined, undefined, failures, [videoId]);
+    expect(result?.answer ?? '').not.toContain('no captions are available');
+  });
+
+  it('never cites a historical snapshot for an absence established by a current failure', async () => {
+    const { metadataForConversation } = await import('../src/agents/runtime/conversation-metadata');
+    const yesterday = Date.now() - 86_400_000;
+    const earlier: EvidencePacket = { packetId: 'video-earlier', kind: 'youtube_video',
+      sources: [{ id: `youtube:video:${videoId}`, provider: 'youtube', kind: 'video', videoId, title: 'Baby Shark Dance' }],
+      excerpts: [{ id: `video:${videoId}`, sourceId: `youtube:video:${videoId}`, text: 'Baby Shark Dance' }],
+      artifacts: [{ type: 'youtube_video_metadata', title: 'Baby Shark Dance', data: { id: videoId, title: 'Baby Shark Dance', freshness: { state: 'fresh', fetchedAt: yesterday } } }],
+      warnings: [], usage: [] };
+    const historical = metadataForConversation([{ packet: earlier, recordedAt: yesterday }]);
+    const failures = [{ toolName: 'get_video_transcript', message: 'CAPTIONS_UNAVAILABLE: Captions are not available for this video.', videoId }];
+    const result = evidenceFallback(historical, 'inspect_video', undefined, undefined, failures, [videoId])!;
+    expect(result.answer).toContain('no captions are available');
+    expect(result.answer).not.toContain('[cite:memory:');
+  });
+});

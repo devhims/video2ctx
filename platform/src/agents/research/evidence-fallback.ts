@@ -20,29 +20,40 @@ export function hasContentEvidence(packets: readonly EvidencePacket[]): boolean 
 }
 
 /**
- * Per video, captions confirmed unavailable (a transcript tool's CAPTIONS_UNAVAILABLE failure, metadata
- * marking captions unavailable, or a caption-track lookup with no tracks) and comment pages confirmed
- * empty. A filtered comment read with nothing retained is not an empty page.
+ * Per requested video, captions confirmed unavailable and comment pages confirmed empty. Caption absence
+ * needs a current, affirmative observation: a transcript tool's CAPTIONS_UNAVAILABLE failure, current
+ * (not historical) metadata marking captions unavailable, or a complete caption-track lookup that returned
+ * no tracks. A partial lookup, which can filter out unusable tracks, or a historical snapshot proves nothing
+ * about the video now. A filtered comment read with nothing retained is not an empty page.
  */
 function emptySourceOutcomes(packets: readonly EvidencePacket[], failures: readonly FallbackToolFailure[], requestedVideoIds: readonly string[]) {
   const videoIds = [...new Set(requestedVideoIds)];
   const about = (packet: EvidencePacket, videoId: string) => packet.sources.some(source => source.videoId === videoId);
   return videoIds.flatMap(videoId => {
     const own = packets.filter(packet => about(packet, videoId));
-    const captions = failures.some(failure => TRANSCRIPT_TOOLS.has(failure.toolName ?? '')
+    const current = own.filter(packet => !historicalPacket(packet));
+    const proofs = current.filter(packet => packet.artifacts.some(artifact =>
+      (artifact.type === 'youtube_video_metadata' && (artifact.data.captionAvailability as { status?: unknown } | undefined)?.status === 'unavailable')
+      // Any warning (partial data, unusable track URLs) makes an empty track list inconclusive.
+      || (artifact.type === 'youtube_caption_tracks' && Array.isArray(artifact.data.sourceTracks) && artifact.data.sourceTracks.length === 0
+        && packet.warnings.length === 0)));
+    const captions = proofs.length > 0 || failures.some(failure => TRANSCRIPT_TOOLS.has(failure.toolName ?? '')
       && transcriptFailureCode(failure.message ?? '') === 'CAPTIONS_UNAVAILABLE'
-      && (failure.videoId === videoId || (failure.videoId === undefined && videoIds.length === 1)))
-      || own.some(packet => packet.artifacts.some(artifact =>
-        (artifact.type === 'youtube_video_metadata' && (artifact.data.captionAvailability as { status?: unknown } | undefined)?.status === 'unavailable')
-        || (artifact.type === 'youtube_caption_tracks' && Array.isArray(artifact.data.sourceTracks) && artifact.data.sourceTracks.length === 0)));
+      && (failure.videoId === videoId || (failure.videoId === undefined && videoIds.length === 1)));
     const comments = own.some(packet => packet.kind === 'youtube_comments' && confirmedEmptySource(packet));
     if (!captions && !comments) return [];
-    // The video's own metadata or caption-track record supports these claims and keeps the answer cited.
-    const record = own.find(packet => (packet.kind === 'youtube_video' || packet.kind === 'youtube_tracks') && packet.excerpts.length);
+    // Cite the current record that proves absence, else the video's current metadata; never a historical snapshot.
+    const record = [...proofs, ...current.filter(packet => packet.kind === 'youtube_video')].find(packet => packet.excerpts.length);
     const citation = record?.excerpts.find(excerpt => /^[A-Za-z0-9:_-]+$/.test(excerpt.id) && record.sources.some(source => source.id === excerpt.sourceId))?.id;
     const title = own.flatMap(packet => packet.sources).find(source => source.title)?.title;
     return [{ videoId, captions, comments, ...(citation ? { citation } : {}), ...(title ? { title } : {}) }];
   });
+}
+
+/** Metadata carried from an earlier turn: an observation from then, not of the video now. */
+function historicalPacket(packet: EvidencePacket): boolean {
+  return packet.warnings.some(warning => warning.code === 'HISTORICAL_VIDEO_METADATA')
+    || packet.artifacts.some(artifact => artifact.type === 'youtube_video_metadata' && artifact.data.historical === true);
 }
 
 /** Preserve supported findings without pretending to complete a cross-source synthesis. */
