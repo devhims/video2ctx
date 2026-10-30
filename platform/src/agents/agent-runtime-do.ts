@@ -1511,11 +1511,18 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     // Original reads live in session_packets, not the provider-tool audit table.
     // Restore only pages this run admitted. The ledger is the existing billing
     // receipt, so recovery neither redelivers evidence nor charges for it again.
+    // An empty page is admitted free and recorded only as an operation; it still
+    // proves the source was read, so it is restored too.
     const store = this.sessionStore;
     const originals = this.sql<{ packet_json: string }>`
       SELECT p.packet_json FROM session_packets p
-      JOIN agent_evidence_delivered_packets d ON d.packet_id = p.packet_id
-      WHERE d.run_id = ${runId} AND EXISTS (
+      JOIN (
+        SELECT packet_id, MIN(created_at) AS created_at FROM (
+          SELECT packet_id, created_at FROM agent_evidence_delivered_packets WHERE run_id = ${runId}
+          UNION ALL SELECT packet_id, created_at FROM agent_evidence_packet_operations WHERE run_id = ${runId}
+        ) GROUP BY packet_id
+      ) d ON d.packet_id = p.packet_id
+      WHERE EXISTS (
         SELECT 1 FROM json_each(p.packet_json, '$.artifacts')
         WHERE json_extract(value, '$.type') = 'saved_original_evidence'
       ) ORDER BY d.created_at ASC

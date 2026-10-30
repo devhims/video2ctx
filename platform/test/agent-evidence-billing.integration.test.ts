@@ -1244,3 +1244,52 @@ test('a refresh follow-up checks its duration notice against the metadata it adm
     expect(two.finalInput.citations).toEqual([]);
   });
 });
+
+test('an empty saved comments read counts toward the fallback report at the real boundary and after a restart', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const { runResearchAgentWithModel } = await import('../src/agents/research/research-agent');
+  // A video with no seeded session assets: no saved transcript exists for it.
+  const NO_CAPTIONS_VIDEO = 'nocaptions1';
+  const { runtime, runIds: [runId] } = await seedRuns('empty-saved-comments-fallback');
+  await runInDurableObject(runtime, async instance => {
+    const internals = instance as unknown as RuntimeInternals & { readEvidencePackets(runId: string): EvidencePacket[] };
+    const store = internals.sessionStore;
+    // Comments saved earlier, when the video had none.
+    const saved = await store.retrieve(`comments:${NO_CAPTIONS_VIDEO}:false:`, 'comments', NO_CAPTIONS_VIDEO, false,
+      async () => ({ cacheStatus: 'miss' as const, value: commentsPage(0)(NO_CAPTIONS_VIDEO) }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const decision = { route: 'inspect_video', videoId: NO_CAPTIONS_VIDEO, useStoryboard: false, requestedEvidence: ['original_quotes', 'comments'] };
+    internals.sql`INSERT INTO agent_routes (run_id, decision_json, created_at) VALUES (${runId!}, ${JSON.stringify(decision)}, 0)`;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    const steps: Array<{ tool: string; input?: object }> = [{ tool: 'get_video', input: { videoId: NO_CAPTIONS_VIDEO } }, { tool: 'search_originals', input: { assetVersion } },
+      { tool: 'get_video_transcript', input: { videoId: NO_CAPTIONS_VIDEO } }];
+    let step = 0;
+    const core = new MockLanguageModelV4({ doGenerate: async () => {
+      const next = steps[step++] ?? { tool: 'complete_research' };
+      return { content: [{ type: 'tool-call', toolCallId: `empty-saved-${step}`, toolName: next.tool, input: JSON.stringify(next.input ?? {}) }],
+        finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+    } });
+    const finalizer = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'text',
+      text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [{ text: 'Nothing to quote.', evidenceIds: [] }] }) }],
+      finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+    let finalInput: FinalizeAnswerInput | undefined;
+    await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, inheritedResolved: true, recoveredEvidence: [],
+      message: 'Quote the captions and the comments.', decision: decision as never,
+      context: { runId: runId!, signal: new AbortController().signal, session: store,
+        provider: sessionProvider({
+          video: async () => { throw new Error('Video metadata is temporarily unavailable.'); },
+          transcript: async () => { throw Object.assign(new Error('Captions are not available for this video.'), { code: 'CAPTIONS_UNAVAILABLE' }); },
+        } as unknown as AgentToolContext['provider'], store),
+        getEvidence: () => store.evidence(), transcriptPolicy: { mode: 'complete_transcript' },
+        executeEvidenceTool: (execution: EvidenceToolExecution) => internals.performEvidenceTool(runId!, execution),
+        deliverEvidence: (packets: EvidencePacket[], source: string) => internals.deliverEvidence(runId!, source, packets),
+        finalize: async (toolId: string, input: FinalizeAnswerInput) => { finalInput = input; return internals.finalizeRun(runId!, toolId, input); },
+      } as unknown as AgentToolContext });
+    expect(finalInput!.answer).toContain('no captions are available');
+    expect(finalInput!.answer).toContain('the comment lookup returned no comments');
+    expect(internals.sql<{ status: string }>`SELECT status FROM agent_runs WHERE id = ${runId!}`[0]?.status).toBe('completed');
+    // Recovery restores the empty read too, so a resumed run does not treat the comments as unread.
+    expect(internals.readEvidencePackets(runId!).some(packet => packet.kind === 'youtube_comments'
+      && packet.excerpts.length === 0 && packet.assetVersions?.includes(assetVersion))).toBe(true);
+  });
+});
