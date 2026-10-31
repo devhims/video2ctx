@@ -55,6 +55,32 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
   return items;
 }
 
+/**
+ * A keyword preview locates a passage. For exact quotes, check the corresponding
+ * original in chronological order. A read of one passage cannot verify a disjoint
+ * preview from the same video. Exploratory matches on the same page are alternatives.
+ */
+export function unverifiedCaptionPreviews(packets: EvidencePacket[]): EvidencePacket[] {
+  const verified = new Set<string>();
+  const completeVersions = new Set<string>();
+  const previews: EvidencePacket[] = [];
+  for (const packet of packets) {
+    if (packet.kind !== 'youtube_transcript' || !packet.excerpts.length) continue;
+    const selection = packet.artifacts.find(a => a.type === SAVED_EVIDENCE_ARTIFACT)?.data;
+    const wholeSource = selection && typeof selection.totalExcerpts === 'number' && packet.excerpts.length === selection.totalExcerpts;
+    if (wholeSource || selection?.captionSelection === 'chronological') {
+      for (const cue of packet.excerpts) verified.add(cue.id);
+    } else if (selection?.captionSelection === 'keyword') {
+      previews.push(packet);
+    } else if (packet.artifacts.some(a => a.type === 'youtube_complete_transcript' && a.data.allReturnedSegmentsIncluded === true)
+      && !transcriptAwaitsAnalysis(packet)) {
+      for (const version of packet.assetVersions ?? []) completeVersions.add(version);
+    }
+  }
+  return previews.filter(packet => !packet.assetVersions?.some(version => completeVersions.has(version))
+    && !packet.excerpts.some(cue => verified.has(cue.id)));
+}
+
 /** Caption text that reaches the models: a saved-original read, or a complete transcript not withheld for analysis. */
 function captionTextRead(packet: EvidencePacket): boolean {
   return packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
@@ -81,5 +107,7 @@ export function requestedEvidenceGuidance(kinds: readonly RequestedEvidenceKind[
   const parts = kinds.map(kind => kind === 'original_quotes'
     ? 'exact quotations from original captions (read them with search_originals, or the complete transcript; analyst summaries do not count)'
     : 'viewer comments (get_video_comments, or saved comments through search_originals)');
-  return `The user explicitly requested ${parts.join(' and ')}. Research cannot complete until each requested item is read for every subject, or can no longer be obtained. Do not answer around a missing item; an unavailable item is reported as a gap.`;
+  const passages = kinds.includes('original_quotes')
+    ? ' For each requested quotation independently, locate its beginning and read a contiguous time range through the end of the thought (assetVersion, startMs, endMs, no query). A keyword match, even its last page, can stop mid-sentence. Expand the range if it does. For a sequence of instructions read through the final requested step.' : '';
+  return `The user explicitly requested ${parts.join(' and ')}. Research cannot complete until each requested item is read for every subject, or can no longer be obtained.${passages} Do not answer around a missing item; an unavailable item is reported as a gap.`;
 }

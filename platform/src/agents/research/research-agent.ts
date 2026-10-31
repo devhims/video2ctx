@@ -77,7 +77,7 @@ import { capabilityRegistry, describeCapabilities } from './capability-registry'
 import { createCapabilityProvider, savedOnlyProvider } from './capability-provider';
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
-import { confirmedEmptySource, outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds } from './requested-evidence';
+import { confirmedEmptySource, outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds, unverifiedCaptionPreviews } from './requested-evidence';
 import { evidenceToolVideoId } from '../providers/youtube/tool-context';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
@@ -452,8 +452,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   const verifySaved = usesSavedEvidenceVerification(options.decision);
   const savedEvidenceSkill = usesSavedEvidenceSkill(options.decision);
+  const playlistListing = options.decision.route === 'topic_research' && options.decision.playlistListing && !options.decision.savedOnly;
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
+    .filter(name => !playlistListing || name === 'get_playlist' || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
     .filter(name => !options.decision.savedOnly || name.startsWith('analyze_') || name === FINALIZE_ANSWER_TOOL_NAME)
@@ -492,6 +494,14 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // while they can still be obtained; unavailable ones become finalizer gaps.
   const requestedKinds = requestedEvidenceKinds(options.decision);
   let originalsReadable = false;
+  const quotePreviews = () => requestedKinds.includes('original_quotes')
+    ? unverifiedCaptionPreviews([...evidence.values()]) : [];
+  const needsPassageRead = () => {
+    if (!originalsReadable || !requestedKinds.includes('original_quotes')) return false;
+    const state = options.context.session?.savedEvidenceReadState?.(options.context.runId);
+    if (state && state.attempts >= SAVED_EVIDENCE_READ_LIMIT) return false;
+    return quotePreviews().some(packet => !state?.outcomes.some(outcome => packet.assetVersions?.includes(outcome.assetVersion)));
+  };
   const outstandingRequested = () => requestedKinds.length ? outstandingRequestedEvidence({
     decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
     terminalVersions: new Set(options.context.session?.savedEvidenceReadState?.(options.context.runId).outcomes.map(outcome => outcome.assetVersion) ?? []),
@@ -517,6 +527,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       ...(options.context.session?.savedOriginalGaps?.(options.context.runId, read) ?? [])
         .filter(gap => !('videoId' in gap) || !unread.includes(gap.videoId)),
       // Requested evidence the run did not obtain, whether it became unavailable or limits ended research.
+      ...quotePreviews().map(packet => ({ reason: 'caption_keyword_preview_only', packetId: packet.packetId })),
       ...outstandingRequested().map(({ kind, videoId }) => ({ reason: 'requested_evidence_missing', kind, ...(videoId ? { videoId } : {}) })),
     ];
   };
@@ -625,7 +636,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           ...(requiredVideos !== undefined ? { requiredVideos } : {}) },
       }];
       if (options.decision.route === 'topic_research' && options.decision.channelId
-        && ![...evidence.values()].some(packet => packet.kind === 'youtube_channel_videos')) {
+        && !playlistListing && ![...evidence.values()].some(packet => packet.kind === 'youtube_channel_videos')) {
         warnings.push({ code: 'CHANNEL_INSPECTION_INCOMPLETE',
           message: 'The requested channel catalog could not be inspected. Do not treat this response as complete channel research.' });
       }
@@ -757,6 +768,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           // The tracked context records failures and consumes the one-search budget.
           signal.throwIfAborted();
         }
+        // The supplied URL identifies the only listing this metadata request needs.
+        // Finalize from its result or recorded failure without asking for it twice.
+        if (playlistListing && options.decision.playlistId && options.finalizationModel) throw finalizationHandoff;
       }
       const sessionTools: ToolSet = {
         ...contextHandoff.tools(await phaseContext.session?.searchTools?.((packets, source = 'search_context') => {
@@ -784,7 +798,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             verifySaved ? 'Read saved playlist listings by reference, or verify existing original captions/comments.' : describeCapabilities([capability.id]),
             '',
             `Activated capability: ${verifySaved ? 'verify_saved_evidence' : capability.id}`,
-            savedEvidenceSkill ? SAVED_EVIDENCE_VERIFICATION_SKILL : capability.instructions(completionTool),
+            savedEvidenceSkill ? SAVED_EVIDENCE_VERIFICATION_SKILL : playlistListing ? '' : capability.instructions(completionTool),
             ...(savedEvidenceSkill && !verifySaved ? ['Reuse supplied visual observations. Saved visual analysis tools remain available only for requested visual facts that are still missing; they do not replace required original caption/comment reads.'] : []),
             ...(!verifySaved ? ['For exact quotations or source corrections, use search_originals: omit assetVersion to find which saved source says it, then read that source by its version. Analyst summaries are not verbatim evidence. Read original passages before completing research.'] : []),
             ...(options.decision.savedOnly ? ['This run is saved-only. Retrieval and discovery are disabled, including incidental metadata calls. Missing saved assets are gaps, not permission to fetch.'] : []),
@@ -792,9 +806,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             // The skill accompanies exactly the visual tools this model can call.
             ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
-            ...(options.decision.route === 'topic_research' && options.decision.channelId
+            ...(!playlistListing && options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
-            ...(savedEvidenceSkill ? [] : options.decision.route === 'inspect_video'
+            ...(playlistListing ? ['The request is for playlist metadata. Use the supplied listing, or call get_playlist with the matching playlist ID from search results before completing. If no match exists, state the search limitation. Do not claim video content was reviewed.'] : savedEvidenceSkill ? [] : options.decision.route === 'inspect_video'
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
             ...(visualRequired
@@ -816,7 +830,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(!canAnalyzeStoryboard(options.researchDeadlineAt) ? ['analyze_video_storyboard'] : []),
             ...(needsVisualWork() ? [completionTool] : []),
             ...(outstandingRequested().some(item => item.state === 'pending') ? [completionTool] : []),
-            ...(pendingOriginals().length ? [completionTool] : []),
+            ...(pendingOriginals().length || needsPassageRead() ? [completionTool] : []),
             ...(needsPlaylistRead() ? [completionTool] : []),
             // Do not burn the research window on legacy search while originals are required.
             ...(savedEvidenceSkill && sessionTools.search_originals && pendingOriginals().length
@@ -825,7 +839,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           finalizationToolName: completionTool,
           finalizationAliases: completionTool === COMPLETE_RESEARCH_TOOL_NAME ? [FINALIZE_ANSWER_TOOL_NAME] : undefined,
           isToolBudgetExhausted: () => !savedEvidenceSkill && transcriptBudget?.isExhausted() === true && !visualRequired
-            && !outstandingRequested().some(item => item.state === 'pending'),
+            && !outstandingRequested().some(item => item.state === 'pending') && !needsPassageRead(),
         },
         messages: conversationModelMessages(
           options.conversationHistory ?? [],
@@ -1101,7 +1115,7 @@ async function runUnifiedFinalizer(options: {
           ...(confirmedEmpty ? ['A requested source was read and contains no entries, for example a saved comments page with no comments. State that result plainly, naming the source. It needs no citation. Do not assert other video facts or invent content.'] : []),
           ...(usesSavedEvidenceSkill(options.decision) ? [SAVED_EVIDENCE_ANSWER_SKILL] : []),
           'Prefer current assets over superseded versions unless the user asks for a historical comparison. A failed refresh does not make an old snapshot fresh; retain its collection time and explain the failure.',
-          'Packets with savedEvidence contain selected original captions or comments, not analyst paraphrases. Use their exact text for requested quotations. Put supporting references only in each block\'s evidenceIds array; the application renders precise passage links from segment startMs. Do not put asset IDs, excerpt IDs, startMs/endMs fields, millisecond values or hand-written timestamp URLs into the prose. Preserve source identity. Do not claim timestamps or captions are absent when these packets supply them. A quote spanning several segments must cite those segments; do not guess corrected brand spellings from noisy captions. Coverage describes a selected page, not a complete transcript review.',
+          'Packets with savedEvidence contain selected original captions or comments, not analyst paraphrases. Use their exact text for requested quotations. Put supporting references only in each block\'s evidenceIds array; the application renders precise passage links from segment startMs. Do not put asset IDs, excerpt IDs, startMs/endMs fields, millisecond values or hand-written timestamp URLs into the prose. Preserve source identity. Do not claim timestamps or captions are absent when these packets supply them. A quote spanning several segments must cite those segments; do not guess corrected brand spellings from noisy captions. For a quotation, join adjacent cues from the same original. A keyword preview or an unchecked ending means only that the passage was not fully verified in this turn. Never claim words are missing from the saved transcript on that basis.',
           'The current user message can correct earlier memory. Prefer explicit current corrections over old context.',
           'Session memory is an index, not proof. Use the supplied stored evidence for factual video claims. Inventory counts do not establish visual content. Stored context gathering has already finished. This answer call cannot use tools, retrieve new sources or request another inspection. State any remaining evidence gap without inventing facts.',
           'Return only the answer fields in the schema. Session memory is maintained separately after the answer is accepted.',

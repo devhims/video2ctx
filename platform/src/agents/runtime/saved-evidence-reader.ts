@@ -119,11 +119,12 @@ export async function searchSavedEvidence(store: SessionEvidenceStore, input: z.
 }
 
 async function originalPacket(asset: OriginalAsset, index: ReadyIndex, page: EvidencePacket['excerpts'], matching: number,
-  offset: number, key: unknown): Promise<EvidencePacket> {
+  offset: number, key: { query?: string; [field: string]: unknown }): Promise<EvidencePacket> {
   const sourceId = `youtube:${asset.videoId}:${asset.kind}`;
   const nextOffset = offset + page.length < matching ? offset + page.length : undefined;
   const coverage = { assetVersion: asset.version, kind: asset.kind, totalExcerpts: index.total,
     selectedExcerpts: matching, offset, returnedExcerpts: page.length,
+    ...(asset.kind === 'transcript' ? { captionSelection: key.query ? 'keyword' : 'chronological' } : {}),
     ...(index.meta.partial !== undefined ? { sourcePartial: index.meta.partial } : {}),
     ...(asset.kind === 'comments' ? { sourceContinuationAvailable: Boolean(index.meta.continuation) } : {}),
     ...(nextOffset !== undefined ? { nextOffset } : {}) };
@@ -151,7 +152,7 @@ function savedCoverage(packet: EvidencePacket) {
 export function createReadSavedEvidenceTool(store: SessionEvidenceStore,
   admit: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, runId: string = crypto.randomUUID()) {
   return tool({
-    description: 'Search or read original SAVED captions and comments: the exact words, with immutable citations and caption times. Use for quotations, precise passage times, corrections, and comments omitted from summaries. Omit assetVersion to search every saved caption and comment page; results give each source\'s assetVersion and nextOffset. Pass assetVersion to page one source, read a caption time range, or search inside it. Never calls YouTube or an analyst. A filtered page does not establish absence from the whole asset.',
+    description: 'Search or read original SAVED captions and comments: the exact words, with immutable citations and caption times. Use for quotations, precise passage times, corrections, and comments omitted from summaries. Omit assetVersion to search every saved caption and comment page; results give each source\'s assetVersion and nextOffset. Pass assetVersion to page one source, read a caption time range, or search inside it. Never calls YouTube or an analyst. For each passage to quote, read the matching time range by assetVersion without a query. A keyword page locates text and can end mid-sentence even on the last page.',
     inputSchema: readSavedEvidenceInputSchema,
     execute: async input => {
       signal.throwIfAborted();

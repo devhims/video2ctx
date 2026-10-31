@@ -1,5 +1,6 @@
 import type { CapabilityRouteDecision } from '../contracts';
 import type { AgentToolContext } from '../providers/youtube/tool-context';
+import { executeGetPlaylist } from '../providers/youtube/tools/get-playlist';
 import { executeGetChannel } from '../providers/youtube/tools/get-channel';
 import { executeGetChannelVideos } from '../providers/youtube/tools/get-channel-videos';
 import { executeSearchYouTube } from '../providers/youtube/tools/search-youtube';
@@ -13,9 +14,14 @@ export async function discoverInitialEvidence(
 ) {
   // Named comparison subjects need retrieval, not unrelated search results.
   if (decision.comparisonVideoIds?.length) return;
+  if (decision.playlistListing && decision.playlistId) {
+    await executeGetPlaylist({ playlistId: decision.playlistId }, context, `initial-playlist:${context.runId}`);
+    return;
+  }
+  const type = decision.playlistListing ? 'playlist' : 'video';
   if (!decision.channelId) {
     if (decision.searchQuery && !searchUsed) await executeSearchYouTube(
-      { query: decision.searchQuery, type: 'video' }, context, `initial-search:${context.runId}`,
+      { query: decision.searchQuery, type }, context, `initial-search:${context.runId}`,
     );
     return;
   }
@@ -28,9 +34,9 @@ export async function discoverInitialEvidence(
     throw new Error('The resolved channel does not match the requested handle.');
   }
   const name = channel.sources.find(source => source.kind === 'channel')?.title;
-  const reads = [executeGetChannelVideos({ channelId, sort: 'latest' }, context, `initial-channel-videos:${context.runId}`)];
+  const reads = decision.playlistListing ? [] : [executeGetChannelVideos({ channelId, sort: 'latest' }, context, `initial-channel-videos:${context.runId}`)];
   if (decision.searchQuery && !searchUsed) reads.push(executeSearchYouTube({
-    query: [name, decision.searchQuery].filter(Boolean).join(' ').slice(0, 500), type: 'video', channelId,
+    query: [name, decision.searchQuery].filter(Boolean).join(' ').slice(0, 500), type, channelId,
   }, context, `initial-search:${context.runId}`));
   const results = await Promise.allSettled(reads);
   context.signal.throwIfAborted();

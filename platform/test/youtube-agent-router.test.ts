@@ -20,6 +20,19 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
+  it.each([
+    ['https://www.youtube.com/playlist?list=PLexample', 'PLexample'],
+    ['https://www.youtube.com/watch?v=abcdefghijk&list=PLexample', 'PLexample'],
+    ['the Essence of Calculus playlist', undefined],
+  ])('uses the supplied playlist ID only for a listing request: %s', async (subject, playlistId) => {
+    const model = classifierModel({ route: 'topic_research', playlistListing: true, searchQuery: 'Essence of Calculus',
+      researchBreadth: 'focused', visualEvidence: 'none' });
+    const decision = await classifyCapabilityWithModel({ message: `Fetch the listing for ${subject}`, model,
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'topic_research', playlistListing: true });
+    expect(decision.route === 'topic_research' ? decision.playlistId : null).toBe(playlistId);
+  });
+
   it('keeps retrieval available when the classifier selects verification without a saved-only restriction', async () => {
     const model = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk',
       skill: 'verify_saved_evidence', requestedEvidence: ['original_quotes', 'comments'], visualEvidence: 'none' });

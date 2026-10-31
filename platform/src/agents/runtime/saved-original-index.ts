@@ -16,7 +16,8 @@ export function savedOriginalIndexFormat(kind: SavedOriginalKind): number {
 /** Matches may span this many consecutive captions; a sentence is often split across cues. */
 const CAPTION_WINDOW = 3;
 /** Captions shown either side of a caption match, so a quote is read in context. */
-const CAPTION_RADIUS = 2;
+const CAPTION_LEAD = 2;
+const CAPTION_TAIL = 4;
 const COMMENT_CHUNK = 1_500;
 
 type Excerpt = EvidencePacket['excerpts'][number];
@@ -127,8 +128,14 @@ export function selectSavedOriginals(sql: SqlStorage, version: string, total: nu
     const selected = new Set<number>();
     for (const start of candidates) {
       if (start < 0 || (anchors && !anchors.has(start))) continue;
-      if (!sets.every(set => range(CAPTION_WINDOW).some(step => set.has(start + step)))) continue;
-      for (let position = Math.max(0, start - CAPTION_RADIUS); position <= Math.min(total - 1, start + CAPTION_RADIUS); position++) selected.add(position);
+      // Anchor context on the cues that contain the words. Padding a hypothetical
+      // window start instead can fill the preview before the match itself appears.
+      const offsets = sets.map(set => range(CAPTION_WINDOW).find(step => set.has(start + step)));
+      const hits = offsets.filter(step => step !== undefined);
+      if (hits.length !== sets.length) continue;
+      const first = start + Math.min(...hits);
+      const last = start + Math.max(...hits);
+      for (let position = Math.max(0, first - CAPTION_LEAD); position <= Math.min(total - 1, last + CAPTION_TAIL); position++) selected.add(position);
     }
     matching = [...selected].sort((a, b) => a - b);
   }

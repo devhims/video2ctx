@@ -1,3 +1,4 @@
+import { unverifiedCaptionPreviews } from '../src/agents/research/requested-evidence';
 import { pendingOriginalSources, unreadOriginalSources } from '../src/agents/research/skills/verify-saved-evidence';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
@@ -1931,6 +1932,39 @@ test('real saved Bicycle passages retain caption times instead of analyst window
   });
 });
 
+test('first-turn search across bicycle transcripts returns the definition beyond the matching cue', async () =>
+  within('bicycle-preview-ending', async store => {
+    await seedReplay(store, 'bicycle');
+    const { packets } = await searchSavedEvidence(store, { query: 'nine-speed' });
+    const official = packets.find(packet => packet.sources.some(source => source.videoId === officialId));
+    expect(official?.excerpts.map(cue => cue.text).join(' ')).toContain('nine cogs means a nine-speed bike and so on');
+  }));
+
+test('both chess quote previews include the continuation after their matched words', async () =>
+  within('chess-preview-endings', async store => {
+    const value = replayTranscript(id, [[41, "black's king is not in check"], [44, 'and has no legal move.'],
+      [48, "Remember, in chess, you're"], [51, 'never forced to make an illegal move, so'],
+      [53, 'black cannot put the king onto a square'], [56, 'where it would be captured.'],
+      [137, 'The king is trapped.'], [139, 'But does that mean stalemate?'],
+      [141, 'Not in this position because notice'], [143, 'black has another piece. Black could'],
+      [145, 'play the move h3, allowing white to'], [148, 'correct the mistake from the last move'],
+      [150, 'and deliver checkmate with queen to b7.']]);
+    const raw = await store.retrieve('captions', 'transcript', id, false, async () => ({ value, cacheStatus: 'hit' }), () => ({}));
+    const packets: EvidencePacket[] = [];
+    for (const [query, ending] of [['Remember chess never forced illegal', 'where it would be captured.'],
+      ['not in this position', 'and deliver checkmate with queen to b7.']] as const) {
+      const result = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], query });
+      expect(result.packets[0]!.excerpts.map(cue => cue.text)).toContain(ending);
+      packets.push(...result.packets);
+    }
+    expect(unverifiedCaptionPreviews(packets)).toHaveLength(2);
+    for (const [startMs, endMs, remaining] of [[48000, 58000, 1], [141000, 152000, 0]] as const) {
+      const read = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], startMs, endMs });
+      packets.push(...read.packets);
+      expect(unverifiedCaptionPreviews(packets)).toHaveLength(remaining);
+    }
+  }));
+
 // Segment index: originals are searched in SQLite with stemming, never reread from R2.
 test.each([
   ["DON’T", "Don't rush", 1], ['paint', 'painting', 1], ['mix', 'mixing your own greens', 1], ['lube', 'I lubed it yesterday', 1],
@@ -1973,9 +2007,9 @@ test('saved captions are indexed on save and paged without touching storage', as
     await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key);
     const restored = reopen();
     const storage = vi.spyOn(restored, 'read');
-    // Words split across consecutive captions still match, with two captions of context either side.
+    // Words split across consecutive captions still match, with context following the last matched word.
     const split = await readSavedEvidence(restored, { assetVersion, query: 'lube hundred' });
-    expect(split.packets[0]!.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 3000, 6000]);
+    expect(split.packets[0]!.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 3000, 6000, 9000, 12000]);
     expect((await readSavedEvidence(restored, { assetVersion, query: 'lube gears' })).coverage.selectedExcerpts).toBe(0);
     expect((await readSavedEvidence(restored, { assetVersion, query: 'mix' })).packets[0]!.excerpts.at(-1)!.text).toBe('mixing your own greens');
     const timed = await readSavedEvidence(restored, { assetVersion, startMs: 6000, endMs: 9000 });
