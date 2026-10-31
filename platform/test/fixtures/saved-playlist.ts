@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { EvidencePacket, AgentTurnResult } from '../../src/agents/contracts';
 import type { executeResearchRun } from '../../src/agents/research/research-agent';
+import { metadataForConversation } from '../../src/agents/runtime/conversation-metadata';
 import { buildAgentTurnResult } from '../../src/agents/finalizer';
 import type { SessionEvidenceStore } from '../../src/agents/runtime/session-evidence';
 
@@ -25,6 +26,17 @@ export const savedPlaylist: EvidencePacket = {
     collection: { version: 1, fetchedCount: 12, retainedCount: 12, reportedTotal: 12, hasContinuation: false },
   } }], warnings: [], usage: [],
 };
+
+export function earlierLectureTurn() {
+  const videoId = 'abcdefghijk';
+  const metadata = metadataForConversation([{ recordedAt: 2000, packet: {
+    packetId: 'lecture', kind: 'youtube_video', sources: [{ id: 'lecture', kind: 'video', provider: 'youtube', videoId }],
+    excerpts: [], artifacts: [{ type: 'youtube_video_metadata', title: 'Earlier lecture', data: { id: videoId, durationSeconds: 1800 } }],
+    warnings: [], usage: [],
+  } }]);
+  return { userMessageId: 'u', agentMessageId: 'a', user: 'Look up this lecture.',
+    assistant: 'I found the lecture.', resourceIds: [videoId], metadata };
+}
 
 export const playlistFollowup = 'After reopening this session, use the same saved playlist only, with no fresh provider retrieval; supported saved-evidence reads are allowed. Give positions 8 and 9 with full titles, durations and direct links, and calculate whether both fit in 35 minutes with the exact spare time or overrun. These rows have not been quoted in our conversation yet. Keep the answer to listing facts, and honestly flag any missing details.';
 

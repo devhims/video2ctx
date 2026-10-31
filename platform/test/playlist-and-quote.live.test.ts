@@ -4,7 +4,7 @@ import * as youtube from '../src/agents/providers/youtube/provider';
 import { savedOnlyProvider } from '../src/agents/research/capability-provider';
 import { executeResearchRun } from '../src/agents/research/research-agent';
 import { localSession } from './fixtures/local-session';
-import { savedPlaylist, savedPlaylistRun } from './fixtures/saved-playlist';
+import { earlierLectureTurn, savedPlaylist, savedPlaylistRun } from './fixtures/saved-playlist';
 import { kelogId, watercolorTranscript } from './fixtures/watercolor-session';
 import { officialCaptions, gcnCaptions } from './fixtures/saved-replays';
 
@@ -30,13 +30,18 @@ function replay() {
 }
 
 describe.skipIf(process.env.PLAYLIST_QUOTE_LIVE !== '1')('playlist and passage regressions with Fireworks', () => {
-  it.each(['direct', 'after refusal'])('retrieves playlist listing metadata: %s', async kind => {
+  it.each(['direct', 'after refusal', 'prior lecture'])('retrieves playlist listing metadata: %s', async kind => {
     const { options, delivered, result } = replay();
     options.message = kind === 'direct'
       ? `Fetch the listing for https://www.youtube.com/playlist?list=${playlistId}. Name the study note Cedar and report the first three titles and their total runtime from metadata only.`
       : 'Search YouTube for the Essence of Calculus playlist by 3Blue1Brown and retrieve its listing. Report titles and durations only.';
     if (kind === 'after refusal') options.conversationHistory.push({ userMessageId: 'u', agentMessageId: 'a', resourceIds: [],
       user: 'Fetch the calculus playlist listing.', assistant: 'Playlist retrieval is outside the YouTube research boundary.' });
+    const lecture = earlierLectureTurn();
+    if (kind === 'prior lecture') {
+      options.conversationHistory.push(lecture);
+      options.message = `Using playlist metadata from https://www.youtube.com/playlist?list=${playlistId} and the saved duration of the lecture we discussed earlier, compare their runtimes. How much shorter is lesson 8 than the lecture?`;
+    }
     const calls: string[] = [];
     options.executeEvidenceTool = async execution => {
       calls.push(execution.toolName);
@@ -53,8 +58,12 @@ describe.skipIf(process.env.PLAYLIST_QUOTE_LIVE !== '1')('playlist and passage r
       throw new Error('Unexpected provider request in fixture replay');
     };
     await executeResearchRun(options);
-    expect(calls).toEqual(kind === 'direct' ? ['get_playlist'] : ['search_youtube', 'get_playlist']);
-    expect(result()?.answer).toContain('Calculus lesson 1');
+    expect(calls).toEqual(kind === 'after refusal' ? ['search_youtube', 'get_playlist'] : ['get_playlist']);
+    if (kind === 'prior lecture') {
+      expect(options.deliverEvidence).toHaveBeenCalledWith(lecture.metadata, 'read_prior_evidence');
+      expect(result()?.citations.map(c => c.id)).toContain(lecture.metadata[0]!.packetId);
+      expect(result()?.answer).toMatch(/9:14|9 minutes.{0,10}14 seconds/i);
+    } else expect(result()?.answer).toContain('Calculus lesson 1');
     expect(result()?.citations.some(c => c.id.startsWith('listing-entry:'))).toBe(true);
   }, 180_000);
 

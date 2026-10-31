@@ -55,12 +55,10 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
   return items;
 }
 
-/**
- * A keyword preview locates a passage. For exact quotes, check the corresponding
- * original in chronological order. A read of one passage cannot verify a disjoint
- * preview from the same video. Exploratory matches on the same page are alternatives.
- */
-export function unverifiedCaptionPreviews(packets: EvidencePacket[]): EvidencePacket[] {
+interface CaptionPassage { packetId: string; assetVersion: string; startMs?: number; endMs?: number }
+
+/** Each run of adjacent cues in a keyword preview needs its own chronological read. */
+export function unverifiedCaptionPassages(packets: EvidencePacket[]): CaptionPassage[] {
   const verified = new Set<string>();
   const completeVersions = new Set<string>();
   const previews: EvidencePacket[] = [];
@@ -77,8 +75,25 @@ export function unverifiedCaptionPreviews(packets: EvidencePacket[]): EvidencePa
       for (const version of packet.assetVersions ?? []) completeVersions.add(version);
     }
   }
-  return previews.filter(packet => !packet.assetVersions?.some(version => completeVersions.has(version))
-    && !packet.excerpts.some(cue => verified.has(cue.id)));
+  const pending: CaptionPassage[] = [];
+  for (const packet of previews) {
+    const version = packet.assetVersions?.[0];
+    if (!version || completeVersions.has(version)) continue;
+    let previousPosition = -1;
+    let passage: CaptionPassage | undefined;
+    for (const cue of packet.excerpts) {
+      if (verified.has(cue.id)) { passage = undefined; continue; }
+      // Indexed captions carry their immutable position within this asset version.
+      const position = Number(cue.id.split(':').at(-1));
+      if (!passage || position !== previousPosition + 1) {
+        passage = { packetId: packet.packetId, assetVersion: version, startMs: cue.startMs };
+        pending.push(passage);
+      }
+      passage.endMs = cue.endMs ?? cue.startMs;
+      previousPosition = position;
+    }
+  }
+  return pending;
 }
 
 /** Caption text that reaches the models: a saved-original read, or a complete transcript not withheld for analysis. */
@@ -108,6 +123,6 @@ export function requestedEvidenceGuidance(kinds: readonly RequestedEvidenceKind[
     ? 'exact quotations from original captions (read them with search_originals, or the complete transcript; analyst summaries do not count)'
     : 'viewer comments (get_video_comments, or saved comments through search_originals)');
   const passages = kinds.includes('original_quotes')
-    ? ' For each requested quotation independently, locate its beginning and read a contiguous time range through the end of the thought (assetVersion, startMs, endMs, no query). A keyword match, even its last page, can stop mid-sentence. Expand the range if it does. For a sequence of instructions read through the final requested step.' : '';
+    ? ' For each requested quotation independently, locate its beginning and read a contiguous time range through the end of the thought (assetVersion, startMs, endMs, no query). Cover the cues of each separate keyword preview span from its first returned timestamp through its last. Even the last page can stop mid-sentence. Expand the range if it does. For a sequence of instructions read through the final requested step.' : '';
   return `The user explicitly requested ${parts.join(' and ')}. Research cannot complete until each requested item is read for every subject, or can no longer be obtained.${passages} Do not answer around a missing item; an unavailable item is reported as a gap.`;
 }

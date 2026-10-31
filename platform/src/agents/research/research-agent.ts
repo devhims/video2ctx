@@ -77,7 +77,7 @@ import { capabilityRegistry, describeCapabilities } from './capability-registry'
 import { createCapabilityProvider, savedOnlyProvider } from './capability-provider';
 import { SAVED_EVIDENCE_READ_LIMIT } from '../runtime/saved-evidence-reader';
 import { SAVED_EVIDENCE_ARTIFACT } from '../runtime/saved-evidence-contract';
-import { confirmedEmptySource, outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds, unverifiedCaptionPreviews } from './requested-evidence';
+import { confirmedEmptySource, outstandingRequestedEvidence, requestedEvidenceGuidance, requestedEvidenceKinds, unverifiedCaptionPassages } from './requested-evidence';
 import { evidenceToolVideoId } from '../providers/youtube/tool-context';
 import { usesSavedEvidenceSkill, SAVED_EVIDENCE_ANSWER_SKILL, SAVED_EVIDENCE_VERIFICATION_SKILL, unreadOriginalSources, pendingOriginalSources, usesSavedEvidenceVerification } from './skills/verify-saved-evidence';
 import { evidenceWithConversationMetadata, preferCurrentMetadata } from '../runtime/conversation-metadata';
@@ -452,10 +452,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const capability = capabilityRegistry[options.decision.route];
   const verifySaved = usesSavedEvidenceVerification(options.decision);
   const savedEvidenceSkill = usesSavedEvidenceSkill(options.decision);
-  const playlistListing = options.decision.route === 'topic_research' && options.decision.playlistListing && !options.decision.savedOnly;
+  const playlistListing = options.decision.route === 'topic_research' && options.decision.playlistListing && !options.decision.savedOnly
+    ? options.decision : undefined;
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !playlistListing || name === 'get_playlist' || name === FINALIZE_ANSWER_TOOL_NAME)
+    .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
     .filter(name => !options.decision.savedOnly || name.startsWith('analyze_') || name === FINALIZE_ANSWER_TOOL_NAME)
@@ -494,13 +495,13 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // while they can still be obtained; unavailable ones become finalizer gaps.
   const requestedKinds = requestedEvidenceKinds(options.decision);
   let originalsReadable = false;
-  const quotePreviews = () => requestedKinds.includes('original_quotes')
-    ? unverifiedCaptionPreviews([...evidence.values()]) : [];
+  const pendingQuotePassages = () => requestedKinds.includes('original_quotes')
+    ? unverifiedCaptionPassages([...evidence.values()]) : [];
   const needsPassageRead = () => {
     if (!originalsReadable || !requestedKinds.includes('original_quotes')) return false;
     const state = options.context.session?.savedEvidenceReadState?.(options.context.runId);
     if (state && state.attempts >= SAVED_EVIDENCE_READ_LIMIT) return false;
-    return quotePreviews().some(packet => !state?.outcomes.some(outcome => packet.assetVersions?.includes(outcome.assetVersion)));
+    return pendingQuotePassages().some(passage => !state?.outcomes.some(outcome => outcome.assetVersion === passage.assetVersion));
   };
   const outstandingRequested = () => requestedKinds.length ? outstandingRequestedEvidence({
     decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
@@ -527,7 +528,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       ...(options.context.session?.savedOriginalGaps?.(options.context.runId, read) ?? [])
         .filter(gap => !('videoId' in gap) || !unread.includes(gap.videoId)),
       // Requested evidence the run did not obtain, whether it became unavailable or limits ended research.
-      ...quotePreviews().map(packet => ({ reason: 'caption_keyword_preview_only', packetId: packet.packetId })),
+      ...pendingQuotePassages().map(passage => ({ reason: 'caption_keyword_preview_only', ...passage })),
       ...outstandingRequested().map(({ kind, videoId }) => ({ reason: 'requested_evidence_missing', kind, ...(videoId ? { videoId } : {}) })),
     ];
   };
@@ -768,9 +769,6 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           // The tracked context records failures and consumes the one-search budget.
           signal.throwIfAborted();
         }
-        // The supplied URL identifies the only listing this metadata request needs.
-        // Finalize from its result or recorded failure without asking for it twice.
-        if (playlistListing && options.decision.playlistId && options.finalizationModel) throw finalizationHandoff;
       }
       const sessionTools: ToolSet = {
         ...contextHandoff.tools(await phaseContext.session?.searchTools?.((packets, source = 'search_context') => {
@@ -808,7 +806,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(options.decision.comparisonVideoIds?.length ? [`Comparison subjects: ${options.decision.comparisonVideoIds.join(', ')}. Preserve all subjects. Reuse saved evidence and retrieve only missing assets unless refresh was requested. Do not discover unrelated videos. Load all needed saved evidence during research. The finalizer cannot read transcripts or gather missing context.`] : []),
             ...(!playlistListing && options.decision.route === 'topic_research' && options.decision.channelId
               ? [`Requested channel: ${options.decision.channelId}. Use its supplied identity, catalog and channel-filtered search. Select videos from that channel only. If channel inspection failed, state the gap; do not silently broaden to other channels.`] : []),
-            ...(playlistListing ? ['The request is for playlist metadata. Use the supplied listing, or call get_playlist with the matching playlist ID from search results before completing. If no match exists, state the search limitation. Do not claim video content was reviewed.'] : savedEvidenceSkill ? [] : options.decision.route === 'inspect_video'
+            ...(playlistListing ? ['The request is for playlist metadata. Use the supplied listing, or call get_playlist with the matching playlist ID from search results before completing. Read earlier evidence needed for comparisons before completing. If the listing lookup failed or no match exists, report that limitation. Do not claim video content was reviewed.'] : savedEvidenceSkill ? [] : options.decision.route === 'inspect_video'
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target. Analyze selected transcripts together. A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
             ...(visualRequired

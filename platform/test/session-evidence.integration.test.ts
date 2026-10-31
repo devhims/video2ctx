@@ -1,4 +1,4 @@
-import { unverifiedCaptionPreviews } from '../src/agents/research/requested-evidence';
+import { unverifiedCaptionPassages } from '../src/agents/research/requested-evidence';
 import { pendingOriginalSources, unreadOriginalSources } from '../src/agents/research/skills/verify-saved-evidence';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
@@ -1957,11 +1957,32 @@ test('both chess quote previews include the continuation after their matched wor
       expect(result.packets[0]!.excerpts.map(cue => cue.text)).toContain(ending);
       packets.push(...result.packets);
     }
-    expect(unverifiedCaptionPreviews(packets)).toHaveLength(2);
-    for (const [startMs, endMs, remaining] of [[48000, 58000, 1], [141000, 152000, 0]] as const) {
+    expect(unverifiedCaptionPassages(packets)).toHaveLength(2);
+    for (const preview of [...packets]) {
+      const startMs = preview.excerpts[0]!.startMs, endMs = preview.excerpts.at(-1)!.endMs;
       const read = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], startMs, endMs });
       packets.push(...read.packets);
-      expect(unverifiedCaptionPreviews(packets)).toHaveLength(remaining);
+      expect(unverifiedCaptionPassages(packets).map(passage => passage.packetId)).not.toContain(preview.packetId);
+    }
+    expect(unverifiedCaptionPassages(packets)).toEqual([]);
+  }));
+
+test('a lead-in read leaves both watercolor gradient passages pending until their cues are read', async () =>
+  within('watercolor-gradient-passages', async store => {
+    const saved = await store.retrieve('captions', 'transcript', kelogId, false,
+      async () => ({ value: watercolorTranscript(kelogId), cacheStatus: 'hit' }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const { packets } = await readSavedEvidence(store, { assetVersion, query: 'gradient' });
+    const pendingStarts = () => unverifiedCaptionPassages(packets).map(passage => passage.startMs);
+    expect(packets).toHaveLength(1);
+    expect(pendingStarts()).toEqual([200_000, 646_000]);
+    for (const [startMs, endMs, expected] of [
+      [200_000, 202_000, [204_000, 646_000]],
+      [204_000, 220_000, [646_000]],
+      [646_000, 670_000, []],
+    ] as const) {
+      packets.push(...(await readSavedEvidence(store, { assetVersion, startMs, endMs })).packets);
+      expect(pendingStarts()).toEqual(expected);
     }
   }));
 
