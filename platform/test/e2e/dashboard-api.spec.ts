@@ -1417,6 +1417,14 @@ test('fresh video data does not offer a saved-data refresh button', async ({ pag
   await expect(page.getByRole('button', { name: 'Refresh data', exact: true })).toHaveCount(0);
 });
 
+test('a Sources query link focuses the populated input after hydration', async ({ page }) => {
+  await page.goto('/dashboard/sources?q=watercolor');
+  const query = page.getByRole('textbox', { name: 'Video search or YouTube URL' });
+  await expect(query).toHaveValue('watercolor');
+  await expect(query).toBeFocused();
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+});
+
 test('a known video opens without waiting for the remote URL resolver', async ({ page }) => {
   let resolveReads = 0;
   let release!: () => void;

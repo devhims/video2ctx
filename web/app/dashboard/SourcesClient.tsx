@@ -509,7 +509,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || hydrating) return;
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
     if (saved) {
       const openProject = params.get('openProject');
@@ -530,7 +530,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     if (q) { setQuery(q); searchInput.current?.focus(); }
     if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
     if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
-  }, [active, params, router]);
+  }, [active, hydrating, params, router]);
   const createProject = async (name:string) => {
     const project = await api<Project>('/v1/projects',{method:'POST',body:JSON.stringify({name})});
     await projectsResource.refresh(); return project;

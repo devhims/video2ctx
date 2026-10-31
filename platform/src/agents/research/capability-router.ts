@@ -126,6 +126,7 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   // Keep the provider schema strict. Normalize a copy only at the acceptance
   // boundary, retaining which fields needed a fallback before the SDK parses them.
   const input = { ...value } as Record<string, unknown>;
+  if (Array.isArray(input.requestedEvidence) && !input.requestedEvidence.length) delete input.requestedEvidence;
   if (!answerDetailSchema.safeParse(input.answerDetail).success) {
     input.answerDetail = 'standard';
     defaultedFields.push('answerDetail');
@@ -860,23 +861,20 @@ function comparisonScopeIssues(
 
 export function extractYouTubeChannelIds(message: string): string[] {
   const ids = new Set<string>();
-  const candidates = message.match(/(?<![\w./-])(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/[^\s<>"']+/gi) ?? [];
-  for (const candidate of candidates) {
-    try {
-      const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
-      if (!['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname.toLowerCase())) continue;
-      const [kind, id] = url.pathname.replace(/[),.!?;]+$/, '').split('/').filter(Boolean);
-      const value = kind?.startsWith('@') ? kind : kind === 'channel' ? id : undefined;
-      if (value && capabilityRouteDecisionSchema.options[0].shape.channelId.safeParse(value).success) ids.add(value);
-    } catch { /* Ignore malformed links. */ }
+  for (const url of youTubeUrls(message)) {
+    if (url.hostname.endsWith('youtu.be')) continue;
+    const [kind, id] = url.pathname.split('/').filter(Boolean);
+    const value = kind?.startsWith('@') ? kind : kind === 'channel' ? id : undefined;
+    if (value && capabilityRouteDecisionSchema.options[0].shape.channelId.safeParse(value).success) ids.add(value);
   }
   for (const match of message.matchAll(/(?:^|\s)(@[A-Za-z0-9_.-]+)(?=$|\s|[,;!?])/g)) ids.add(match[1]!);
   return [...ids];
 }
 
+// Consume the whole URL before checking its host. Embedded links and v= parameters belong to that URL.
+const urlCandidates = /(?:https?:\/\/|(?<![\w./@-])(?:[\w-]+\.)+[a-z]{2,}\/)[^\s<>"']+/gi;
 function* youTubeUrls(message: string): Generator<URL> {
-  const urlCandidates = message.match(/(?<![\w./-])(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\/[^\s<>"']+/gi) ?? [];
-  for (const candidate of urlCandidates) {
+  for (const candidate of message.match(urlCandidates) ?? []) {
     const normalized = candidate.replace(/[\])},.!?;:'"]+$/g, '');
     let url: URL;
     try {
@@ -884,8 +882,8 @@ function* youTubeUrls(message: string): Generator<URL> {
     } catch {
       continue;
     }
-    const host = url.hostname.toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
-    if (host === 'youtube.com' || host === 'youtu.be') yield url;
+    const host = url.hostname.toLowerCase();
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be', 'm.youtu.be'].includes(host)) yield url;
   }
 }
 
@@ -901,8 +899,8 @@ export function extractYouTubeVideoIds(message: string): string[] {
     if (kind === 'shorts' || kind === 'live' || kind === 'embed') addVideoId(ids, pathId);
   }
 
-  const labelledIdPattern = /(?:video(?:\s+id)?|v)\s*[:=]\s*([A-Za-z0-9_-]{11})(?=$|\s|[),.!?;])/gi;
-  for (const match of message.matchAll(labelledIdPattern)) addVideoId(ids, match[1]);
+  const labelledIdPattern = /(?:^|[\s(])(?:video(?:\s+id)?|v)\s*[:=]\s*([A-Za-z0-9_-]{11})(?=$|\s|[),.!?;])/gi;
+  for (const match of message.replace(urlCandidates, ' ').matchAll(labelledIdPattern)) addVideoId(ids, match[1]);
   const trimmed = message.trim();
   if (VIDEO_ID_PATTERN.test(trimmed)) ids.add(trimmed);
   return [...ids];

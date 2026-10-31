@@ -57,40 +57,52 @@ export function outstandingRequestedEvidence(context: RequestedEvidenceContext):
 
 interface CaptionPassage { packetId: string; assetVersion: string; startMs?: number; endMs?: number }
 
-/** Each run of adjacent cues in a keyword preview needs its own chronological read. */
+/** Keyword hits are candidates. Verify only the contiguous passages chosen for quotation. */
 export function unverifiedCaptionPassages(packets: EvidencePacket[]): CaptionPassage[] {
   const verified = new Set<string>();
+  const chronological: Array<{ ids: string[]; anchors: unknown }> = [];
   const completeVersions = new Set<string>();
   const previews: EvidencePacket[] = [];
   for (const packet of packets) {
-    if (packet.kind !== 'youtube_transcript' || !packet.excerpts.length) continue;
+    if (packet.kind !== 'youtube_transcript') continue;
     const selection = packet.artifacts.find(a => a.type === SAVED_EVIDENCE_ARTIFACT)?.data;
     const wholeSource = selection && typeof selection.totalExcerpts === 'number' && packet.excerpts.length === selection.totalExcerpts;
     if (wholeSource || selection?.captionSelection === 'chronological') {
-      for (const cue of packet.excerpts) verified.add(cue.id);
+      const ids = packet.excerpts.map(cue => cue.id);
+      for (const id of ids) verified.add(id);
+      chronological.push({ ids, anchors: selection?.quoteCueIds });
     } else if (selection?.captionSelection === 'keyword') {
       previews.push(packet);
-    } else if (packet.artifacts.some(a => a.type === 'youtube_complete_transcript' && a.data.allReturnedSegmentsIncluded === true)
+    } else if (packet.excerpts.length && packet.artifacts.some(a => a.type === 'youtube_complete_transcript' && a.data.allReturnedSegmentsIncluded === true)
       && !transcriptAwaitsAnalysis(packet)) {
       for (const version of packet.assetVersions ?? []) completeVersions.add(version);
     }
+  }
+  const candidates = new Set(previews.flatMap(packet => packet.excerpts.map(cue => cue.id)));
+  const selected = new Set<string>();
+  for (const { ids, anchors } of chronological) {
+    const matching = Array.isArray(anchors) ? anchors.filter((id): id is string => candidates.has(id)) : [];
+    // Older packets and reads without a recognized anchor select only the spans they actually touch.
+    for (const id of matching.length ? matching : ids) selected.add(id);
   }
   const pending: CaptionPassage[] = [];
   for (const packet of previews) {
     const version = packet.assetVersions?.[0];
     if (!version || completeVersions.has(version)) continue;
-    let previousPosition = -1;
-    let passage: CaptionPassage | undefined;
+    // Cue positions are immutable within a version. A keyword page can skip hundreds of positions.
+    const spans: EvidencePacket['excerpts'][] = [];
+    let previousPosition = -2;
     for (const cue of packet.excerpts) {
-      if (verified.has(cue.id)) { passage = undefined; continue; }
-      // Indexed captions carry their immutable position within this asset version.
       const position = Number(cue.id.split(':').at(-1));
-      if (!passage || position !== previousPosition + 1) {
-        passage = { packetId: packet.packetId, assetVersion: version, startMs: cue.startMs };
-        pending.push(passage);
-      }
-      passage.endMs = cue.endMs ?? cue.startMs;
+      if (!spans.length || position !== previousPosition + 1) spans.push([]);
+      spans.at(-1)!.push(cue);
       previousPosition = position;
+    }
+    for (const span of spans) {
+      if (!span.some(cue => selected.has(cue.id))) continue;
+      const unread = span.filter(cue => !verified.has(cue.id));
+      if (unread.length) pending.push({ packetId: packet.packetId, assetVersion: version,
+        startMs: unread[0]!.startMs, endMs: unread.at(-1)!.endMs ?? unread.at(-1)!.startMs });
     }
   }
   return pending;
@@ -99,7 +111,8 @@ export function unverifiedCaptionPassages(packets: EvidencePacket[]): CaptionPas
 /** Caption text that reaches the models: a saved-original read, or a complete transcript not withheld for analysis. */
 function captionTextRead(packet: EvidencePacket): boolean {
   return packet.kind === 'youtube_transcript' && packet.excerpts.length > 0
-    && (packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT)
+    && (packet.artifacts.some(artifact => artifact.type === SAVED_EVIDENCE_ARTIFACT
+        && (artifact.data.captionSelection !== 'keyword' || artifact.data.totalExcerpts === packet.excerpts.length))
       || (packet.artifacts.some(artifact => artifact.type === 'youtube_complete_transcript') && !transcriptAwaitsAnalysis(packet)));
 }
 
@@ -123,6 +136,6 @@ export function requestedEvidenceGuidance(kinds: readonly RequestedEvidenceKind[
     ? 'exact quotations from original captions (read them with search_originals, or the complete transcript; analyst summaries do not count)'
     : 'viewer comments (get_video_comments, or saved comments through search_originals)');
   const passages = kinds.includes('original_quotes')
-    ? ' For each requested quotation independently, locate its beginning and read a contiguous time range through the end of the thought (assetVersion, startMs, endMs, no query). Cover the cues of each separate keyword preview span from its first returned timestamp through its last. Even the last page can stop mid-sentence. Expand the range if it does. For a sequence of instructions read through the final requested step.' : '';
+    ? ' For each requested quotation independently, locate its beginning and read a contiguous time range through the end of the thought (assetVersion, startMs, endMs, no query). On the chronological read, pass quoteCueIds with one matching cue per requested passage in that asset. Read each chosen span from its first returned timestamp through its last. Ignore unrelated search hits. Even the last page can stop mid-sentence. Expand the range if it does. For a sequence of instructions read through the final requested step.' : '';
   return `The user explicitly requested ${parts.join(' and ')}. Research cannot complete until each requested item is read for every subject, or can no longer be obtained.${passages} Do not answer around a missing item; an unavailable item is reported as a gap.`;
 }

@@ -15,7 +15,7 @@ export function savedOriginalIndexFormat(kind: SavedOriginalKind): number {
 }
 /** Matches may span this many consecutive captions; a sentence is often split across cues. */
 const CAPTION_WINDOW = 3;
-/** Captions shown either side of a caption match, so a quote is read in context. */
+/** Show two cues before the matched words and four after them to include sentence endings. */
 const CAPTION_LEAD = 2;
 const CAPTION_TAIL = 4;
 const COMMENT_CHUNK = 1_500;

@@ -1957,32 +1957,35 @@ test('both chess quote previews include the continuation after their matched wor
       expect(result.packets[0]!.excerpts.map(cue => cue.text)).toContain(ending);
       packets.push(...result.packets);
     }
-    expect(unverifiedCaptionPassages(packets)).toHaveLength(2);
+    expect(unverifiedCaptionPassages(packets)).toEqual([]);
+    const quoteCueIds = packets.map(packet => packet.excerpts[2]!.id);
     for (const preview of [...packets]) {
       const startMs = preview.excerpts[0]!.startMs, endMs = preview.excerpts.at(-1)!.endMs;
-      const read = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], startMs, endMs });
+      const read = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], startMs, endMs, quoteCueIds });
       packets.push(...read.packets);
       expect(unverifiedCaptionPassages(packets).map(passage => passage.packetId)).not.toContain(preview.packetId);
     }
     expect(unverifiedCaptionPassages(packets)).toEqual([]);
   }));
 
-test('a lead-in read leaves both watercolor gradient passages pending until their cues are read', async () =>
-  within('watercolor-gradient-passages', async store => {
+test.each([true, false])('watercolor gradient verification follows the selected passages (both=%s)', async both =>
+  within(`watercolor-gradient-passages-${both}`, async store => {
     const saved = await store.retrieve('captions', 'transcript', kelogId, false,
       async () => ({ value: watercolorTranscript(kelogId), cacheStatus: 'hit' }), () => ({}));
     const assetVersion = saved.assetVersions![0]!;
     const { packets } = await readSavedEvidence(store, { assetVersion, query: 'gradient' });
     const pendingStarts = () => unverifiedCaptionPassages(packets).map(passage => passage.startMs);
     expect(packets).toHaveLength(1);
-    expect(pendingStarts()).toEqual([200_000, 646_000]);
-    for (const [startMs, endMs, expected] of [
-      [200_000, 202_000, [204_000, 646_000]],
-      [204_000, 220_000, [646_000]],
-      [646_000, 670_000, []],
-    ] as const) {
-      packets.push(...(await readSavedEvidence(store, { assetVersion, startMs, endMs })).packets);
-      expect(pendingStarts()).toEqual(expected);
+    expect(pendingStarts()).toEqual([]);
+    const cueAt = (ms: number) => packets[0]!.excerpts.find(cue => cue.startMs === ms)!.id;
+    const quoteCueIds = both ? [cueAt(204_000), cueAt(652_000)] : [cueAt(652_000)];
+    packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 646_000, endMs: 650_000, quoteCueIds })).packets);
+    expect(pendingStarts()).toEqual(both ? [200_000, 652_000] : [652_000]);
+    packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 652_000, endMs: 670_000 })).packets);
+    expect(pendingStarts()).toEqual(both ? [200_000] : []);
+    if (both) {
+      packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 200_000, endMs: 220_000 })).packets);
+      expect(pendingStarts()).toEqual([]);
     }
   }));
 
@@ -2276,7 +2279,7 @@ async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider
   await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence,
     message: 'Explain the opening with exact quotes, and what do commenters say?' });
   expect(ctx.finalize).toHaveBeenCalledOnce();
-  return { offered, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
+  return { offered, gaps: supplied!.missingInputs, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
 }
 const withComments = (store: SessionEvidenceStore, comments: ReturnType<typeof vi.fn> = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Viewer note ${index + 1}`) }))) => {
   const p = { ...provider(), comments } as unknown as YouTubeAgentProvider;
@@ -2304,6 +2307,23 @@ test('requested quotations keep research open until original captions are read',
     expect(offered[0]).not.toContain('complete_research');
     expect(offered[1]).toContain('complete_research');
     expect(missing).toEqual([]);
+  }));
+
+test('exploratory caption hits do not block or become finalizer gaps after the requested passage is verified', async () =>
+  within('requested-sunset-gradient', async store => {
+    const saved = await store.retrieve('captions', 'transcript', kelogId, false,
+      async () => ({ value: watercolorTranscript(kelogId), cacheStatus: 'hit' }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const { offered, gaps } = await runRequested(store, savedOnlyProvider(), {
+      route: 'topic_research', savedOnly: true, useStoryboard: false, requestedEvidence: ['original_quotes'],
+    }, [
+      { tool: 'search_originals', input: { assetVersion, query: 'gradient' } },
+      { tool: 'search_originals', input: { assetVersion, startMs: 646_000, endMs: 650_000 } },
+      { tool: 'search_originals', input: { assetVersion, startMs: 652_000, endMs: 670_000 } },
+      { tool: 'complete_research' },
+    ]);
+    expect(offered.map(tools => tools.includes('complete_research'))).toEqual([false, false, false, true]);
+    expect(gaps).not.toContainEqual(expect.objectContaining({ reason: 'caption_keyword_preview_only' }));
   }));
 
 test('requested evidence that cannot be obtained does not block research and reaches the finalizer as a gap', async () =>

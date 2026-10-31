@@ -7,6 +7,7 @@ export const savedEvidenceCoverageSchema = z.object({
   totalExcerpts: z.number().int().nonnegative(), selectedExcerpts: z.number().int().nonnegative(),
   offset: z.number().int().nonnegative(), returnedExcerpts: z.number().int().nonnegative(),
   nextOffset: z.number().int().nonnegative().optional(),
+  quoteCueIds: z.array(z.string()).optional(),
   captionSelection: z.enum(['keyword', 'chronological']).optional(),
   sourcePartial: z.boolean().optional(),
   sourceContinuationAvailable: z.boolean().optional(),

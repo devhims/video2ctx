@@ -503,18 +503,22 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     if (state && state.attempts >= SAVED_EVIDENCE_READ_LIMIT) return false;
     return pendingQuotePassages().some(passage => !state?.outcomes.some(outcome => outcome.assetVersion === passage.assetVersion));
   };
-  const outstandingRequested = () => requestedKinds.length ? outstandingRequestedEvidence({
-    decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
-    terminalVersions: new Set(options.context.session?.savedEvidenceReadState?.(options.context.runId).outcomes.map(outcome => outcome.assetVersion) ?? []),
-    canUse: (tool, videoId) => {
-      if (tool === 'search_originals') return originalsReadable;
-      // A failure for one video releases only that video; one not tied to a video releases every subject.
-      const failed = [...toolFailures.values()].some(failure => failure.toolName === tool
-        && (failure.videoId === undefined || videoId === undefined || failure.videoId === videoId));
-      const provider = tool === 'get_video_comments' ? options.context.provider.comments : options.context.provider.transcript;
-      return (toolNames as readonly string[]).includes(tool) && !failed && !!provider;
-    },
-  }) : [];
+  const outstandingRequested = () => {
+    if (!requestedKinds.length) return [];
+    const state = options.context.session?.savedEvidenceReadState?.(options.context.runId);
+    return outstandingRequestedEvidence({
+      decision: options.decision, brief: options.context.session?.brief(), packets: evidence.values(),
+      terminalVersions: new Set(state?.outcomes.map(outcome => outcome.assetVersion) ?? []),
+      canUse: (tool, videoId) => {
+        if (tool === 'search_originals') return originalsReadable && (!state || state.attempts < SAVED_EVIDENCE_READ_LIMIT);
+        // A failure for one video releases only that video; one not tied to a video releases every subject.
+        const failed = [...toolFailures.values()].some(failure => failure.toolName === tool
+          && (failure.videoId === undefined || videoId === undefined || failure.videoId === videoId));
+        const provider = tool === 'get_video_comments' ? options.context.provider.comments : options.context.provider.transcript;
+        return (toolNames as readonly string[]).includes(tool) && !failed && !!provider;
+      },
+    });
+  };
   // Gaps the answer stage must disclose: required sources not read (skill runs), and on every route,
   // saved originals that could not be read, were withheld, or were left out of a search's results.
   const savedOriginalHandoffGaps = () => {
