@@ -20,6 +20,28 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
+  it.each([
+    ['https://www.youtube.com/playlist?list=PLexample', 'PLexample'],
+    ['https://www.youtube.com/watch?v=abcdefghijk&list=PLexample', 'PLexample'],
+    ['the Essence of Calculus playlist', undefined],
+  ])('uses the supplied playlist ID only for a listing request: %s', async (subject, playlistId) => {
+    const model = classifierModel({ route: 'topic_research', playlistListing: true, searchQuery: 'Essence of Calculus',
+      researchBreadth: 'focused', visualEvidence: 'none' });
+    const decision = await classifyCapabilityWithModel({ message: `Fetch the listing for ${subject}`, model,
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'topic_research', playlistListing: true });
+    expect(decision.route === 'topic_research' ? decision.playlistId : null).toBe(playlistId);
+  });
+
+  it('accepts an empty requested evidence array on the first playlist classification', async () => {
+    const model = classifierModel({ route: 'topic_research', playlistListing: true, requestedEvidence: [],
+      searchQuery: 'calculus', researchBreadth: 'focused', visualEvidence: 'none' });
+    const decision = await classifyCapabilityWithModel({ message: 'List the calculus playlist.', model, signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'topic_research', playlistListing: true });
+    expect(decision).not.toHaveProperty('requestedEvidence');
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   it('keeps retrieval available when the classifier selects verification without a saved-only restriction', async () => {
     const model = classifierModel({ route: 'inspect_video', videoId: 'abcdefghijk',
       skill: 'verify_saved_evidence', requestedEvidence: ['original_quotes', 'comments'], visualEvidence: 'none' });
@@ -655,6 +677,11 @@ describe('YouTube agent capability router', () => {
       'The first link also appears as https://youtube.com/shorts/abcdefghijk.',
     ].join(' '))).toEqual(['abcdefghijk', 'lmnopqrstuv']);
 
+    expect(extractYouTubeVideoIds('https://music.youtube.com/watch?v=abcdefghijk&t=10')).toEqual(['abcdefghijk']);
+    expect(extractYouTubeVideoIds('https://music.youtube.com/shorts/abcdefghijk')).toEqual(['abcdefghijk']);
+    expect(extractYouTubeVideoIds('https://notyoutube.com/watch?v=abcdefghijk')).toEqual([]);
+    expect(extractYouTubeVideoIds('https://example.com/redirect?url=https://youtube.com/watch?v=abcdefghijk')).toEqual([]);
+    expect(extractYouTubeVideoIds('v=abcdefghijk')).toEqual(['abcdefghijk']);
     expect(extractYouTubeVideoIds('video ID: ABCDEFG1234')).toEqual(['ABCDEFG1234']);
   });
 

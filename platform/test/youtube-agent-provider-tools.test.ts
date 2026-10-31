@@ -1,3 +1,4 @@
+import { ApiError } from '../src/lib/http';
 import type { VideoSummary } from 'all-things-youtube';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
@@ -94,6 +95,21 @@ describe('YouTube agent provider-operation tools', () => {
     await executeGetVideoComments({ videoId: 'abcdefghijk', all: true } as never, toolContext(provider), 'comments-all');
     expect(provider.comments).toHaveBeenCalledWith('abcdefghijk', { continuation: undefined });
   });
+  it.each(['recovers', 'still unavailable', 'not found'])('bounds retries for a direct playlist that %s', async outcome => {
+    const provider = providerFixture();
+    const error = outcome === 'not found' ? new ApiError(404, 'NOT_FOUND', 'Missing') : new ApiError(503, 'UNAVAILABLE', 'Busy');
+    const playlist = vi.mocked(provider.playlist);
+    playlist.mockRejectedValueOnce(error);
+    if (outcome === 'still unavailable') playlist.mockRejectedValueOnce(error);
+    const context = toolContext(provider);
+    const read = discoverInitialEvidence({ route: 'topic_research', playlistListing: true, playlistId: 'playlist-1' }, context, false);
+    if (outcome === 'recovers') await read;
+    else await expect(read).rejects.toBe(error);
+    expect(playlist).toHaveBeenCalledTimes(outcome === 'not found' ? 1 : 2);
+    if (outcome !== 'not found') expect(playlist).toHaveBeenNthCalledWith(2, 'playlist-1');
+    expect(provider.search).not.toHaveBeenCalled();
+  });
+
   it('maps each added tool wrapper to exactly one provider operation', async () => {
     const provider = providerFixture();
     const context = toolContext(provider);

@@ -5,7 +5,8 @@ import { platformRequest } from '../../../lib/platform-request';
 import { projectItemPath } from '../dashboard-routes';
 
 import { SessionAssets } from './SessionAssets';
-import { useCallback, useEffect, useOptimistic, useRef, useState, useSyncExternalStore, useTransition, type FormEvent, type ReactNode } from 'react';
+import { useHydrating } from '../../../lib/use-hydrating';
+import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeftIcon, ArrowUpRightIcon, ArrowClockwiseIcon, PlusIcon, MagnifyingGlassIcon, ChatCircleTextIcon, CheckIcon, CircleNotchIcon, CaretRightIcon, WarningCircleIcon, UserIcon, StarFourIcon } from '@phosphor-icons/react';
 import { AgentPromptBar } from './AgentPromptBar';
@@ -467,9 +468,6 @@ function CopyAnswer({ answer }: { answer: string }) {
 }
 
 function errorMessage(cause: unknown) { return cause instanceof Error ? cause.message : 'Could not load sessions. Please try again.'; }
-const subscribeNever = () => () => {};
-/** True while rendering on the server or hydrating its HTML; false for any later client render. */
-function useHydrating() { return useSyncExternalStore(subscribeNever, () => false, () => true); }
 // Server HTML has no viewer timezone, so times fill in once the browser takes over.
 function LocalTime({ timestamp }: { timestamp: number }) {
   const hydrating = useHydrating();

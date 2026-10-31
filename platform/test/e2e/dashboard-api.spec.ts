@@ -1417,6 +1417,14 @@ test('fresh video data does not offer a saved-data refresh button', async ({ pag
   await expect(page.getByRole('button', { name: 'Refresh data', exact: true })).toHaveCount(0);
 });
 
+test('a Sources query link focuses the populated input after hydration', async ({ page }) => {
+  await page.goto('/dashboard/sources?q=watercolor');
+  const query = page.getByRole('textbox', { name: 'Video search or YouTube URL' });
+  await expect(query).toHaveValue('watercolor');
+  await expect(query).toBeFocused();
+  await expect(page).toHaveURL(/\/dashboard\/sources$/);
+});
+
 test('a known video opens without waiting for the remote URL resolver', async ({ page }) => {
   let resolveReads = 0;
   let release!: () => void;
@@ -1427,8 +1435,16 @@ test('a known video opens without waiting for the remote URL resolver', async ({
     await route.fulfill({ json: { kind: 'video', provider: 'youtube', id: videoId } });
   });
   await page.route(`**/videos/${videoId}/transcript?**`, route => route.fulfill({ json: transcript }));
-  await page.goto('/dashboard/sources');
-  await page.getByRole('textbox', { name: 'Video search or YouTube URL' }).fill(`https://youtu.be/${videoId}`);
+  // Keep the server-rendered form visible before React can attach its input handler.
+  let hydrate!: () => void;
+  const scripts = new Promise<void>(resolve => { hydrate = resolve; });
+  await page.route('**/_next/static/**/*.js', async route => { await scripts; await route.continue(); });
+  const input = page.getByRole('textbox', { name: 'Video search or YouTube URL' });
+  try {
+    await page.goto('/dashboard/sources', { waitUntil: 'commit' });
+    await expect(input).toBeDisabled();
+  } finally { hydrate(); }
+  await input.fill(`https://youtu.be/${videoId}`);
   try {
     await page.getByRole('button', { name: /Inspect/ }).click();
     await expect(page.getByText('Transcript arrived successfully.', { exact: true })).toBeVisible({ timeout: 1500 });

@@ -1,5 +1,6 @@
 'use client';
 
+import { useHydrating } from '../../lib/use-hydrating';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowClockwiseIcon } from '@phosphor-icons/react';
@@ -64,6 +65,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   const cache = useDashboardCache();
   const router = useRouter();
   const { user } = useDashboardSession();
+  const hydrating = useHydrating();
   const [query, setQuery] = useDashboardDraft('source-query', '');
   const [selectedData, setSelectedData] = useDashboardDraft<SourceDataOption[]>('source-options', ['transcript']);
   const [items, setItems] = useDashboardDraft<SearchItem[]>('source-results', []);
@@ -507,7 +509,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
   };
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || hydrating) return;
     const q=params.get('q'), id=params.get('id'), type=params.get('type'), saved=params.get('saved');
     if (saved) {
       const openProject = params.get('openProject');
@@ -528,7 +530,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
     if (q) { setQuery(q); searchInput.current?.focus(); }
     if (id && (type==='video'||type==='channel'||type==='playlist')) void inspect(type,id);
     if (q||id||saved) { const next=new URLSearchParams(params); next.delete('q');next.delete('id');next.delete('type');next.delete('saved');router.replace(`/dashboard/sources${next.size?`?${next}`:''}`,{scroll:false}); }
-  }, [active, params, router]);
+  }, [active, hydrating, params, router]);
   const createProject = async (name:string) => {
     const project = await api<Project>('/v1/projects',{method:'POST',body:JSON.stringify({name})});
     await projectsResource.refresh(); return project;
@@ -635,7 +637,7 @@ export default function SourcesClient({ active }: {active:boolean}) {
               {!projectView && <form onSubmit={runSearch} className='source-studio-form'>
                 <label className='source-query-label' htmlFor='workspace-search'>{playlistInput ? 'Playlist URL detected' : 'Video search or YouTube URL'}</label>
                 <div className='source-query-row'>
-                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} value={query} onChange={(event) => { setQuery(event.target.value); if (hasPendingLink(params)) clearPendingLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
+                  <div data-playlist={playlistInput}><Icon name='search' size={19} /><input id='workspace-search' ref={searchInput} disabled={hydrating} value={query} onChange={(event) => { setQuery(event.target.value); if (hasPendingLink(params)) clearPendingLink(); }} placeholder='e.g. Opus 5.5 vs GPT 6 Astra, or a YouTube URL' autoComplete='off' /><kbd>{playlistInput ? 'PLAYLIST' : '⌘ K'}</kbd></div>
                   <button disabled={loading || !query.trim()}>{loading ? 'Working…' : 'Inspect'} <span aria-hidden='true'>→</span></button>
                 </div>
                 <fieldset className='source-data-picker'>

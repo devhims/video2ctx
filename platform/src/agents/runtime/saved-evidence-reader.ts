@@ -15,6 +15,8 @@ const ALL_SOURCES_CHARACTERS = 8_000;
 export const readSavedEvidenceInputSchema = z.object({
   assetVersion: z.string().min(1).max(200).optional().describe('Exact version from the session asset inventory. Older saved versions may be read explicitly. Omit, with a query, to search every saved caption and comment page in the session.'),
   query: z.string().trim().min(1).max(200).optional().describe('Every word must occur in the same comment or within three consecutive captions. Words match by stem, so mixing finds mix, but there are no semantic synonyms. Start with one distinctive word from the requested wording; do not combine unrelated clues. Omit to page through one asset.'),
+  quoteCueIds: z.array(z.string().min(1).max(300)).min(1).max(16).optional()
+    .describe('When verifying quotes by time range, select one returned caption ID per requested passage from this asset. Include separate requested passages. Omit exploratory matches.'),
   startMs: z.number().int().nonnegative().optional(),
   endMs: z.number().int().nonnegative().optional(),
   offset: z.number().int().nonnegative().max(1_000_000).default(0)
@@ -22,6 +24,9 @@ export const readSavedEvidenceInputSchema = z.object({
   limit: z.number().int().min(1).max(30).default(30),
 }).refine(input => input.startMs === undefined || input.endMs === undefined || input.endMs >= input.startMs,
   { message: 'endMs must be at least startMs.', path: ['endMs'] })
+  .refine(input => !input.quoteCueIds || (!!input.assetVersion && !input.query
+    && input.quoteCueIds.every(id => id.match(/^(.+):caption:\d+$/)?.[1] === `saved:${input.assetVersion}`)),
+    { message: 'Select caption IDs from the same asset in a chronological read.', path: ['quoteCueIds'] })
   .refine(input => input.assetVersion !== undefined || input.query !== undefined,
     { message: 'Provide assetVersion to read one saved original, or a query to search all of them.', path: ['query'] })
   .refine(input => input.assetVersion !== undefined || (input.startMs === undefined && input.endMs === undefined && input.offset === 0),
@@ -45,6 +50,7 @@ export async function readSavedEvidence(store: SessionEvidenceStore, input: z.in
   if (!asset) throw new SavedOriginalUnavailableError('Saved asset is unavailable or deleted. No fresh retrieval was attempted.');
   if (asset.kind !== 'transcript' && asset.kind !== 'comments')
     throw new Error('Only original saved captions and comments can be read with this tool.');
+  if (asset.kind === 'comments' && request.quoteCueIds) throw new Error('Only transcripts support caption selections.');
   if (asset.kind === 'comments' && (request.startMs !== undefined || request.endMs !== undefined))
     throw new Error('Timestamp filters apply to captions, not comments.');
   const tooLong = store.transcriptOverLimit(asset.version);
@@ -119,11 +125,13 @@ export async function searchSavedEvidence(store: SessionEvidenceStore, input: z.
 }
 
 async function originalPacket(asset: OriginalAsset, index: ReadyIndex, page: EvidencePacket['excerpts'], matching: number,
-  offset: number, key: unknown): Promise<EvidencePacket> {
+  offset: number, key: { query?: string; quoteCueIds?: string[]; [field: string]: unknown }): Promise<EvidencePacket> {
   const sourceId = `youtube:${asset.videoId}:${asset.kind}`;
   const nextOffset = offset + page.length < matching ? offset + page.length : undefined;
   const coverage = { assetVersion: asset.version, kind: asset.kind, totalExcerpts: index.total,
     selectedExcerpts: matching, offset, returnedExcerpts: page.length,
+    ...(asset.kind === 'transcript' ? { captionSelection: key.query ? 'keyword' : 'chronological' } : {}),
+    ...(key.quoteCueIds ? { quoteCueIds: key.quoteCueIds } : {}),
     ...(index.meta.partial !== undefined ? { sourcePartial: index.meta.partial } : {}),
     ...(asset.kind === 'comments' ? { sourceContinuationAvailable: Boolean(index.meta.continuation) } : {}),
     ...(nextOffset !== undefined ? { nextOffset } : {}) };
@@ -151,7 +159,7 @@ function savedCoverage(packet: EvidencePacket) {
 export function createReadSavedEvidenceTool(store: SessionEvidenceStore,
   admit: (packets: EvidencePacket[], source?: 'search_context' | 'read_saved_evidence') => EvidencePacket[] | void, signal: AbortSignal, runId: string = crypto.randomUUID()) {
   return tool({
-    description: 'Search or read original SAVED captions and comments: the exact words, with immutable citations and caption times. Use for quotations, precise passage times, corrections, and comments omitted from summaries. Omit assetVersion to search every saved caption and comment page; results give each source\'s assetVersion and nextOffset. Pass assetVersion to page one source, read a caption time range, or search inside it. Never calls YouTube or an analyst. A filtered page does not establish absence from the whole asset.',
+    description: 'Search or read original SAVED captions and comments: the exact words, with immutable citations and caption times. Use for quotations, precise passage times, corrections, and comments omitted from summaries. Omit assetVersion to search every saved caption and comment page; results give each source\'s assetVersion and nextOffset. Pass assetVersion to page one source, read a caption time range, or search inside it. Never calls YouTube or an analyst. For each passage to quote, read the matching time range by assetVersion without a query. A keyword page locates text and can end mid-sentence even on the last page.',
     inputSchema: readSavedEvidenceInputSchema,
     execute: async input => {
       signal.throwIfAborted();

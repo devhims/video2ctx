@@ -40,6 +40,7 @@ const classifierDecisionSchema = z.object({
   researchBreadth: capabilityRouteDecisionSchema.options[0].shape.researchBreadth
     .describe('Required for discovery: choose focused for a narrow question or comparative for a broad survey. Omit for a fixed set of videos.'),
   searchQuery: capabilityRouteDecisionSchema.options[0].shape.searchQuery.describe('A concise search that preserves the user\'s factual details and constraints: names, versions, dates, quantities, units, limits, exclusions and comparison subjects. Improve wording without changing the requested subject or inventing facts.'),
+  playlistListing: z.boolean().optional().describe('True for a YouTube playlist listing or a calculation using its entries. Use topic_research. Omit for video-content research and saved-only reads.'),
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
@@ -125,6 +126,7 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   // Keep the provider schema strict. Normalize a copy only at the acceptance
   // boundary, retaining which fields needed a fallback before the SDK parses them.
   const input = { ...value } as Record<string, unknown>;
+  if (Array.isArray(input.requestedEvidence) && !input.requestedEvidence.length) delete input.requestedEvidence;
   if (!answerDetailSchema.safeParse(input.answerDetail).success) {
     input.answerDetail = 'standard';
     defaultedFields.push('answerDetail');
@@ -155,6 +157,10 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
       && input[requirement.required] === undefined) {
       issue(requirement.required, `${requirement.required} is required when ${Object.entries(requirement.when).map(([key, expected]) => `${key} is ${expected}`).join(' and ')}.`);
     }
+  }
+  if (input.playlistListing === true && (input.route !== 'topic_research' || input.skill !== undefined
+    || input.comparisonVideoIds !== undefined || input.requestedEvidence !== undefined || input.visualEvidence !== 'none')) {
+    issue('playlistListing', 'Use playlistListing only for fresh playlist metadata research. For video content or saved verification omit it and keep the required evidence tools.');
   }
   if (input.savedOnly === true && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('savedOnly', 'Saved-only requests cannot refresh source evidence.');
   if (input.route === 'finalize' && Array.isArray(input.requestedEvidence) && input.requestedEvidence.length) issue('route', 'Requested evidence must be read by research or inspection before answering.');
@@ -258,6 +264,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     instructions: [
       'Requests for current view counts, likes, or comments require an executable route with refreshDynamicData true, even when past values are in history. Use saved data for historical questions. This does not require refreshing transcripts or images.',
       'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
+      'Playlist discovery and listing are supported. For a fresh YouTube playlist listing by URL or name choose topic_research, playlistListing true, focused breadth, a playlist search query and visualEvidence none. Listing titles, links, durations, totals and arithmetic from those durations are supported, including when the user gives their answer a study-note name. Earlier assistant refusals are not capability limits. For a saved-only listing reuse retained evidence instead.',
       'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A saved transcript can support new questions through research or inspection, which must prepare its content before finalization. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. A request to refresh transcripts, images or all source evidence requires an executable route with refreshEvidence true. Requests limited to current statistics or comments use refreshDynamicData true instead.',
       'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without further retrieval or analysis. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. An inventory reference alone does not mean its content is ready for the answer. Finalization cannot search or read saved assets. Choose research or inspection if answering requires reading a stored transcript, analyzing an asset, or loading additional evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
       'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The runtime supplies a bounded chronological history page before finalization, alongside the recent conversation window. Finalization cannot search history, paginate, read assets, or retrieve provider evidence. It must state any history coverage limit. Choose inspect_video or topic_research when source evidence needs reading or analysis; use context_answer only for prepared context. Do not list the messages yourself.',
@@ -388,7 +395,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
 
   const decision = await coordinateClassification(call, input.signal, deadlineAt, callId,
     { fallbackModel: Boolean(input.fallbackModel), managedTimeouts: hasModelTimeouts(input.model), lastResort });
-  return finishClassification(decision, videoIds, channelIds, explicitVideoIds);
+  return finishClassification(decision, videoIds, channelIds, explicitVideoIds, input.message);
 }
 
 type ClassificationIssue = { path: string; code: string; message: string };
@@ -553,7 +560,7 @@ async function coordinateClassification(
 type LastResortMethod = 'route_recovery' | 'assembled' | 'defaults';
 const LAST_RESORT_REASON = 'The routing decision could not be determined from the model output.';
 const ROUTE_FIELDS = {
-  topic_research: ['researchBreadth', 'searchQuery', 'channelId', 'comparisonVideoIds', 'explicitSourceCount'],
+  topic_research: ['researchBreadth', 'searchQuery', 'playlistListing', 'channelId', 'comparisonVideoIds', 'explicitSourceCount'],
   inspect_video: ['videoId', 'comparisonVideoIds'],
   finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
 } as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
@@ -764,10 +771,10 @@ function expectedComparisonSubjects(input: CapabilityClassifierInput): string[] 
 }
 
 function finishClassification(
-  decision: z.infer<typeof classifierDecisionSchema>, videoIds: string[], channelIds: string[], explicitVideoIds: string[],
+  decision: z.infer<typeof classifierDecisionSchema>, videoIds: string[], channelIds: string[], explicitVideoIds: string[], message: string,
 ): CapabilityRouteDecision {
   const { explicitSourceCount, ...classified } = withVisualAccess(decision);
-  const pinned = explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
+  const pinned = !(decision.route === 'topic_research' && decision.playlistListing) && explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
     && (decision.route !== 'finalize' || (decision.responseIntent === 'context_answer' && decision.contextScope !== 'history'));
   const route = pinned ? { ...classified, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
     visualEvidence: classified.visualEvidence ?? 'helpful', useStoryboard: classified.visualEvidence !== 'none' } : classified;
@@ -777,6 +784,11 @@ function finishClassification(
     ...(route.route === 'topic_research' && explicitSourceCount !== undefined ? { requiredVideoCount: explicitSourceCount } : {}),
   }), videoIds);
   if (resolved.route === 'topic_research') {
+    if (resolved.playlistListing && !resolved.savedOnly) {
+      const ids = [...new Set([...youTubeUrls(message)].filter(url => url.pathname === '/playlist' || url.pathname === '/watch')
+        .map(url => url.searchParams.get('list')).filter((id): id is string => !!id && /^[A-Za-z0-9_-]{2,200}$/.test(id)))];
+      if (ids.length === 1) return { ...resolved, playlistId: ids[0] };
+    }
     if (resolved.channelId && !channelIds.includes(resolved.channelId)) {
       return { route: 'finalize', responseIntent: 'clarification', reason: 'The selected channel was not supplied. Ask for its YouTube URL or handle.' };
     }
@@ -849,24 +861,20 @@ function comparisonScopeIssues(
 
 export function extractYouTubeChannelIds(message: string): string[] {
   const ids = new Set<string>();
-  const candidates = message.match(/(?<![\w./-])(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/[^\s<>"']+/gi) ?? [];
-  for (const candidate of candidates) {
-    try {
-      const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
-      if (!['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname.toLowerCase())) continue;
-      const [kind, id] = url.pathname.replace(/[),.!?;]+$/, '').split('/').filter(Boolean);
-      const value = kind?.startsWith('@') ? kind : kind === 'channel' ? id : undefined;
-      if (value && capabilityRouteDecisionSchema.options[0].shape.channelId.safeParse(value).success) ids.add(value);
-    } catch { /* Ignore malformed links. */ }
+  for (const url of youTubeUrls(message)) {
+    if (url.hostname.endsWith('youtu.be')) continue;
+    const [kind, id] = url.pathname.split('/').filter(Boolean);
+    const value = kind?.startsWith('@') ? kind : kind === 'channel' ? id : undefined;
+    if (value && capabilityRouteDecisionSchema.options[0].shape.channelId.safeParse(value).success) ids.add(value);
   }
   for (const match of message.matchAll(/(?:^|\s)(@[A-Za-z0-9_.-]+)(?=$|\s|[,;!?])/g)) ids.add(match[1]!);
   return [...ids];
 }
 
-export function extractYouTubeVideoIds(message: string): string[] {
-  const ids = new Set<string>();
-  const urlCandidates = message.match(/(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\/[^\s<>"']+/gi) ?? [];
-  for (const candidate of urlCandidates) {
+// Consume the whole URL before checking its host. Embedded links and v= parameters belong to that URL.
+const urlCandidates = /(?:https?:\/\/|(?<![\w./@-])(?:[\w-]+\.)+[a-z]{2,}\/)[^\s<>"']+/gi;
+function* youTubeUrls(message: string): Generator<URL> {
+  for (const candidate of message.match(urlCandidates) ?? []) {
     const normalized = candidate.replace(/[\])},.!?;:'"]+$/g, '');
     let url: URL;
     try {
@@ -874,19 +882,25 @@ export function extractYouTubeVideoIds(message: string): string[] {
     } catch {
       continue;
     }
-    const host = url.hostname.toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
-    if (host === 'youtu.be') {
+    const host = url.hostname.toLowerCase();
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be', 'm.youtu.be'].includes(host)) yield url;
+  }
+}
+
+export function extractYouTubeVideoIds(message: string): string[] {
+  const ids = new Set<string>();
+  for (const url of youTubeUrls(message)) {
+    if (url.hostname.endsWith('youtu.be')) {
       addVideoId(ids, url.pathname.split('/').filter(Boolean)[0]);
       continue;
     }
-    if (host !== 'youtube.com') continue;
     addVideoId(ids, url.searchParams.get('v') ?? undefined);
     const [kind, pathId] = url.pathname.split('/').filter(Boolean);
     if (kind === 'shorts' || kind === 'live' || kind === 'embed') addVideoId(ids, pathId);
   }
 
-  const labelledIdPattern = /(?:video(?:\s+id)?|v)\s*[:=]\s*([A-Za-z0-9_-]{11})(?=$|\s|[),.!?;])/gi;
-  for (const match of message.matchAll(labelledIdPattern)) addVideoId(ids, match[1]);
+  const labelledIdPattern = /(?:^|[\s(])(?:video(?:\s+id)?|v)\s*[:=]\s*([A-Za-z0-9_-]{11})(?=$|\s|[),.!?;])/gi;
+  for (const match of message.replace(urlCandidates, ' ').matchAll(labelledIdPattern)) addVideoId(ids, match[1]);
   const trimmed = message.trim();
   if (VIDEO_ID_PATTERN.test(trimmed)) ids.add(trimmed);
   return [...ids];

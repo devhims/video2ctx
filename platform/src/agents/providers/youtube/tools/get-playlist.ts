@@ -1,5 +1,7 @@
 import type { Playlist } from 'all-things-youtube';
 import { tool } from 'ai';
+import { ApiError } from '../../../../lib/http';
+import { youtubeUnavailable } from './transcript-tool-errors';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import { collectionRetrieval } from '../../../runtime/collection-coverage';
@@ -39,7 +41,16 @@ export function executeGetPlaylist(
     toolName: 'get_playlist',
     operation: 'playlist',
     semanticInput: parsed,
-    load: () => context.provider.playlist(parsed.playlistId),
+    load: async () => {
+      try {
+        return await context.provider.playlist(parsed.playlistId);
+      } catch (error) {
+        context.signal.throwIfAborted();
+        if (!(error instanceof ApiError) || !(youtubeUnavailable(error) || ['YOUTUBE_UPSTREAM_ERROR', 'PROCESSOR_BUSY',
+          'PROCESSOR_UNAVAILABLE', 'CACHE_COORDINATOR_UNAVAILABLE'].includes(error.code))) throw error;
+        return context.provider.playlist(parsed.playlistId);
+      }
+    },
     credits: meteredCredits('playlist'),
     packet: (value) => playlistPacket(value, toolCallId),
   });

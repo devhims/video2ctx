@@ -22,6 +22,9 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     researchVideoCount: researchVideoCountSchema.optional(),
     requiredVideoCount: z.number().int().min(1).max(100).optional(),
     researchBreadth: z.enum(['focused', 'comparative']).optional(),
+    // Metadata-only playlist research, selected by the classifier. Only a URL in the request supplies a direct ID.
+    playlistListing: z.boolean().optional(),
+    playlistId: z.string().min(2).max(200).regex(/^[A-Za-z0-9_-]+$/).optional(),
     searchQuery: z.string().trim().min(1).max(500).optional(),
     channelId: z.string().trim().min(1).max(200).regex(/^(?:UC[A-Za-z0-9_-]{22}|@[A-Za-z0-9_.-]+)$/).optional(),
     useStoryboard: z.boolean().optional(),

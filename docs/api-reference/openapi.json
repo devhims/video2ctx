@@ -7425,6 +7425,15 @@
                               "comparative"
                             ]
                           },
+                          "playlistListing": {
+                            "type": "boolean"
+                          },
+                          "playlistId": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9_-]+$"
+                          },
                           "searchQuery": {
                             "type": "string",
                             "minLength": 1,
@@ -9071,6 +9080,15 @@
                           "focused",
                           "comparative"
                         ]
+                      },
+                      "playlistListing": {
+                        "type": "boolean"
+                      },
+                      "playlistId": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_-]+$"
                       },
                       "searchQuery": {
                         "type": "string",

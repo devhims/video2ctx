@@ -1,7 +1,7 @@
 // Local orchestration + real Fireworks models + actual SQLite session/search.
 // The original video's public provider responses are replayed from saved assets.
 // Fresh exact positions use local extraction; storyboards and captions use this public video only.
-import { DatabaseSync } from 'node:sqlite';
+import { localSession } from '../../test/fixtures/local-session';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { executeResearchRun } from '../../src/agents/research/research-agent';
@@ -87,19 +87,6 @@ const provider = {
   channel: unexpected, channelVideos: unexpected, channelPlaylists: unexpected, playlist: unexpected, endscreen: unexpected,
 };
 
-function localSession() {
-  const database = new DatabaseSync(':memory:');
-  const sql = { exec(query: string, ...values: any[]) {
-    const rows = database.prepare(query).all(...values);
-    return { toArray: () => rows, one: () => { if (rows.length !== 1) throw new Error(`Expected one row, got ${rows.length}`); return rows[0]; },
-      [Symbol.iterator]: () => rows[Symbol.iterator]() };
-  } } as unknown as SqlStorage;
-  const objects = new Map<string, string>();
-  const bucket = { put: async (key: string, text: string) => { objects.set(key, text); },
-    get: async (key: string) => objects.has(key) ? { json: async () => JSON.parse(objects.get(key)!) } : null,
-    delete: async (key: string) => { objects.delete(key); } } as unknown as R2Bucket;
-  return new SessionEvidenceStore(sql, bucket, `replay/${crypto.randomUUID()}/`, undefined, undefined, undefined, 7200);
-}
 function save() {
   writeFileSync(`${outputDirectory}/results.json`, JSON.stringify({ scope: 'Local research runtime and SQLite session, live production-configured Fireworks models, saved public YouTube assets for B2QtJKMlYTo. No production session writes.',
     results: resultRows, requests }, null, 2));

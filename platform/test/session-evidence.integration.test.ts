@@ -1,3 +1,4 @@
+import { unverifiedCaptionPassages } from '../src/agents/research/requested-evidence';
 import { pendingOriginalSources, unreadOriginalSources } from '../src/agents/research/skills/verify-saved-evidence';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
@@ -1931,6 +1932,63 @@ test('real saved Bicycle passages retain caption times instead of analyst window
   });
 });
 
+test('first-turn search across bicycle transcripts returns the definition beyond the matching cue', async () =>
+  within('bicycle-preview-ending', async store => {
+    await seedReplay(store, 'bicycle');
+    const { packets } = await searchSavedEvidence(store, { query: 'nine-speed' });
+    const official = packets.find(packet => packet.sources.some(source => source.videoId === officialId));
+    expect(official?.excerpts.map(cue => cue.text).join(' ')).toContain('nine cogs means a nine-speed bike and so on');
+  }));
+
+test('both chess quote previews include the continuation after their matched words', async () =>
+  within('chess-preview-endings', async store => {
+    const value = replayTranscript(id, [[41, "black's king is not in check"], [44, 'and has no legal move.'],
+      [48, "Remember, in chess, you're"], [51, 'never forced to make an illegal move, so'],
+      [53, 'black cannot put the king onto a square'], [56, 'where it would be captured.'],
+      [137, 'The king is trapped.'], [139, 'But does that mean stalemate?'],
+      [141, 'Not in this position because notice'], [143, 'black has another piece. Black could'],
+      [145, 'play the move h3, allowing white to'], [148, 'correct the mistake from the last move'],
+      [150, 'and deliver checkmate with queen to b7.']]);
+    const raw = await store.retrieve('captions', 'transcript', id, false, async () => ({ value, cacheStatus: 'hit' }), () => ({}));
+    const packets: EvidencePacket[] = [];
+    for (const [query, ending] of [['Remember chess never forced illegal', 'where it would be captured.'],
+      ['not in this position', 'and deliver checkmate with queen to b7.']] as const) {
+      const result = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], query });
+      expect(result.packets[0]!.excerpts.map(cue => cue.text)).toContain(ending);
+      packets.push(...result.packets);
+    }
+    expect(unverifiedCaptionPassages(packets)).toEqual([]);
+    const quoteCueIds = packets.map(packet => packet.excerpts[2]!.id);
+    for (const preview of [...packets]) {
+      const startMs = preview.excerpts[0]!.startMs, endMs = preview.excerpts.at(-1)!.endMs;
+      const read = await readSavedEvidence(store, { assetVersion: raw.assetVersions![0], startMs, endMs, quoteCueIds });
+      packets.push(...read.packets);
+      expect(unverifiedCaptionPassages(packets).map(passage => passage.packetId)).not.toContain(preview.packetId);
+    }
+    expect(unverifiedCaptionPassages(packets)).toEqual([]);
+  }));
+
+test.each([true, false])('watercolor gradient verification follows the selected passages (both=%s)', async both =>
+  within(`watercolor-gradient-passages-${both}`, async store => {
+    const saved = await store.retrieve('captions', 'transcript', kelogId, false,
+      async () => ({ value: watercolorTranscript(kelogId), cacheStatus: 'hit' }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const { packets } = await readSavedEvidence(store, { assetVersion, query: 'gradient' });
+    const pendingStarts = () => unverifiedCaptionPassages(packets).map(passage => passage.startMs);
+    expect(packets).toHaveLength(1);
+    expect(pendingStarts()).toEqual([]);
+    const cueAt = (ms: number) => packets[0]!.excerpts.find(cue => cue.startMs === ms)!.id;
+    const quoteCueIds = both ? [cueAt(204_000), cueAt(652_000)] : [cueAt(652_000)];
+    packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 646_000, endMs: 650_000, quoteCueIds })).packets);
+    expect(pendingStarts()).toEqual(both ? [200_000, 652_000] : [652_000]);
+    packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 652_000, endMs: 670_000 })).packets);
+    expect(pendingStarts()).toEqual(both ? [200_000] : []);
+    if (both) {
+      packets.push(...(await readSavedEvidence(store, { assetVersion, startMs: 200_000, endMs: 220_000 })).packets);
+      expect(pendingStarts()).toEqual([]);
+    }
+  }));
+
 // Segment index: originals are searched in SQLite with stemming, never reread from R2.
 test.each([
   ["DON’T", "Don't rush", 1], ['paint', 'painting', 1], ['mix', 'mixing your own greens', 1], ['lube', 'I lubed it yesterday', 1],
@@ -1973,9 +2031,9 @@ test('saved captions are indexed on save and paged without touching storage', as
     await env.RESEARCH.delete(sql.exec<{ blob_key: string }>('SELECT blob_key FROM session_assets WHERE version=?', assetVersion).one().blob_key);
     const restored = reopen();
     const storage = vi.spyOn(restored, 'read');
-    // Words split across consecutive captions still match, with two captions of context either side.
+    // Words split across consecutive captions still match, with context following the last matched word.
     const split = await readSavedEvidence(restored, { assetVersion, query: 'lube hundred' });
-    expect(split.packets[0]!.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 3000, 6000]);
+    expect(split.packets[0]!.excerpts.map(excerpt => excerpt.startMs)).toEqual([0, 3000, 6000, 9000, 12000]);
     expect((await readSavedEvidence(restored, { assetVersion, query: 'lube gears' })).coverage.selectedExcerpts).toBe(0);
     expect((await readSavedEvidence(restored, { assetVersion, query: 'mix' })).packets[0]!.excerpts.at(-1)!.text).toBe('mixing your own greens');
     const timed = await readSavedEvidence(restored, { assetVersion, startMs: 6000, endMs: 9000 });
@@ -2221,7 +2279,7 @@ async function runRequested(store: SessionEvidenceStore, p: YouTubeAgentProvider
   await runResearchAgentWithModel({ model: core, finalizationModel: finalizer, context: ctx, decision, inheritedResolved: true, recoveredEvidence,
     message: 'Explain the opening with exact quotes, and what do commenters say?' });
   expect(ctx.finalize).toHaveBeenCalledOnce();
-  return { offered, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
+  return { offered, gaps: supplied!.missingInputs, missing: supplied!.missingInputs.filter(input => input.reason === 'requested_evidence_missing') };
 }
 const withComments = (store: SessionEvidenceStore, comments: ReturnType<typeof vi.fn> = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: commentPage(2, index => `Viewer note ${index + 1}`) }))) => {
   const p = { ...provider(), comments } as unknown as YouTubeAgentProvider;
@@ -2249,6 +2307,23 @@ test('requested quotations keep research open until original captions are read',
     expect(offered[0]).not.toContain('complete_research');
     expect(offered[1]).toContain('complete_research');
     expect(missing).toEqual([]);
+  }));
+
+test('exploratory caption hits do not block or become finalizer gaps after the requested passage is verified', async () =>
+  within('requested-sunset-gradient', async store => {
+    const saved = await store.retrieve('captions', 'transcript', kelogId, false,
+      async () => ({ value: watercolorTranscript(kelogId), cacheStatus: 'hit' }), () => ({}));
+    const assetVersion = saved.assetVersions![0]!;
+    const { offered, gaps } = await runRequested(store, savedOnlyProvider(), {
+      route: 'topic_research', savedOnly: true, useStoryboard: false, requestedEvidence: ['original_quotes'],
+    }, [
+      { tool: 'search_originals', input: { assetVersion, query: 'gradient' } },
+      { tool: 'search_originals', input: { assetVersion, startMs: 646_000, endMs: 650_000 } },
+      { tool: 'search_originals', input: { assetVersion, startMs: 652_000, endMs: 670_000 } },
+      { tool: 'complete_research' },
+    ]);
+    expect(offered.map(tools => tools.includes('complete_research'))).toEqual([false, false, false, true]);
+    expect(gaps).not.toContainEqual(expect.objectContaining({ reason: 'caption_keyword_preview_only' }));
   }));
 
 test('requested evidence that cannot be obtained does not block research and reaches the finalizer as a gap', async () =>

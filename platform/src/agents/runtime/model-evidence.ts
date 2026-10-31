@@ -452,7 +452,9 @@ export function projectEvidencePacketsForModel(
 ): { evidence: ModelEvidencePacket[]; omitted?: OmittedEvidenceNotice; omittedPackets: OmittedModelEvidence[] } {
   const projected = packets.map(packet => ({ source: packet, packet: evidencePacketForModel(packet) }));
   const prioritized = [
-    ...projected.filter(({ packet }) => packet.savedEvidence),
+    // Keep verified passages together before spending the answer budget on keyword previews.
+    ...projected.filter(({ packet }) => packet.savedEvidence && packet.savedEvidence.captionSelection !== 'keyword'),
+    ...projected.filter(({ packet }) => packet.savedEvidence?.captionSelection === 'keyword'),
     ...projected.filter(({ packet }) => packet.transcriptAnalysis),
     ...projected.filter(({ packet }) => !packet.transcriptAnalysis && !packet.savedEvidence),
   ];
