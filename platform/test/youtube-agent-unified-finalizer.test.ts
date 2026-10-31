@@ -784,6 +784,40 @@ it('fails after one repair instead of persisting a repeated filler-only answer',
   expect(options.finalize).not.toHaveBeenCalled();
 });
 
+// Session c36be06c-9388-4eaf-bbea-c6004d7115d4, run f60dc202-9320-490b-bc2f-a372f031dd35: a cited "…"
+// completed as an answer and displayed only citation chips.
+function placeholderThen(output: { blocks: unknown[] }, repaired: { blocks: unknown[] } | undefined) {
+  let calls = 0;
+  return new MockLanguageModelV4({ doGenerate: async () => {
+    const value = calls++ === 0 || !repaired ? { ...output, blocks: [{ text: '… [ref_1]', evidenceIds: ['ref_1'] }] } : repaired;
+    return { content: [{ type: 'text', text: JSON.stringify(value) }], finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] };
+  } });
+}
+
+it('repairs a cited placeholder answer instead of completing it', async () => {
+  const { options, classifier, output } = setup('context_answer', true);
+  options.message = '¿Qué hace la mujer en el video?';
+  const repaired = { ...output, blocks: [{ text: 'La mujer sostiene el micrófono hacia el hombre. [ref_1]', evidenceIds: ['ref_1'] }] };
+  const finalizer = placeholderThen(output, repaired);
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await executeResearchRun(options);
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(JSON.stringify(finalizer.doGenerateCalls[1]!.prompt)).toContain('placeholder with no answer text');
+  expect(options.finalize).toHaveBeenCalledOnce();
+  const [, committed] = vi.mocked(options.finalize).mock.calls[0]!;
+  expect(committed.answer).toContain('La mujer sostiene el micrófono hacia el hombre.');
+  expect(committed.answer).toContain('[cite:frame-observation]');
+});
+
+it('fails honestly instead of completing a repeated cited placeholder answer', async () => {
+  const { options, classifier, output } = setup('context_answer', true);
+  const finalizer = placeholderThen(output, undefined);
+  models.select.mockImplementation((_env, _session, _effort, metadata) => metadata.model_role === 'classifier' ? classifier : finalizer);
+  await expect(executeResearchRun(options)).rejects.toThrow(/answer validation checks after repair/);
+  expect(finalizer.doGenerateCalls).toHaveLength(2);
+  expect(options.finalize).not.toHaveBeenCalled();
+});
+
 it('recovers an exact-first-message request with a synchronous history read inside the response allowance', async () => {
   vi.useFakeTimers();
   try {
