@@ -5,7 +5,7 @@ import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cach
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
-import { agentMaxVideoSeconds, verifiedFrameDuration, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
+import { agentMaxVideoSeconds, verifiedFrameMetadata, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
@@ -766,7 +766,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       };
       if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && (options.decision.refreshDynamicData || options.decision.refreshEvidence ||
-        ((options.decision.timestampedFrameQuestion || options.decision.refreshFramesOnly) && verifiedFrameDuration(options.decision.videoId, [...evidence.values()]) === undefined)
+        ((options.decision.timestampedFrameQuestion || options.decision.refreshFramesOnly) && verifiedFrameMetadata(options.decision.videoId, [...evidence.values()]) === undefined)
         || !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title)) {
         try {
           await executeGetVideo({ videoId: options.decision.videoId }, phaseContext, `initial-video:${options.decision.videoId}`);

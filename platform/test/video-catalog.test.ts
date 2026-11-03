@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { VideoCatalog } from '../src/lib/video-catalog';
 import {
+  reusableVideoResource,
   readVideoResource,
   saveVideoResource,
   loadVideoResource,
@@ -23,6 +24,14 @@ vi.mock('../src/lib/youtube-frames', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lib/youtube-frames')>()),
   getVideoFrames: vi.fn(),
 }));
+
+test('live metadata expires so a completed broadcast can be inspected later', () => {
+  const op = { kind: 'video', id: 'abcdefghijk' } as const;
+  const saved = { value: { isLive: true }, freshUntil: 200 };
+  expect(reusableVideoResource(op, saved, 199)).toBe(true);
+  expect(reusableVideoResource(op, saved, 200)).toBe(false);
+  expect(reusableVideoResource(op, { ...saved, value: { isLive: false } }, 201)).toBe(true);
+});
 
 // Execute the actual catalog SQL in SQLite, including uniqueness, transactions,
 // foreign keys and query plans. R2 is an in-memory object transport.

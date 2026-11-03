@@ -1,4 +1,5 @@
-import { verifiedFrameDuration, VideoTooLongError } from '../../../runtime/video-duration-limit';
+import { executeGetVideo } from './get-video';
+import { eligibleDuration, verifiedFrameMetadata, VideoTooLongError } from '../../../runtime/video-duration-limit';
 import { frameSelectionsSchema } from '../../../runtime/frame-selection';
 import { withPreviewCleanup } from '../../../runtime/preview-lifecycle';
 import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
@@ -37,7 +38,11 @@ export function createGetVideoFramesTool(context: AgentToolContext) {
 }
 
 export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputSchema>, context: AgentToolContext, toolCallId: string) {
-  const parsed = getVideoFramesInputSchema.parse({ ...input, analysis: input.analysis ?? context.timestampedFrameQuestion });
+  const parsed = getVideoFramesInputSchema.parse(input);
+  if (!parsed.analysis && parsed.videoId === context.pinnedVideoId &&
+    (!parsed.selections || parsed.selections.every(selection => selection.basis === 'user_requested'))) {
+    parsed.analysis = context.timestampedFrameQuestion;
+  }
   const request = { videoId: parsed.videoId, maxWidth: parsed.maxWidth,
     timestampsMs: [...new Set(parsed.timestampsMs)].sort((a, b) => a - b) };
   if (parsed.selections) {
@@ -49,7 +54,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     if (parsed.selections.some(selection => selection.evidenceIds.some(id => !ids.has(id))))
       throw new Error('Frame selection cites an excerpt not delivered to this run. Use delivered locating evidence or mark the selection exploratory.');
   }
-  return withPreviewCleanup(context, context => context.executeEvidenceTool({
+  const capture = (metadata: ReturnType<typeof verifiedFrameMetadata>) => withPreviewCleanup(context, context => context.executeEvidenceTool({
     retrySavedAnalysis: parsed.analysis ? packet => retrySavedAnalysis(packet, context, toolCallId,
       () => executeAnalyzeVideoFrames({ assetVersions: packet.assetVersions!, focus: parsed.analysis! }, context, `${toolCallId}:analyze`)) : undefined,
     input: parsed,
@@ -59,8 +64,9 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (context.maxVideoSeconds !== undefined) {
-        const duration = verifiedFrameDuration(request.videoId, context.getEvidence?.() ?? []);
-        if (duration === undefined) throw new Error('Verified video duration is required before frame capture. Load get_video metadata for this video first.');
+        if (metadata?.isLive === true) throw new Error('Cannot capture frames from a live broadcast. Select a completed video.');
+        const duration = eligibleDuration(metadata?.durationSeconds);
+        if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
       }
       if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
@@ -129,4 +135,11 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       return finish(packet);
     }, { runId: context.runId, toolCallId }),
   }));
+
+  if (context.maxVideoSeconds === undefined) return capture(undefined);
+  const metadata = verifiedFrameMetadata(request.videoId, context.getEvidence?.() ?? []);
+  if (metadata?.isLive === true || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
+  // Meter and deduplicate the prerequisite before the frame tool holds credits.
+  return executeGetVideo({ videoId: request.videoId }, context, `frame-metadata:${request.videoId}`)
+    .then(packet => capture(verifiedFrameMetadata(request.videoId, [packet])));
 }
