@@ -686,3 +686,17 @@ Worker `55e6ef35-4b8c-46d1-8d69-54cc29213f41` served both production replays. Ea
 Provider retrieval includes capture and storage. It excludes visual analysis and preview generation. The complete frame-tool times were 24.415 / 15.691 s and 21.230 / 14.716 s respectively. The live-crowd replay included inline analysis in its tool time. These are individual runs. [Stanford baseline](https://video2ctx.dev/dashboard/sessions/d9ea4624-6694-4f1f-a5c2-bbcbace40494) · [Stanford replay](https://video2ctx.dev/dashboard/sessions/6a173955-3cdd-4f41-8647-f725e6e95365) · [Live-crowd baseline](https://video2ctx.dev/dashboard/sessions/5e823074-7475-4317-83b4-5ef9136d5d13) · [Live-crowd replay](https://video2ctx.dev/dashboard/sessions/286ba1db-d449-4948-988d-d348d3d7484b)
 
 Each before/after JPEG pair showed the same slide or chess position at the same resolution. Full-frame SSIM ranged from 0.9921 to 0.9975 for Stanford and 0.9819 to 0.9826 for live crowd. In a separate local test, five seeks in a 30-minute H.264/AAC file with 54,000 video samples produced identical RGB pixels to independent FFmpeg seeks. The same checks passed with the index at the front and at the tail.
+
+## Timestamped frame analysis verification, November 3
+
+Worker `b6032b1c-702c-4bd2-af40-041b379b906d` served all three replays below. Each started a new session and explicitly requested fresh frames at the same timestamps as the preceding sparse-reader runs. Times start at the recorded run start. First findings means the first completed tool result with timestamped visual observations. The dashboard's time to first rendered text was not measured.
+
+| Production session | Metadata lookup | Frame provider | First findings | Final answer |
+| --- | ---: | ---: | ---: | ---: |
+| [Stanford before](https://video2ctx.dev/dashboard/sessions/6a173955-3cdd-4f41-8647-f725e6e95365) | 4.018 s | 14.724 s | 30.124 s | 35.551 s |
+| [Stanford after](https://video2ctx.dev/dashboard/sessions/b6e5f332-ebfa-42d5-9ac7-d42202c780d2) | 0.962 s | 15.251 s | 25.986 s | 31.194 s |
+| [Live crowd before](https://video2ctx.dev/dashboard/sessions/286ba1db-d449-4948-988d-d348d3d7484b) | 4.298 s | 10.764 s | 23.065 s | 28.682 s |
+| [Live crowd after, FFmpeg recovered one frame](https://video2ctx.dev/dashboard/sessions/9dd47908-0c9f-4072-9325-16f4c6c28564) | 1.025 s | 22.983 s | 32.415 s | 38.145 s |
+| [Live crowd repeat, all Media](https://video2ctx.dev/dashboard/sessions/4dcc6111-f721-43c1-97db-acd9f0d9ddcb) | 0.683 s | 10.002 s | 18.293 s | 23.453 s |
+
+All three replays checked stored durations and produced observations in the capture call. Stanford had previously needed a separate analysis call. The live-crowd baseline already analyzed inline. Its first replay failed to fetch the final timestamp through Media after a progressive range request returned HTTP 302 and a fragmented range request returned HTTP 403. FFmpeg recovered that timestamp. All nine fresh JPEGs were 640 × 360. Eight were byte-identical to their baseline images. The FFmpeg frame had a full-image SSIM of 0.983 against its baseline.
