@@ -56,7 +56,7 @@ export function createCapabilityProvider(
       if (!decision.savedOnly && (decision.refreshFramesOnly || decision.timestampedFrameQuestion)) {
         if ((result.cacheStatus === 'hit' || result.cacheStatus === 'stale') && !options?.refresh &&
           !decision.refreshEvidence && !decision.refreshDynamicData && (result.value.id !== videoId ||
-          eligibleDuration(result.value.durationSeconds, result.value.isLive) === undefined)) {
+          (result.value.isLive !== true && eligibleDuration(result.value.durationSeconds) === undefined))) {
           result = await provider.video(videoId, { ...options, refresh: true });
         }
         if (result.value.id !== videoId) throw new Error('Metadata did not match the requested video.');

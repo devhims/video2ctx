@@ -1060,6 +1060,25 @@ describe('YouTube agent capability router', () => {
     if (!durationSeconds) expect(video).toHaveBeenNthCalledWith(2, videoId, { refresh: true });
   });
 
+  it('does not immediately refetch cached live metadata to find a duration', async () => {
+    const id = 'abcdefghijk';
+    const video = vi.fn<YouTubeAgentProvider['video']>().mockResolvedValue({ cacheStatus: 'hit', value: { id, isLive: true } as never });
+    const provider = createCapabilityProvider(providerWith({ video }), { route: 'inspect_video', videoId: id, refreshFramesOnly: true });
+    expect((await provider.video(id)).value.isLive).toBe(true);
+    expect(video).toHaveBeenCalledOnce();
+  });
+
+  it('carries the timestamp question across recovery candidates for the same video', async () => {
+    const videoId = 'abcdefghijk', question = 'What does the scoreboard show at 1:00?';
+    const model = sequenceClassifier([
+      { route: 'inspect_video', videoId, timestampedFrameQuestion: question, visualEvidence: 'invalid' },
+      { videoId, visualEvidence: 'required', visualRequirements: ['scoreboard'] },
+    ]);
+    const decision = await expectLastResort(classifyCapabilityWithModel({ message: `At 1:00 in https://youtu.be/${videoId}, read the scoreboard`,
+      model, signal: new AbortController().signal }));
+    expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question });
+  });
+
   it('pins inspect_video provider calls to the classified video', async () => {
     const video = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {} as never }));
     const provider = createCapabilityProvider(providerWith({ video }), {
