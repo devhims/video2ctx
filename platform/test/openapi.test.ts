@@ -42,6 +42,13 @@ describe('OpenAPI and Scalar documentation', () => {
     expect(document.paths['/v1/search']).toBeDefined();
   });
 
+  test('only the admin trace schema advertises private admission fields', () => {
+    const schemas = openApiDocument.components.schemas;
+    for (const schema of [schemas.AgentRun, schemas.CompactAgentRun, schemas.AgentRunProgress])
+      expect(JSON.stringify(schema)).not.toMatch(/"leaseId"|"rpcMs"|"lastDenial"/);
+    expect(JSON.stringify(schemas.AdminToolTrace)).toContain('"leaseId"');
+  });
+
   test('serves the OpenAPI 3.1 document', async () => {
     const response = await mountedApp.request('/openapi.json');
 

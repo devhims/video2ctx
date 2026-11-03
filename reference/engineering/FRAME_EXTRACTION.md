@@ -93,6 +93,7 @@ Completed or failed calls retain their rate accounting. Leases expire after 90
 seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
 Admission RPC failure never bypasses the limit.
 
+Operator traces retain the admission details. Customer diagnostics and frame artifacts omit those fields, including on reads of earlier runs.
 Stored Media admission events carry the lease kind, random lease ID, caller RPC count
 and elapsed RPC time. An explicit denial reports the coordinator's cooldown, active
 lease limit or start-rate limit. A caller timeout distinguishes waiting for a reply
@@ -102,8 +103,8 @@ caller had already fallen back. Sampled or missing coordinator logs leave the
 remote outcome unknown.
 
 MP4 source failures carry an allowlisted parser guard. Sample-limit failures
-include the declared count and the track kind when known. Historical `combined_samples` records with `trackKind: audio` measured the running total
-across retained tracks when the audio table was visited. These fields contain no signed URLs or media bytes.
+include the declared count and the track kind when known. A `combined_samples` record with `trackKind: audio` reports the running total when an audio table is visited. Ambiguous audio tracks and fragmented indexes can still hit this guard.
+Size, traversal count, and depth use `boxBytes`, `boxCount`, and `nestingDepth`. For older traces, interpret `declaredCount` using the guard label. These fields contain no signed URLs or media bytes.
 
 Media gets at most 20 seconds of the existing extraction budget and leaves at
 least ten seconds for recovery when that budget permits. Short-budget calls go

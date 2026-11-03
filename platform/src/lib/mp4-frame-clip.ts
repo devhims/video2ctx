@@ -123,7 +123,7 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
       segments = segmentIndex(await read(offset, box.size), offset, size);
     }
     if (box.type === 'ftyp') {
-      if (box.size > 4096) unsupported('fragment_index');
+      if (box.size > 4096) unsupported('file_type_size', box.size);
       ftyp = await read(offset, box.size);
     }
     if (box.type === 'moov') {
@@ -228,7 +228,7 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
         const combined = new Uint8Array(metadata.length + fragment.length);
         combined.set(metadata); combined.set(fragment, metadata.length);
         const selected = createFile();
-        selected.onError = () => { unsupported('clip_layout'); };
+        selected.onError = () => { unsupported('mp4_parser'); };
         selected.appendBuffer(MP4BoxBuffer.fromArrayBuffer(combined.buffer, 0));
         activeSamples = selected.getTrackSamplesInfo(track.id);
         if (!activeSamples.length || activeSamples.length > 1000) return unsupported('clip_layout');

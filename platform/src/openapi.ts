@@ -1,5 +1,5 @@
 import { toolCallDetailSchema } from './agents/runtime/tool-call-trace';
-import { storedExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
+import { publicExtractionDiagnosticSchema } from './lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './agents/runtime/transcript-diagnostics';
 import { z } from 'zod';
 import { commentPageReceiptSchema } from './lib/comment-page-receipt';
@@ -2612,7 +2612,7 @@ export const openApiDocument = {
         allOf: [schemaRef('AgentRunReceipt'), {
           type: 'object', properties: {
             route: schemaRef('AgentRouteDecision'), result: schemaRef('AgentTurnResult'), error: { type: 'string' },
-            extractionDiagnostics: { type: 'array', maxItems: 64, items: z.toJSONSchema(storedExtractionDiagnosticSchema, { target: 'openapi-3.0' }) },
+            extractionDiagnostics: { type: 'array', maxItems: 64, items: z.toJSONSchema(publicExtractionDiagnosticSchema, { target: 'openapi-3.0' }) },
             extractionDiagnosticsTruncated: { type: 'boolean' },
             transcriptDiagnostics: { type: 'array', items: z.toJSONSchema(transcriptDiagnosticSchema, { target: 'openapi-3.0' }) },
           },

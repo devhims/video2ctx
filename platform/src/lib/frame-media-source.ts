@@ -140,7 +140,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
             if (throttled) break;
           } catch (error) {
             capture({ stage: 'media_source', outcome: 'error', formatId: candidate.formatId, code: 'MEDIA_UNAVAILABLE',
-              ...(error instanceof Mp4GuardError ? { mp4Guard: error.mp4Guard, declaredCount: error.declaredCount, trackKind: error.trackKind } : {}) });
+              ...(error instanceof Mp4GuardError ? error.diagnostic : {}) });
             console.info({ event: 'media_source_candidate_failure', videoId, slot, formatId: candidate.formatId, ...safeErrorLog(error) });
             signal.throwIfAborted();
             if (error instanceof FrameMediaError && error.code === 'budget') throw error;
