@@ -93,6 +93,7 @@ Completed or failed calls retain their rate accounting. Leases expire after 90
 seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
 Admission RPC failure never bypasses the limit.
 
+Operator traces retain the admission details. Customer diagnostics and frame artifacts omit those fields, including on reads of earlier runs.
 Stored Media admission events carry the lease kind, random lease ID, caller RPC count
 and elapsed RPC time. An explicit denial reports the coordinator's cooldown, active
 lease limit or start-rate limit. A caller timeout distinguishes waiting for a reply
@@ -102,8 +103,8 @@ caller had already fallen back. Sampled or missing coordinator logs leave the
 remote outcome unknown.
 
 MP4 source failures carry an allowlisted parser guard. Sample-limit failures
-include the declared count and the track kind when known. Historical `combined_samples` records with `trackKind: audio` measured the running total
-across retained tracks when the audio table was visited. These fields contain no signed URLs or media bytes.
+include the declared count and the track kind when known. A `combined_samples` record with `trackKind: audio` reports the running total when an audio table is visited. Ambiguous audio tracks and fragmented indexes can still hit this guard.
+Size, traversal count, and depth use `boxBytes`, `boxCount`, and `nestingDepth`. For older traces, interpret `declaredCount` using the guard label. These fields contain no signed URLs or media bytes.
 
 Media gets at most 20 seconds of the existing extraction budget and leaves at
 least ten seconds for recovery when that budget permits. Short-budget calls go
@@ -686,3 +687,50 @@ Worker `55e6ef35-4b8c-46d1-8d69-54cc29213f41` served both production replays. Ea
 Provider retrieval includes capture and storage. It excludes visual analysis and preview generation. The complete frame-tool times were 24.415 / 15.691 s and 21.230 / 14.716 s respectively. The live-crowd replay included inline analysis in its tool time. These are individual runs. [Stanford baseline](https://video2ctx.dev/dashboard/sessions/d9ea4624-6694-4f1f-a5c2-bbcbace40494) · [Stanford replay](https://video2ctx.dev/dashboard/sessions/6a173955-3cdd-4f41-8647-f725e6e95365) · [Live-crowd baseline](https://video2ctx.dev/dashboard/sessions/5e823074-7475-4317-83b4-5ef9136d5d13) · [Live-crowd replay](https://video2ctx.dev/dashboard/sessions/286ba1db-d449-4948-988d-d348d3d7484b)
 
 Each before/after JPEG pair showed the same slide or chess position at the same resolution. Full-frame SSIM ranged from 0.9921 to 0.9975 for Stanford and 0.9819 to 0.9826 for live crowd. In a separate local test, five seeks in a 30-minute H.264/AAC file with 54,000 video samples produced identical RGB pixels to independent FFmpeg seeks. The same checks passed with the index at the front and at the tail.
+
+## Timestamped frame analysis verification, November 3
+
+Worker `b6032b1c-702c-4bd2-af40-041b379b906d` served all three replays below. Each started a new session and explicitly requested fresh frames at the same timestamps as the preceding sparse-reader runs. Times start at the recorded run start. First findings means the first completed tool result with timestamped visual observations. The dashboard's time to first rendered text was not measured.
+
+| Production session | Metadata lookup | Frame provider | First findings | Final answer |
+| --- | ---: | ---: | ---: | ---: |
+| [Stanford before](https://video2ctx.dev/dashboard/sessions/6a173955-3cdd-4f41-8647-f725e6e95365) | 4.018 s | 14.724 s | 30.124 s | 35.551 s |
+| [Stanford after](https://video2ctx.dev/dashboard/sessions/b6e5f332-ebfa-42d5-9ac7-d42202c780d2) | 0.962 s | 15.251 s | 25.986 s | 31.194 s |
+| [Live crowd before](https://video2ctx.dev/dashboard/sessions/286ba1db-d449-4948-988d-d348d3d7484b) | 4.298 s | 10.764 s | 23.065 s | 28.682 s |
+| [Live crowd after, FFmpeg recovered one frame](https://video2ctx.dev/dashboard/sessions/9dd47908-0c9f-4072-9325-16f4c6c28564) | 1.025 s | 22.983 s | 32.415 s | 38.145 s |
+| [Live crowd repeat, all Media](https://video2ctx.dev/dashboard/sessions/4dcc6111-f721-43c1-97db-acd9f0d9ddcb) | 0.683 s | 10.002 s | 18.293 s | 23.453 s |
+
+All three replays checked stored durations and produced observations in the capture call. Stanford had previously needed a separate analysis call. The live-crowd baseline already analyzed inline. Its first replay failed to fetch the final timestamp through Media after a progressive range request returned HTTP 302 and a fragmented range request returned HTTP 403. FFmpeg recovered that timestamp. All nine fresh JPEGs were 640 × 360. Eight were byte-identical to their baseline images. The FFmpeg frame had a full-image SSIM of 0.983 against its baseline.
+
+## Live-crowd range redirects, November 3
+
+In the 38.145 s live-crowd run above, Media decoded the first two timestamps from progressive format 18. A range read for 3295.137 s received HTTP 302. The reader discarded the response, and the fragmented format 298 returned HTTP 403 on its picture range. FFmpeg recovered the remaining frame. The historical trace contains neither a redirect destination nor the CDN's reason for the 403.
+
+Worker `4cbbf59f-9efa-4b7d-b65a-b02bf3fcfe8b` can now repeat the same range once at a validated HTTPS Googlevideo playback destination through the same proxy. Both requests share the original deadline. The reader allows six followed redirects across the batch and validates the final partial response as before. Diagnostics record the redirect decision and follow-up status without storing signed URLs.
+
+| Fresh production replay | Frame provider | First visual findings | Final answer |
+| --- | ---: | ---: | ---: |
+| [First replay](https://video2ctx.dev/dashboard/sessions/7fcba392-59d6-46d6-bbcf-acdaaace2005) | 14.214 s | 23.228 s | 28.474 s |
+| [Second replay](https://video2ctx.dev/dashboard/sessions/a6c0a25e-9202-4680-8575-02ebd535172e) | 9.806 s | 17.736 s | 22.250 s |
+
+Both replays encountered format 298 picture-range denials and completed all three timestamps through format 18 in Media. Every 640 × 360 JPEG was byte-identical to the previous Media-only run. Neither replay encountered a 302. A local regression test forced a redirect on an actual MP4 picture range and verified identical clip bytes. Production latency savings specifically attributable to following a 302 remain unmeasured.
+
+## First coordinator call after inactivity, November 3
+
+Production Worker `b77488ef-3cb0-471d-8098-a4128af399a7` logs an instance ID and `firstCallAfterConstruction` on each lease decision. Any acquire, release, or throttle counts as a call on that in-memory instance. A new instance can also be created after deployment or eviction. The marker alone cannot distinguish those causes.
+
+The experiment used one primer, waited 75 seconds after it completed, then requested the same three fresh live-crowd frames. The warm replay started in a separate session when the idle replay had finished capture. Both received a first-attempt grant and decoded all three frames through Media. Lease IDs identified the coordinator logs, and the callee's `jsrpc.caller_span_id` identified the matching caller span. Both ends of both calls ran in AMS.
+
+| Measurement | [After idle](https://video2ctx.dev/dashboard/sessions/036c97b4-878e-48c1-a7e7-8273b803ac6a) | [While warm](https://video2ctx.dev/dashboard/sessions/a0ddc950-f236-4f70-b0ef-f5dbb6c20e82) |
+| --- | ---: | ---: |
+| First call since construction | Yes | No, same instance |
+| Caller timer for batch admission | 783 ms | 70 ms |
+| Caller span start to coordinator method start | 760 ms | 26 ms |
+| Coordinator method span, millisecond resolution | 0 ms | 0 ms |
+| Coordinator method end to caller span end | 23 ms | 44 ms |
+| First completed frame tool result | 24.283 s | 19.104 s |
+| Final answer | 31.323 s | 24.129 s |
+
+The first-call penalty in this pair was concentrated before method entry. The traces do not split that interval into routing, dispatch, or object activation. The earlier 2.618 s incident predates these spans. The experiment used full trace capture temporarily. Production trace sampling was then set to 10% and verified through the script settings API.
+
+The 10% trace sample applies to the whole Worker. Operators can use the lease decision's first-call marker to compare admission waits across instance lifetimes and investigate future late grants. The measured pair does not establish a latency percentile or explain the earlier 2.618 s incident. Evaluate trace volume and cost against the number of usable slow-grant traces before increasing sampling.

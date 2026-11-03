@@ -29,7 +29,9 @@ const classifierDecisionSchema = z.object({
   skill: z.enum(['verify_saved_evidence']).optional().describe('Verify saved evidence: use for follow-ups that read saved original captions/comments, check exact quotations or precise passage links, or correct source claims. It does not by itself prohibit fetching; set savedOnly separately. Omit for broad summaries and visual analysis.'),
   requestedEvidence: requestedEvidenceSchema.optional().describe('Evidence the user explicitly asks to be read before answering: original_quotes for exact quotations, verbatim wording or precise passage links from captions; comments for what viewers or commenters say. Research must read each or report it unavailable. Omit when not explicitly requested.'),
   savedOnly: z.boolean().optional().describe('True when the user requires existing saved evidence only or prohibits fresh retrieval. All provider access is disabled for this run; use saved evidence reads and report missing assets.'),
-  refreshEvidence: z.boolean().optional().describe('True only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
+  timestampedFrameQuestion: z.string().trim().min(1).max(500).optional().describe('For inspect_video: when the user supplies exact timestamps and asks what is visible, copy the focused visual question here. Include this for a request to describe each specified frame. Omit for image retrieval only or saved-only requests.'),
+  refreshFramesOnly: z.boolean().optional().describe('For inspect_video: true when the user asks to freshly capture or refresh frames only. Reuse verified video metadata. Leave refreshEvidence unset unless other source evidence must also be refreshed.'),
+  refreshEvidence: z.boolean().optional().describe('Except for a frames-only refresh, true only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
   refreshDynamicData: z.boolean().optional().describe('True when the user asks for current views, likes, or comments. Refresh metadata, statistics and comments, keeping saved transcripts and images. Choose an executable route. False for historical questions and dashboard context.'),
   responseIntent: z.enum(['context_answer', 'clarification', 'rejected']).optional().describe('Required for finalize: answer using existing context, ask for missing scope, or decline an unsupported request.'),
   contextScope: z.enum(['history', 'video', 'mixed']).optional().describe('For context_answer: history for questions about conversation messages or user preferences, video for source facts, mixed when both are needed. History-only requests cannot fetch video evidence.'),
@@ -97,7 +99,7 @@ function inferMissingRoute(input: Record<string, unknown>, suppliedVideoIds: rea
   const discovery = DISCOVERY_KEYS.some(present);
   const inspection = present('videoId');
   const finalization = FINALIZATION_KEYS.some(present);
-  const refresh = input.refreshEvidence === true || input.refreshDynamicData === true;
+  const refresh = input.refreshEvidence === true || input.refreshFramesOnly === true || input.refreshDynamicData === true;
   const signals = [discovery, inspection, finalization].filter(Boolean).length;
   if (signals !== 1) return undefined;
   // comparisonVideoIds and researchBreadth alone are valid in several routes, so
@@ -162,10 +164,12 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
     || input.comparisonVideoIds !== undefined || input.requestedEvidence !== undefined || input.visualEvidence !== 'none')) {
     issue('playlistListing', 'Use playlistListing only for fresh playlist metadata research. For video content or saved verification omit it and keep the required evidence tools.');
   }
-  if (input.savedOnly === true && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('savedOnly', 'Saved-only requests cannot refresh source evidence.');
+  if ((input.refreshFramesOnly === true || input.timestampedFrameQuestion) && input.route !== 'inspect_video')
+    issue('route', 'Exact frame requests require single-video inspection.');
+  if (input.savedOnly === true && (input.refreshEvidence === true || input.refreshFramesOnly === true || input.refreshDynamicData === true)) issue('savedOnly', 'Saved-only requests cannot refresh source evidence.');
   if (input.route === 'finalize' && Array.isArray(input.requestedEvidence) && input.requestedEvidence.length) issue('route', 'Requested evidence must be read by research or inspection before answering.');
   if (input.historySelection && input.contextScope === 'video') issue('contextScope', 'History selection requires history or mixed context.');
-  if (input.route === 'finalize' && (input.refreshEvidence === true || input.refreshDynamicData === true)) issue('route', 'Fresh retrieval requires an executable route.');
+  if (input.route === 'finalize' && (input.refreshEvidence === true || input.refreshFramesOnly === true || input.refreshDynamicData === true)) issue('route', 'Fresh retrieval requires an executable route.');
   // Run conditional presence checks even when essential base fields failed validation,
   // so one bounded repair sees every missing field instead of only the first layer.
   return issues.length ? { success: false, error: new z.ZodError(issues), defaultedFields } : { ...parsed, defaultedFields };
@@ -265,7 +269,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Requests for current view counts, likes, or comments require an executable route with refreshDynamicData true, even when past values are in history. Use saved data for historical questions. This does not require refreshing transcripts or images.',
       'Classify the current request for an agent that researches and synthesizes information from YouTube videos. Decide scope before selecting tools.',
       'Playlist discovery and listing are supported. For a fresh YouTube playlist listing by URL or name choose topic_research, playlistListing true, focused breadth, a playlist search query and visualEvidence none. Listing titles, links, durations, totals and arithmetic from those durations are supported, including when the user gives their answer a study-note name. Earlier assistant refusals are not capability limits. For a saved-only listing reuse retained evidence instead.',
-      'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A saved transcript can support new questions through research or inspection, which must prepare its content before finalization. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. A request to refresh transcripts, images or all source evidence requires an executable route with refreshEvidence true. Requests limited to current statistics or comments use refreshDynamicData true instead.',
+      'The session inventory describes available raw assets, their collection times and coverage. Session memories are derived hints, not proof. A saved transcript can support new questions through research or inspection, which must prepare its content before finalization. Counts of frames or sheets do not prove that a requested scene was observed. Select inspection if new visual interpretation is needed. For fresh exact frames of one video, set refreshFramesOnly true and leave refreshEvidence unset. If timestamps and a visual question are supplied, set timestampedFrameQuestion even when the user also names get_video_frames. Keep raw-image-only requests free of an analysis question. Refreshing transcripts or all source evidence requires refreshEvidence true. Requests limited to current statistics or comments use refreshDynamicData true instead.',
       'Use prior completed turns and availableEvidence to choose the next action. Choose finalize with responseIntent context_answer when the request can be answered from the conversation or supplied evidence without further retrieval or analysis. Prior assistant claims are not verified source evidence. Questions about what was previously said may use history alone; new video facts require supplied evidence. An inventory reference alone does not mean its content is ready for the answer. Finalization cannot search or read saved assets. Choose research or inspection if answering requires reading a stored transcript, analyzing an asset, or loading additional evidence. When evidence is insufficient or the user asks for new inspection or fresh data, choose inspect_video or topic_research.',
       'Requests to list, quote, summarize, or correct messages in this conversation are supported. Route them to finalize with responseIntent context_answer. The runtime supplies a bounded chronological history page before finalization, alongside the recent conversation window. Finalization cannot search history, paginate, read assets, or retrieve provider evidence. It must state any history coverage limit. Choose inspect_video or topic_research when source evidence needs reading or analysis; use context_answer only for prepared context. Do not list the messages yourself.',
       'Select skill verify_saved_evidence for follow-ups that recover saved original captions/comments, verify exact quotations or passage links, or correct source claims. This replaces general discovery and analysis with a verification workflow. The skill does not prohibit fetching: a request that also needs evidence not yet saved, such as comments, still gets it unless savedOnly is set. Omit the skill for broad summaries or visual analysis.',
@@ -561,7 +565,7 @@ type LastResortMethod = 'route_recovery' | 'assembled' | 'defaults';
 const LAST_RESORT_REASON = 'The routing decision could not be determined from the model output.';
 const ROUTE_FIELDS = {
   topic_research: ['researchBreadth', 'searchQuery', 'playlistListing', 'channelId', 'comparisonVideoIds', 'explicitSourceCount'],
-  inspect_video: ['videoId', 'comparisonVideoIds'],
+  inspect_video: ['videoId', 'comparisonVideoIds', 'timestampedFrameQuestion', 'refreshFramesOnly'],
   finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
 } as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
 const SHARED_FIELDS = ['skill', 'savedOnly', 'requestedEvidence', 'answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
@@ -610,6 +614,7 @@ function lastResortDecision(
   const constraints = {
     savedOnly: candidates.some(candidate => candidate.savedOnly === true),
     requestedEvidence: [...new Set(candidates.flatMap(candidate => requestedEvidenceSchema.safeParse(candidate.requestedEvidence).data ?? []))],
+    refreshFramesOnly: candidates.some(candidate => candidate.refreshFramesOnly === true),
     refreshEvidence: candidates.some(candidate => candidate.refreshEvidence === true),
     refreshDynamicData: candidates.some(candidate => candidate.refreshDynamicData === true),
     visualsRequired: candidates.some(candidate => candidate.visualEvidence === 'required'),
@@ -621,7 +626,7 @@ function lastResortDecision(
       return kept.length >= 2 ? [kept] : [];
     })[0] ?? []])].slice(0, 8),
   };
-  const needsFreshData = constraints.refreshEvidence || constraints.refreshDynamicData;
+  const needsFreshData = constraints.refreshFramesOnly || constraints.refreshEvidence || constraints.refreshDynamicData;
   if (needsFreshData && constraints.savedOnly) {
     const clarification = { route: 'finalize', responseIntent: 'clarification',
       reason: 'Routing attempts disagree about saved-only access and fresh retrieval. Ask which sources may be refreshed before retrieving or answering from stale data.', answerDetail: 'standard' };
@@ -657,11 +662,19 @@ function lastResortDecision(
     const fill = fillInto(decision);
     if (constraints.savedOnly) {
       fill('savedOnly', true);
+      fill('refreshFramesOnly', undefined);
+      fill('timestampedFrameQuestion', undefined);
       fill('refreshEvidence', undefined);
       fill('refreshDynamicData', undefined);
     }
     if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
     if (decision.route !== 'finalize') {
+      if (decision.route === 'inspect_video' && !constraints.savedOnly) {
+        const matching = candidates.filter(candidate => candidate.videoId === decision.videoId ||
+          (candidate.videoId === undefined && decision.videoId === soleVideoId));
+        fill('timestampedFrameQuestion', firstValid('timestampedFrameQuestion', matching));
+      }
+      if (decision.route === 'inspect_video' && constraints.refreshFramesOnly && !constraints.savedOnly) fill('refreshFramesOnly', true);
       if (constraints.refreshEvidence && !constraints.savedOnly) fill('refreshEvidence', true);
       if (constraints.refreshDynamicData && !constraints.savedOnly) fill('refreshDynamicData', true);
       if (constraints.requestedEvidence.length) fill('requestedEvidence', constraints.requestedEvidence);

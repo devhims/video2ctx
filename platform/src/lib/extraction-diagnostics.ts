@@ -3,20 +3,16 @@ import { z } from 'zod';
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Deliberately no free-form strings, error messages, URLs, headers, or stderr.
-export const extractionEventSchema = z.object({
+const publicExtractionEventSchema = z.object({
   stage: z.enum(['catalog_lookup', 'catalog_write', 'catalog_write_wait', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy', 'media_decode', 'media_admission', 'media_source']),
   failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge']).optional(),
-  mp4Guard: z.enum(['box_layout', 'index_size', 'index_depth', 'box_count', 'compact_samples', 'absolute_offset',
+  redirectAction: z.enum(['followed', 'blocked', 'limit', 'response']).optional(),
+  mp4Guard: z.enum(['box_layout', 'index_size', 'index_depth', 'file_type_size', 'box_count', 'compact_samples', 'absolute_offset',
     'fragment_samples', 'table_entries', 'combined_samples', 'track_samples', 'missing_index', 'fragment_index',
     'mp4_parser', 'video_track', 'display_matrix', 'multiple_edits', 'empty_edit', 'edit_rate', 'duration', 'clip_layout']).optional(),
   trackKind: z.enum(['audio', 'video']).optional(),
-  declaredCount: count.optional(),
-  leaseKind: z.enum(['media-job', 'media-frame', 'ffmpeg-job']).optional(),
-  leaseId: z.string().uuid().optional(),
-  admissionState: z.enum(['admitted', 'refused', 'rpc_timeout', 'retry_timeout', 'rpc_error', 'canceled']).optional(),
-  lastDenial: z.enum(['cooldown', 'active_limit', 'start_limit', 'kind_mismatch']).optional(),
-  rpcMs: metric.optional(), rpcAttempts: count.optional(), retryAfterMs: metric.optional(),
+  declaredCount: count.optional(), boxBytes: count.optional(), boxCount: count.optional(), nestingDepth: count.optional(),
   egress: z.enum(['direct', 'proxy']).optional(), proxySlot: z.number().int().min(0).max(3).optional(),
   signal: z.enum(['SIGKILL', 'SIGTERM', 'SIGSEGV', 'SIGABRT', 'SIGBUS', 'SIGILL']).optional(),
   causeCode: z.enum(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ENOENT', 'EACCES', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']).optional(),
@@ -35,6 +31,15 @@ export const extractionEventSchema = z.object({
   exitCode: z.number().int().min(-255).max(255).optional(),
 });
 
+// Shared coordinator state is available to operators through retained traces.
+export const extractionEventSchema = publicExtractionEventSchema.extend({
+  leaseKind: z.enum(['media-job', 'media-frame', 'ffmpeg-job']).optional(),
+  leaseId: z.string().uuid().optional(),
+  admissionState: z.enum(['admitted', 'refused', 'rpc_timeout', 'retry_timeout', 'rpc_error', 'canceled']).optional(),
+  lastDenial: z.enum(['cooldown', 'active_limit', 'start_limit', 'kind_mismatch']).optional(),
+  rpcMs: metric.optional(), rpcAttempts: count.optional(), retryAfterMs: metric.optional(),
+});
+
 export const extractionAttemptSchema = z.object({
   phase: z.enum(['extraction', 'catalog']).optional(),
   version: z.literal(1), kind: z.enum(['storyboard', 'frames', 'transcript']), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -47,6 +52,8 @@ export const extractionAttemptSchema = z.object({
   events: z.array(extractionEventSchema).max(64), droppedEvents: count,
 });
 export const storedExtractionDiagnosticSchema = extractionAttemptSchema.extend({ toolCallId: z.string().min(1).max(300) });
+export const publicExtractionAttemptSchema = extractionAttemptSchema.extend({ events: z.array(publicExtractionEventSchema).max(64) });
+export const publicExtractionDiagnosticSchema = storedExtractionDiagnosticSchema.extend({ events: publicExtractionAttemptSchema.shape.events });
 export type ExtractionAttempt = z.infer<typeof extractionAttemptSchema>;
 export type ExtractionDiagnosticSink = (attempt: ExtractionAttempt) => void;
 export type StoredExtractionDiagnostic = z.infer<typeof storedExtractionDiagnosticSchema>;

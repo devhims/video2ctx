@@ -1,3 +1,4 @@
+import { ISOFile } from 'mp4box';
 import { readFile } from 'node:fs/promises';
 import { openMp4FrameSource } from '../src/lib/mp4-frame-clip';
 
@@ -23,11 +24,12 @@ for (const file of ['indexed.mp4', 'tail-index.mp4', 'fragmented.mp4', 'fragment
   });
 }
 
-test('rejects a huge index before reading it', async () => {
+test.each([['ftyp', 4097, 'file_type_size'], ['moov', 3 * 1024 * 1024, 'index_size']] as const)('reports oversized %s in bytes before reading it', async (type, size, mp4Guard) => {
   const bytes = new Uint8Array(16), view = new DataView(bytes.buffer);
-  view.setUint32(0, 3 * 1024 * 1024); bytes.set(new TextEncoder().encode('moov'), 4);
+  view.setUint32(0, size); bytes.set(new TextEncoder().encode(type), 4);
   const read = vi.fn(async () => bytes);
-  await expect(openMp4FrameSource(read, 3 * 1024 * 1024)).rejects.toMatchObject({ code: 'unsupported' });
+  const error = await openMp4FrameSource(read, size).catch(error => error);
+  expect(error.diagnostic).toEqual({ mp4Guard, boxBytes: size, trackKind: undefined });
   expect(read).toHaveBeenCalledOnce();
 });
 
@@ -80,6 +82,17 @@ test('fragmented clips cover the first instant and keyframe boundaries', async (
   expect((await source.clip(3.9)).time).toBeCloseTo(0.9);
 });
 
+test('identifies MP4Box errors while reading a selected fragment', async () => {
+  const bytes = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented.mp4', import.meta.url)));
+  const source = await openMp4FrameSource(async (offset, length) => bytes.slice(offset, offset + length), bytes.length);
+  const append = vi.spyOn(ISOFile.prototype, 'appendBuffer').mockImplementationOnce(function (this: ISOFile) {
+    this.onError!('test', 'unparseable fragment');
+    throw new Error('Parser error handler returned');
+  });
+  try { await expect(source.clip(2.5)).rejects.toMatchObject({ mp4Guard: 'mp4_parser' }); }
+  finally { append.mockRestore(); }
+});
+
 test('rejects fragmented trims that differ from the initial presentation offset', async () => {
   const bytes = new Uint8Array(await readFile(new URL('./fixtures/media/fragmented-edit.mp4', import.meta.url)));
   const at = Buffer.from(bytes).indexOf('elst');
@@ -94,6 +107,19 @@ function box(type: string, ...parts: Buffer[]) {
   header.write(type, 4);
   return Buffer.concat([header, body]);
 }
+
+test('reports traversal limits in boxes and levels, independently of sample counts', async () => {
+  const deep = Array.from({ length: 10 }).reduce<Buffer>(child => box('trak', child), box('free'));
+  for (const [contents, expected] of [
+    [deep, { mp4Guard: 'index_depth', nestingDepth: 9 }],
+    [Buffer.concat(Array.from({ length: 2049 }, () => box('free'))), { mp4Guard: 'box_count', boxCount: 2049 }],
+  ] as const) {
+    const movie = box('moov', contents);
+    const error = await openMp4FrameSource(async (at, size) => Uint8Array.from(movie.subarray(at, at + size)), movie.length)
+      .catch(error => error);
+    expect(error.diagnostic).toEqual({ ...expected, trackKind: undefined });
+  }
+});
 
 function handler(kind: string) {
   const data = Buffer.alloc(24);
@@ -138,4 +164,14 @@ test('unrecognized and ambiguous tracks still share the allocation limit', async
 
 test('discarded audio still undergoes the individual sample table safety checks', async () => {
   await expect(withTrack([handler('soun')], 50001)).rejects.toMatchObject({ mp4Guard: 'track_samples', trackKind: 'audio' });
+});
+
+test('a non-v0 audio handler cannot exempt a track from the combined budget', async () => {
+  const audio = handler('soun');
+  audio[8] = 1;
+  await expect(withTrack([audio], 49999)).rejects.toMatchObject({ mp4Guard: 'combined_samples', trackKind: 'audio' });
+});
+
+test('a nested movie-extends box restores the combined budget for an otherwise discardable track', async () => {
+  await expect(withTrack([handler('soun'), box('mvex')], 49999)).rejects.toMatchObject({ mp4Guard: 'combined_samples', trackKind: 'audio' });
 });

@@ -1,6 +1,6 @@
 import { mapCitationProse } from './markdown-citations';
 import { clockTime } from './runtime/clock-time';
-import { storedExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
+import { publicExtractionAttemptSchema, publicExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
 import { researchVideoTarget } from './research/research-plan';
 import { z } from 'zod';
@@ -51,7 +51,7 @@ export const compactAgentRunSchema = agentRunReceiptSchema.pick({
   diagnostics: agentRunReceiptSchema.pick({
     userMessageId: true, conversationTurn: true, modelStepCount: true, toolCallCount: true,
   }).extend({ route: capabilityRouteDecisionSchema.optional(), transcriptAnalysis: z.array(transcriptDiagnosticSchema).optional(),
-    extractions: z.array(storedExtractionDiagnosticSchema).max(64).optional(), extractionDiagnosticsTruncated: z.boolean().optional() }).optional(),
+    extractions: z.array(publicExtractionDiagnosticSchema).max(64).optional(), extractionDiagnosticsTruncated: z.boolean().optional() }).optional(),
 });
 
 /** Presentation only: never mutate persisted evidence, billing, or conversation memory. */
@@ -128,7 +128,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
         ...(route.requiredVideoCount ? { requiredVideos: route.requiredVideoCount } : {}) } : undefined;
   return {
     outcome, answer, sources, coverage, warnings: result.warnings.filter(w => w.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
-    ...(include.includes('artifacts') ? { artifacts: result.artifacts } : {}),
+    ...(include.includes('artifacts') ? { artifacts: publicArtifacts(result.artifacts) } : {}),
     ...(include.includes('evidence') ? { evidence: result.citations.filter(citation => evidenceIds.has(citation.id))
       .map(citation => ({ ...publicCitation(citation), sourceId: evidenceIds.get(citation.id)! })) } : {}),
   };
@@ -195,9 +195,25 @@ function publicCitation(citation: AgentCitation): Omit<AgentCitation, 'sourceKin
   return rest;
 }
 
+// Both retrieval and analysis artifacts can carry a copy of the provider attempts.
+function publicArtifacts(artifacts: AgentTurnResult['artifacts']) {
+  return artifacts.map(artifact => {
+    if (!('extractionDiagnostics' in artifact.data)) return artifact;
+    const { extractionDiagnostics, ...data } = artifact.data;
+    const attempts = z.array(publicExtractionAttemptSchema).safeParse(extractionDiagnostics);
+    return { ...artifact, data: attempts.success ? { ...data, extractionDiagnostics: attempts.data } : data };
+  });
+}
+
 export function legacyAgentRun(run: AgentRunView) {
-  const { result, ...receipt } = run;
-  return { ...withSessionId(receipt), ...(result ? { result: withSessionId({ ...result, citations: result.citations.map(publicCitation) }) } : {}) };
+  const { result, extractionDiagnostics, ...receipt } = run;
+  return {
+    ...withSessionId(receipt),
+    ...(extractionDiagnostics ? { extractionDiagnostics: extractionDiagnostics.map(event => publicExtractionDiagnosticSchema.parse(event)) } : {}),
+    ...(result ? { result: withSessionId({
+      ...result, artifacts: publicArtifacts(result.artifacts), citations: result.citations.map(publicCitation),
+    }) } : {}),
+  };
 }
 
 const publicCitationSchema = agentCitationSchema.omit({ sourceKind: true });

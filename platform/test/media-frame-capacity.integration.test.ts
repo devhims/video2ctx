@@ -1,6 +1,24 @@
 import { env as workerEnv, runInDurableObject } from 'cloudflare:test';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 const env = workerEnv as Env;
+
+test.each(['acquire', 'release', 'throttle'] as const)('records first call after construction when %s arrives first', async first => {
+  const stub = env.MEDIA_FRAME_CAPACITY.getByName(`lifetime-${first}`);
+  await runInDurableObject(stub, instance => {
+    const log = vi.spyOn(console, 'info');
+    const acquire = () => instance.acquire(crypto.randomUUID(), 'ffmpeg-job');
+    try {
+      if (first === 'acquire') acquire();
+      else if (first === 'release') instance.release(crypto.randomUUID());
+      else instance.throttle();
+      acquire();
+      const records = log.mock.calls.map(([event]) => event).filter(event => event.event === 'frame_lease_decision');
+      expect(records.map(event => event.firstCallAfterConstruction)).toEqual(first === 'acquire' ? [true, false] : [false]);
+      expect(records.at(-1)).toMatchObject({ instanceId: expect.any(String), sincePreviousCallMs: expect.any(Number) });
+      expect(new Set(records.map(event => event.instanceId)).size).toBe(1);
+    } finally { log.mockRestore(); }
+  });
+});
 
 test('admits eight batches, rejects a ninth, and keeps FFmpeg capacity separate', async () => {
   const stub = env.MEDIA_FRAME_CAPACITY.getByName('job-capacity');
