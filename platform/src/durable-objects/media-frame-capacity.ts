@@ -10,6 +10,10 @@ const TOKEN = /^[0-9a-f-]{36}$/;
 
 /** One account-wide quota coordinator. It receives only lease IDs, never video bytes or user data. */
 export class MediaFrameCapacity extends DurableObject<Env> {
+  // Diagnostic state belongs to this in-memory lifetime. Capacity always comes from SQLite.
+  private readonly instanceId = crypto.randomUUID();
+  private lastCallAt?: number;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS leases (id TEXT PRIMARY KEY, kind TEXT NOT NULL, expires INTEGER NOT NULL);
@@ -18,10 +22,14 @@ export class MediaFrameCapacity extends DurableObject<Env> {
   }
 
   acquire(id: string, kind: FrameLeaseKind) {
+    const previousCallAt = this.lastCallAt;
+    const now = this.lastCallAt = Date.now();
     if (!TOKEN.test(id) || !Object.hasOwn(LIMITS, kind)) throw new Error('Invalid frame lease.');
     const decision = this.decide(id, kind);
     // The caller can time out before this response arrives. Match the lease ID in its trace.
-    console.info({ event: 'frame_lease_decision', leaseId: id, kind, ...decision });
+    console.info({ event: 'frame_lease_decision', leaseId: id, kind, instanceId: this.instanceId,
+      firstCallAfterConstruction: previousCallAt === undefined,
+      ...(previousCallAt !== undefined ? { sincePreviousCallMs: now - previousCallAt } : {}), ...decision });
     return decision;
   }
 
@@ -46,10 +54,12 @@ export class MediaFrameCapacity extends DurableObject<Env> {
   }
 
   release(id: string): void {
+    this.lastCallAt = Date.now();
     if (TOKEN.test(id)) this.ctx.storage.sql.exec('DELETE FROM leases WHERE id = ?', id);
   }
 
   throttle(): void {
+    this.lastCallAt = Date.now();
     this.ctx.storage.sql.exec('INSERT INTO cooldown (id, until) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET until = MAX(until, excluded.until)', Date.now() + 30_000);
   }
 }
