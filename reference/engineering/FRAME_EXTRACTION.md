@@ -713,3 +713,21 @@ Worker `4cbbf59f-9efa-4b7d-b65a-b02bf3fcfe8b` can now repeat the same range once
 | [Second replay](https://video2ctx.dev/dashboard/sessions/a6c0a25e-9202-4680-8575-02ebd535172e) | 9.806 s | 17.736 s | 22.250 s |
 
 Both replays encountered format 298 picture-range denials and completed all three timestamps through format 18 in Media. Every 640 × 360 JPEG was byte-identical to the previous Media-only run. Neither replay encountered a 302. A local regression test forced a redirect on an actual MP4 picture range and verified identical clip bytes. Production latency savings specifically attributable to following a 302 remain unmeasured.
+
+## First coordinator call after inactivity, November 3
+
+Production Worker `b77488ef-3cb0-471d-8098-a4128af399a7` logs an instance ID and `firstCallAfterConstruction` on each lease decision. Any acquire, release, or throttle counts as a call on that in-memory instance. A new instance can also be created after deployment or eviction. The marker alone cannot distinguish those causes.
+
+The experiment used one primer, waited 75 seconds after it completed, then requested the same three fresh live-crowd frames. The warm replay started in a separate session when the idle replay had finished capture. Both received a first-attempt grant and decoded all three frames through Media. Lease IDs identified the coordinator logs, and the callee's `jsrpc.caller_span_id` identified the matching caller span. Both ends of both calls ran in AMS.
+
+| Measurement | [After idle](https://video2ctx.dev/dashboard/sessions/036c97b4-878e-48c1-a7e7-8273b803ac6a) | [While warm](https://video2ctx.dev/dashboard/sessions/a0ddc950-f236-4f70-b0ef-f5dbb6c20e82) |
+| --- | ---: | ---: |
+| First call since construction | Yes | No, same instance |
+| Caller timer for batch admission | 783 ms | 70 ms |
+| Caller span start to coordinator method start | 760 ms | 26 ms |
+| Coordinator method span, millisecond resolution | 0 ms | 0 ms |
+| Coordinator method end to caller span end | 23 ms | 44 ms |
+| First completed frame tool result | 24.283 s | 19.104 s |
+| Final answer | 31.323 s | 24.129 s |
+
+The first-call penalty in this pair was concentrated before method entry. The traces do not split that interval into routing, dispatch, or object activation. The earlier 2.618 s incident predates these spans. The experiment used full trace capture temporarily. Production trace sampling was then set to 10% and verified through the script settings API.
