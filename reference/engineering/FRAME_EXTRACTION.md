@@ -7,7 +7,7 @@ An agent uses storyboards to find relevant moments, then asks for individual vid
 `YOUTUBE_FRAMES_BACKEND=media` selects Cloudflare Media Transformations for supported
 indexed H.264 MP4 inputs. `container` restores the original FFmpeg-only path. The
 Worker resolves source metadata and byte ranges through the configured proxy pool,
-reads the MP4 index once, and packages a short independently decodable clip for each
+uses the MP4 index to locate the selected keyframe groups, and packages a short independently decodable clip for each
 requested timestamp. Cloudflare decodes that clip into a JPEG. The original video
 can exceed Media's input duration limit because only the short clip is submitted.
 
@@ -124,6 +124,21 @@ and replaces its track box with same-size padding in a private index copy. Video
 sample offsets, seek times and source media bytes keep their original values.
 A unique direct media handler must identify the track as audio. Ambiguous tracks
 remain in the combined count. Fragmented movies retain the original combined guard.
+For progressive indexes larger than 64 KiB, the Worker first tries a bounded
+seek for self-contained AVC video with one sample description, explicit sync
+samples, decode-order presentation and no video edit list. It reads box headers
+in 16 KiB pages, uses compact timing, keyframe and chunk-mapping tables, and
+reads only the chunk offsets and sample sizes needed to locate a selected
+keyframe group. Variable decode durations and 32- or 64-bit chunk offsets are
+supported. A selected group's first chunk may require scanning preceding sizes
+in that chunk. A lookup handles at most 50,000 such sizes, 50,000 compact table
+entries in aggregate and 1,000 selected samples. Offset and size declarations
+must fit their boxes and selected media must fit the file and range budget.
+
+This path can address more than 50,000 stored samples because it never creates
+a per-frame index for the entire track. B-frame composition tables, edit lists
+and other unsupported sparse layouts retain the established bounded parser and
+FFmpeg recovery. The 2 MiB movie-index ceiling applies before either path.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
 fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
@@ -619,8 +634,8 @@ replaces a specific per-frame failure reason with `unsupported`.
 
 For example, a progressive movie with 24,000 video samples and 37,816 audio
 samples can now use the managed decoder. MP4Box receives only the video table.
-A track with more than 50,000 declared samples still falls back, including an
-audio track that would otherwise be discarded. Box, table, range, clip and
+The full-index parser still rejects a track with more than 50,000 declared samples.
+The sparse reader can handle a larger logical count within its bounded lookup windows. Box, table, range, clip and
 decoder admission limits remain enforced.
 
 The 90-second abandoned-work lease and awaited release RPCs remain conservative
@@ -658,3 +673,16 @@ The first row measures the complete frame tool, including previews. The second m
 The parser replay showed the same scenes and scoreboard states at each timestamp. Its first frame at 61.397 s dropped from 854 × 480 to 640 × 360 because progressive format 18 succeeded before the alternate 480p source was tried. The other five kept their original resolution. [Before](https://video2ctx.dev/dashboard/sessions/7a385092-3eb7-4182-82f2-0595777679ee) · [After](https://video2ctx.dev/dashboard/sessions/6b54f4e0-2cc4-4d84-ab00-5f01832a6490)
 
 On Worker `0de6cb10-b2f9-4bb5-b471-cc7a6ffb426a`, all five fresh batches returned six Media frames. Coordinator logs confirmed first grants whose replies arrived at 2.098, 2.258 and 2.444 seconds. Twelve refreshed JPEGs at identical timestamps were byte-identical to their pre-admission-change Media outputs, six at 720p and six at 360p. [Control](https://video2ctx.dev/dashboard/sessions/2ccaac80-e687-4490-9662-1bdcfa3b0342) · [720p refresh](https://video2ctx.dev/dashboard/sessions/69f10b3c-c232-45a7-a2c1-075a3d0db1fc) · [360p refresh](https://video2ctx.dev/dashboard/sessions/d3cc6ad1-9e07-497a-9d2b-e7edd0609784)
+
+## Progressive timestamp lookup verification, November 3
+
+Worker `55e6ef35-4b8c-46d1-8d69-54cc29213f41` served both production replays. Each requested a fresh capture at exactly the three earlier timestamps, with a maximum width of 1280. Each catalog lookup missed. The preferred fragmented source still failed on picture ranges. Previously FFmpeg recovered all six frames from progressive format 18. With the sparse reader, Cloudflare Media decoded all six from that same 640 × 360 source, with zero FFmpeg attempts.
+
+| Video and timestamps (seconds) | Video samples | Provider retrieval, before / after | Complete answer, before / after |
+| --- | ---: | ---: | ---: |
+| Stanford, 271.137 / 1358.137 / 2445.137 | 81,520 | 23.253 / 14.724 s | 47.179 / 35.551 s |
+| Live crowd, 366.137 / 1831.137 / 3295.137 | 109,849 | 20.323 / 10.764 s | 42.197 / 28.682 s |
+
+Provider retrieval includes capture and storage. It excludes visual analysis and preview generation. The complete frame-tool times were 24.415 / 15.691 s and 21.230 / 14.716 s respectively. The live-crowd replay included inline analysis in its tool time. These are individual runs. [Stanford baseline](https://video2ctx.dev/dashboard/sessions/d9ea4624-6694-4f1f-a5c2-bbcbace40494) · [Stanford replay](https://video2ctx.dev/dashboard/sessions/6a173955-3cdd-4f41-8647-f725e6e95365) · [Live-crowd baseline](https://video2ctx.dev/dashboard/sessions/5e823074-7475-4317-83b4-5ef9136d5d13) · [Live-crowd replay](https://video2ctx.dev/dashboard/sessions/286ba1db-d449-4948-988d-d348d3d7484b)
+
+Each before/after JPEG pair showed the same slide or chess position at the same resolution. Full-frame SSIM ranged from 0.9921 to 0.9975 for Stanford and 0.9819 to 0.9826 for live crowd. In a separate local test, five seeks in a 30-minute H.264/AAC file with 54,000 video samples produced identical RGB pixels to independent FFmpeg seeks. The same checks passed with the index at the front and at the tail.

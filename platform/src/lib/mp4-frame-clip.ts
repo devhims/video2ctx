@@ -1,31 +1,8 @@
 import { createFile, DataStream, Endianness, MP4BoxBuffer } from 'mp4box';
-import type { ExtractionAttempt } from './extraction-diagnostics';
-import { FrameMediaError } from './frame-media-io';
-
-export type Mp4RangeReader = (offset: number, length: number) => Promise<Uint8Array<ArrayBuffer>>;
-const MAX_INDEX = 2 * 1024 * 1024;
-// Bound each discarded track and the combined sample tables passed to MP4Box.
-const MAX_SAMPLES = 50_000;
-const MAX_RANGE = 4 * 1024 * 1024;
-type TrackKind = 'audio' | 'video';
-type Mp4Guard = NonNullable<ExtractionAttempt['events'][number]['mp4Guard']>;
-export class Mp4GuardError extends FrameMediaError {
-  constructor(readonly mp4Guard: Mp4Guard, readonly declaredCount?: number, readonly trackKind?: TrackKind) { super('unsupported'); }
-}
-const unsupported = (guard: Mp4Guard, count?: number, trackKind?: TrackKind): never => { throw new Mp4GuardError(guard, count, trackKind); };
-const integer = (n: number) => Number.isSafeInteger(n) && n >= 0;
-const typeAt = (bytes: Uint8Array, offset: number) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
-
-function boxAt(bytes: Uint8Array, offset: number, remaining: number) {
-  if (offset + 8 > bytes.length) return unsupported('box_layout');
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const short = view.getUint32(offset);
-  const header = short === 1 ? 16 : 8;
-  if (offset + header > bytes.length) return unsupported('box_layout');
-  const size = short === 1 ? Number(view.getBigUint64(offset + 8)) : short === 0 ? remaining : short;
-  if (!integer(size) || size < header || size > remaining) return unsupported('box_layout');
-  return { type: typeAt(bytes, offset + 4), size, header };
-}
+import { boxAt, integer, MAX_INDEX, MAX_RANGE, MAX_SAMPLES, typeAt, unsupported,
+  type Mp4RangeReader, type TrackKind } from './mp4-frame-index';
+import { openSparseProgressiveIndex } from './mp4-progressive-seek';
+export { Mp4GuardError, type Mp4RangeReader } from './mp4-frame-index';
 
 /** Reject oversized table declarations before MP4Box allocates per-sample structures. */
 function inspectIndex(bytes: Uint8Array, discardedTracks?: ReadonlySet<number>) {
@@ -151,6 +128,17 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
     }
     if (box.type === 'moov') {
       if (box.size > MAX_INDEX) unsupported('index_size', box.size);
+      // Small indexes already fit the source discovery prefix. For larger regular
+      // movies try bounded on-demand table reads before the legacy capped parser.
+      if (ftyp && box.size > 64 * 1024) {
+        const sparse = await openSparseProgressiveIndex(read, offset, box.size, size);
+        if (sparse) return { duration: sparse.duration, width: sparse.width, height: sparse.height,
+          async clip(time: number) {
+            const samples = await sparse.groupAt(time);
+            return remuxGroup(samples, read, size, time * sparse.timescale, sparse.timescale,
+              sparse.width, sparse.height, sparse.avcConfig);
+          } };
+      }
       index = await read(offset, box.size);
       if (index.byteLength !== box.size) unsupported('box_layout');
       const audio = progressiveAudioTracks(index);
@@ -255,43 +243,51 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
       const chosen = activeSamples.slice(first, end);
       if (chosen.length > 1000) return unsupported('clip_layout');
       const start = chosen[0]!;
-      if (chosen.some(s => s.description_index !== start.description_index || !integer(s.offset) || !integer(s.size)
-        || s.size === 0 || s.offset + s.size > clipSize || !integer(s.duration) || s.duration === 0
-        || !integer(s.dts) || !integer(s.cts))) return unsupported('clip_layout');
-      const lo = Math.min(...chosen.map(s => s.offset)), hi = Math.max(...chosen.map(s => s.offset + s.size));
-      const clipEnd = Math.max(...chosen.map(s => s.cts + s.duration));
-      if (hi - lo > MAX_RANGE || wanted >= clipEnd || (clipEnd - start.dts) / track.timescale > 30) return unsupported('clip_layout');
-      const payload = await clipRead(lo, hi - lo);
-      if (payload.byteLength !== hi - lo) return unsupported('clip_layout');
+      if (chosen.some(s => s.description_index !== start.description_index)) return unsupported('clip_layout');
       // MP4Box's base sample-entry type omits codec-specific children.
       const configBox = 'avcC' in start.description ? start.description.avcC : undefined;
       if (!configBox || typeof configBox !== 'object' || !('write' in configBox) || typeof configBox.write !== 'function') return unsupported('clip_layout');
       const config = new DataStream(undefined, 0, Endianness.BIG_ENDIAN);
       configBox.write(config);
       const avcConfig = new Uint8Array(config.buffer.slice(8));
-      const lengthBytes = (avcConfig[4]! & 3) + 1;
-      const firstPacket = payload.subarray(start.offset - lo, start.offset - lo + start.size);
-      let idr = false;
-      for (let at = 0; at < firstPacket.length;) {
-        if (at + lengthBytes > firstPacket.length) return unsupported('clip_layout');
-        let length = 0;
-        for (let j = 0; j < lengthBytes; j++) length = length * 256 + firstPacket[at++]!;
-        if (!length || at + length > firstPacket.length) return unsupported('clip_layout');
-        if ((firstPacket[at]! & 31) === 5) idr = true;
-        at += length;
-      }
-      if (!idr) return unsupported('clip_layout');
-      const output = createFile();
-      const id = output.addTrack({ type: 'avc1', timescale: track.timescale, width: track.video!.width,
-        height: track.video!.height, avcDecoderConfigRecord: config.buffer.slice(8),
-        duration: clipEnd - start.dts, media_duration: clipEnd - start.dts });
-      for (const sample of chosen) output.addSample(id, payload.slice(sample.offset - lo, sample.offset - lo + sample.size), {
-        duration: sample.duration, dts: sample.dts - start.dts, cts: sample.cts - start.dts, is_sync: sample.is_sync,
-      });
-      const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(output.getBuffer().buffer);
-      if (bytes.byteLength > MAX_RANGE + 256 * 1024) return unsupported('clip_layout');
-      // The decoder normalizes the first presentation timestamp, which can differ from DTS with B-frames.
-      return { bytes, time: (wanted - start.cts) / track.timescale, duration: (clipEnd - start.dts) / track.timescale };
+      return remuxGroup(chosen, clipRead, clipSize, wanted, track.timescale, track.video!.width, track.video!.height, avcConfig);
     },
   };
+}
+
+type ClipSample = { size: number; offset: number; duration: number; dts: number; cts: number; is_sync: boolean };
+
+async function remuxGroup(chosen: ClipSample[], clipRead: Mp4RangeReader, clipSize: number,
+  wanted: number, timescale: number, width: number, height: number, avcConfig: Uint8Array) {
+  const start = chosen[0]!;
+  if (chosen.some(s => !integer(s.offset) || !integer(s.size)
+    || s.size === 0 || s.offset + s.size > clipSize || !integer(s.duration) || s.duration === 0
+    || !integer(s.dts) || !integer(s.cts))) return unsupported('clip_layout');
+  const lo = Math.min(...chosen.map(s => s.offset)), hi = Math.max(...chosen.map(s => s.offset + s.size));
+  const clipEnd = Math.max(...chosen.map(s => s.cts + s.duration));
+  if (hi - lo > MAX_RANGE || wanted >= clipEnd || (clipEnd - start.dts) / timescale > 30) return unsupported('clip_layout');
+  const payload = await clipRead(lo, hi - lo);
+  if (payload.byteLength !== hi - lo) return unsupported('clip_layout');
+  const lengthBytes = (avcConfig[4]! & 3) + 1;
+  const firstPacket = payload.subarray(start.offset - lo, start.offset - lo + start.size);
+  let idr = false;
+  for (let at = 0; at < firstPacket.length;) {
+    if (at + lengthBytes > firstPacket.length) return unsupported('clip_layout');
+    let length = 0;
+    for (let j = 0; j < lengthBytes; j++) length = length * 256 + firstPacket[at++]!;
+    if (!length || at + length > firstPacket.length) return unsupported('clip_layout');
+    if ((firstPacket[at]! & 31) === 5) idr = true;
+    at += length;
+  }
+  if (!idr) return unsupported('clip_layout');
+  const output = createFile();
+  const id = output.addTrack({ type: 'avc1', timescale, width, height, avcDecoderConfigRecord: Uint8Array.from(avcConfig).buffer,
+    duration: clipEnd - start.dts, media_duration: clipEnd - start.dts });
+  for (const sample of chosen) output.addSample(id, payload.slice(sample.offset - lo, sample.offset - lo + sample.size), {
+    duration: sample.duration, dts: sample.dts - start.dts, cts: sample.cts - start.dts, is_sync: sample.is_sync,
+  });
+  const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(output.getBuffer().buffer);
+  if (bytes.byteLength > MAX_RANGE + 256 * 1024) return unsupported('clip_layout');
+  // The decoder normalizes the first presentation timestamp, which can differ from DTS with B-frames.
+  return { bytes, time: (wanted - start.cts) / timescale, duration: (clipEnd - start.dts) / timescale };
 }
