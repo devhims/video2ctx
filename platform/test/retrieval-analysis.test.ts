@@ -100,6 +100,8 @@ describe('retrieval with optional analysis', () => {
     ctx.timestampedFrameQuestion = 'What color is the scoreboard?';
     ctx.getEvidence = () => [{ packetId: 'memory:video', kind: 'youtube_video', sources: [{ id: 'v', provider: 'youtube', kind: 'video', videoId }],
       artifacts: [{ type: 'youtube_video_metadata', title: 'Video', data: { id, durationSeconds: seconds } }], excerpts: [], usage: [], warnings: [] }];
+    ctx.executeEvidenceTool = execution => execution.toolName === 'get_video'
+      ? Promise.resolve(ctx.getEvidence!()[0]!) : execution.execute();
     ctx.provider.frames = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
     ctx.analyzeFrames = vi.fn(async () => ({ findings: [{ observation: 'Green scoreboard.', timestampsMs: [1000] }], warnings: [] }));
     const work = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'capture');
@@ -112,6 +114,36 @@ describe('retrieval with optional analysis', () => {
       expect(ctx.provider.frames).not.toHaveBeenCalled();
       expect(ctx.analyzeFrames).not.toHaveBeenCalled();
     }
+  });
+
+  test.each([false, true])('loads missing duration through the evidence tool before reserving frame credits (live=%s)', async isLive => {
+    const { ctx } = context();
+    ctx.maxVideoSeconds = 7200;
+    ctx.pinnedVideoId = undefined; // A topic or comparison request without a bootstrap metadata packet.
+    const tools: string[] = [];
+    ctx.executeEvidenceTool = async execution => {
+      tools.push(execution.toolName);
+      if (execution.toolName === 'get_video') return { packetId: 'loaded', kind: 'youtube_video', excerpts: [], warnings: [], usage: [],
+        sources: [{ id: 'v', provider: 'youtube', kind: 'video', videoId }],
+        artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, isLive, durationSeconds: 100 } }] };
+      return execution.execute();
+    };
+    ctx.provider.frames = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
+    const task = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'frame');
+    if (isLive) {
+      await expect(task).rejects.toThrow(/live broadcast/);
+      expect(ctx.provider.frames).not.toHaveBeenCalled();
+    } else { await task; expect(ctx.provider.frames).toHaveBeenCalledOnce(); }
+    expect(tools).toEqual(['get_video', 'get_video_frames']);
+  });
+
+  test('does not inherit a pinned question for exploratory captures', async () => {
+    const { ctx } = context();
+    ctx.timestampedFrameQuestion = 'Read the clock';
+    ctx.provider.frames = async () => ({ value: frames, cacheStatus: 'hit', assetVersions: [version] });
+    ctx.analyzeFrames = vi.fn();
+    await executeGetVideoFrames({ videoId, timestampsMs: [1000], selections: [{ timestampMs: 1000, basis: 'exploratory', evidenceIds: [] }] }, ctx, 'extra');
+    expect(ctx.analyzeFrames).not.toHaveBeenCalled();
   });
 
   test('retrieval-only calls never start inference and use a different semantic key for each analysis question', async () => {

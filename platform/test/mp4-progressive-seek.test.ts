@@ -1,3 +1,4 @@
+import { openSparseProgressiveIndex } from '../src/lib/mp4-progressive-seek';
 import { openMp4FrameSource } from '../src/lib/mp4-frame-clip';
 
 function words(...values: number[]) {
@@ -145,3 +146,26 @@ test('an edit list and B-frame timing in a large index retain the established pa
   const mdat = (bytes: Uint8Array) => Buffer.from(bytes).subarray(Buffer.from(bytes).indexOf('mdat') + 4);
   expect(mdat(current.bytes)).toEqual(mdat(old.bytes));
 });
+
+test('a later first sync sample only rules out seeks preceding it', async () => {
+  const { file, indexAt, open } = movie();
+  file.writeUInt32BE(2, file.indexOf('stss', indexAt) + 12);
+  const source = await open();
+  await expect(source.clip(0)).rejects.toMatchObject({ code: 'unsupported' });
+  expect((await source.clip(2.1)).time).toBeCloseTo(0.1);
+});
+
+test.each([[12, 1, true], [11, 1, false], [12, 0, false], [0, 1, false]] as const)(
+  'a sparse movie with audio timing (%i samples, %i ticks) uses the appropriate reader', async (samples, ticks, supported) => {
+    const { file, indexAt, indexSize } = movie();
+    const handler = Buffer.alloc(24);
+    handler.write('soun', 8);
+    const audio = box('trak', box('mdia', box('hdlr', handler), box('minf', box('stbl',
+      box('stsz', words(0, 1, 12)), box('stts', words(0, 1, samples, ticks))))));
+    const bytes = Buffer.concat([file, audio]);
+    bytes.writeUInt32BE(indexSize + audio.length, indexAt);
+    const sparse = await openSparseProgressiveIndex(async (offset, length) => Uint8Array.from(bytes.subarray(offset, offset + length)),
+      indexAt, indexSize + audio.length, bytes.length);
+    if (supported) expect((await sparse!.groupAt(2.1))[0]?.is_sync).toBe(true);
+    else expect(sparse).toBeUndefined(); // openMp4FrameSource will apply the legacy parser's own limits.
+  });

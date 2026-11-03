@@ -732,3 +732,5 @@ The experiment used one primer, waited 75 seconds after it completed, then reque
 | Final answer | 31.323 s | 24.129 s |
 
 The first-call penalty in this pair was concentrated before method entry. The traces do not split that interval into routing, dispatch, or object activation. The earlier 2.618 s incident predates these spans. The experiment used full trace capture temporarily. Production trace sampling was then set to 10% and verified through the script settings API.
+
+The 10% trace sample applies to the whole Worker. Operators can use the lease decision's first-call marker to compare admission waits across instance lifetimes and investigate future late grants. The measured pair does not establish a latency percentile or explain the earlier 2.618 s incident. Evaluate trace volume and cost against the number of usable slow-grant traces before increasing sampling.

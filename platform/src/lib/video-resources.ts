@@ -80,6 +80,8 @@ export function resourceComplete(op: VideoResourceOperation, value: unknown): bo
 /** Age alone never triggers another fetch of a saved, complete video resource. */
 export function reusableVideoResource(op: VideoResourceOperation,
   saved: { value: unknown; freshUntil: number; complete?: boolean }, now = Date.now()): boolean {
+  // A broadcast can become a finished VOD. Reuse the live flag only for its normal metadata TTL.
+  if (op.kind === 'video' && (saved.value as { isLive?: boolean } | null)?.isLive === true && saved.freshUntil <= now) return false;
   return videoResourceKey(op)
     ? saved.complete !== false && resourceComplete(op, saved.value)
     : saved.freshUntil > now;

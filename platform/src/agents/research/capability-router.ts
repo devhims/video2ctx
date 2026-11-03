@@ -663,11 +663,17 @@ function lastResortDecision(
     if (constraints.savedOnly) {
       fill('savedOnly', true);
       fill('refreshFramesOnly', undefined);
+      fill('timestampedFrameQuestion', undefined);
       fill('refreshEvidence', undefined);
       fill('refreshDynamicData', undefined);
     }
     if (decision.answerDetail === undefined) fill('answerDetail', 'standard');
     if (decision.route !== 'finalize') {
+      if (decision.route === 'inspect_video' && !constraints.savedOnly) {
+        const matching = candidates.filter(candidate => candidate.videoId === decision.videoId ||
+          (candidate.videoId === undefined && decision.videoId === soleVideoId));
+        fill('timestampedFrameQuestion', firstValid('timestampedFrameQuestion', matching));
+      }
       if (decision.route === 'inspect_video' && constraints.refreshFramesOnly && !constraints.savedOnly) fill('refreshFramesOnly', true);
       if (constraints.refreshEvidence && !constraints.savedOnly) fill('refreshEvidence', true);
       if (constraints.refreshDynamicData && !constraints.savedOnly) fill('refreshDynamicData', true);

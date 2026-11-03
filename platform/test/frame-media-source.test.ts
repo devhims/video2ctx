@@ -62,6 +62,8 @@ test.each([200,302,403,429])('rejects HTTP %s without reading the media body', a
 });
 test('recovers a redirected picture range on the same proxy without changing the clip or resetting the batch budget', async () => {
   const { fetch } = await setup();
+  vi.mocked(normalizedProxyUrls).mockReturnValueOnce(['https://one.test', 'https://two.test', 'https://three.test']);
+  vi.mocked(planProxyOrder).mockResolvedValueOnce({ order: [2] } as Awaited<ReturnType<typeof planProxyOrder>>);
   const fixture = await readFile(new URL('./fixtures/media/indexed.mp4', import.meta.url));
   // Keep the index in the prefix, move the actual picture bytes outside it.
   const padding = Buffer.alloc(65536);
@@ -99,7 +101,9 @@ test('recovers a redirected picture range on the same proxy without changing the
     expect(next.headers.get('range')).toBe(before.headers.get('range'));
     expect(next.redirect).toBe('manual');
   }
-  expect(record).toHaveBeenCalledWith(expect.objectContaining({ status: 302, redirectAction: 'limit' }));
+  const http = record.mock.calls.map(([event]) => event).filter(event => event.stage === 'media_http');
+  expect(new Set(http.map(event => event.proxySlot))).toEqual(new Set([2]));
+  expect(new Set(http.map(event => event.redirectAction))).toEqual(new Set([undefined, 'followed', 'response', 'limit']));
   expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
   await source.close();
 });
