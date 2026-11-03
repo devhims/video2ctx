@@ -7,6 +7,7 @@ export const extractionEventSchema = z.object({
   stage: z.enum(['catalog_lookup', 'catalog_write', 'catalog_write_wait', 'player', 'player_response', 'download', 'complete', 'request', 'image_normalized',
     'caption_metadata', 'caption_retry', 'media_candidates', 'media_http', 'media_transfer', 'media_retry', 'media_retry_skipped', 'ffmpeg', 'ffmpeg_success', 'job', 'proxy', 'media_decode', 'media_admission', 'media_source']),
   failureReason: z.enum(['live_or_unconfirmed_broadcast', 'invalid_proxy_configuration', 'proxy_tunnel_failed', 'bot_challenge']).optional(),
+  redirectAction: z.enum(['followed', 'blocked', 'limit', 'response']).optional(),
   mp4Guard: z.enum(['box_layout', 'index_size', 'index_depth', 'box_count', 'compact_samples', 'absolute_offset',
     'fragment_samples', 'table_entries', 'combined_samples', 'track_samples', 'missing_index', 'fragment_index',
     'mp4_parser', 'video_track', 'display_matrix', 'multiple_edits', 'empty_edit', 'edit_rate', 'duration', 'clip_layout']).optional(),

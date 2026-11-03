@@ -13,6 +13,18 @@ function mediaUrl(value: string): string {
   return url.href;
 }
 
+// A redirect can be specific to a single byte range. Never reuse it for other reads.
+function playbackRedirect(from: string, location: string | null): string | undefined {
+  if (!location?.trim()) return;
+  try {
+    const next = new URL(location, from);
+    next.hash = '';
+    if (next.pathname === '/videoplayback' && next.href !== from) return mediaUrl(next.href);
+  } catch { /* Untrusted Location, including malformed or non-media URLs. */ }
+}
+
+const MAX_BATCH_REDIRECTS = 6;
+
 /** Construct in workerd as well as Node; redirect modes differ between runtimes. */
 export function frameMediaRangeRequest(url: string, offset: number, length: number, signal: AbortSignal): Request {
   return new Request(mediaUrl(url), { signal, redirect: 'manual', headers: {
@@ -27,7 +39,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
   if (!urls?.length) throw new FrameMediaError('source');
   const plan = await planProxyOrder(env, urls);
   const outcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
-  let totalBytes = 0;
+  let totalBytes = 0, redirectsFollowed = 0;
   for (const slot of plan.order.slice(0, 4)) {
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
@@ -77,9 +89,25 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
             signal.throwIfAborted();
             if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1 || length > 4 * 1024 * 1024) throw new FrameMediaError('budget');
             const active = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
-            const response = await frameAbortable(active, () => transport.fetch(frameMediaRangeRequest(url, offset, length, active)));
+            const fetchRange = (target: string) => frameAbortable(active, () => transport.fetch(frameMediaRangeRequest(target, offset, length, active)));
+            let response = await fetchRange(url);
             answered = true;
-            capture({ stage: 'media_http', status: response.status, formatId: candidate.formatId, proxySlot: slot });
+            const http = { stage: 'media_http', formatId: candidate.formatId };
+            if (response.status === 302) {
+              const target = playbackRedirect(url, response.headers.get('location'));
+              const follow = target && redirectsFollowed < MAX_BATCH_REDIRECTS;
+              capture({ ...http, status: 302, redirectAction: !target ? 'blocked' : follow ? 'followed' : 'limit' });
+              void response.body?.cancel().catch(() => undefined);
+              if (!follow) {
+                sourceFailed = true;
+                throw new FrameMediaError('source');
+              }
+              redirectsFollowed++;
+              response = await fetchRange(target);
+              capture({ ...http, status: response.status, redirectAction: 'response' });
+            } else {
+              capture({ ...http, status: response.status });
+            }
             if (response.status === 429) throttled = true;
             const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
             const expectedLength = discoverSize && range ? Math.min(length, Number(range[3]) - offset) : length;

@@ -6774,6 +6774,15 @@
                               "bot_challenge"
                             ]
                           },
+                          "redirectAction": {
+                            "type": "string",
+                            "enum": [
+                              "followed",
+                              "blocked",
+                              "limit",
+                              "response"
+                            ]
+                          },
                           "mp4Guard": {
                             "type": "string",
                             "enum": [
@@ -8186,6 +8195,15 @@
                                   "invalid_proxy_configuration",
                                   "proxy_tunnel_failed",
                                   "bot_challenge"
+                                ]
+                              },
+                              "redirectAction": {
+                                "type": "string",
+                                "enum": [
+                                  "followed",
+                                  "blocked",
+                                  "limit",
+                                  "response"
                                 ]
                               },
                               "mp4Guard": {
@@ -9937,6 +9955,15 @@
                               "bot_challenge"
                             ]
                           },
+                          "redirectAction": {
+                            "type": "string",
+                            "enum": [
+                              "followed",
+                              "blocked",
+                              "limit",
+                              "response"
+                            ]
+                          },
                           "mp4Guard": {
                             "type": "string",
                             "enum": [
@@ -10988,6 +11015,15 @@
                               "invalid_proxy_configuration",
                               "proxy_tunnel_failed",
                               "bot_challenge"
+                            ]
+                          },
+                          "redirectAction": {
+                            "type": "string",
+                            "enum": [
+                              "followed",
+                              "blocked",
+                              "limit",
+                              "response"
                             ]
                           },
                           "mp4Guard": {

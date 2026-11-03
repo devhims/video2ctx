@@ -60,6 +60,71 @@ test.each([200,302,403,429])('rejects HTTP %s without reading the media body', a
   await expect(openYouTubeFrameSource(env,id,640,new AbortController().signal)).rejects.toMatchObject({code:'unsupported'});
   expect(canceled).toHaveBeenCalled(); expect(close).toHaveBeenCalledOnce();
 });
+test('recovers a redirected picture range on the same proxy without changing the clip or resetting the batch budget', async () => {
+  const { fetch } = await setup();
+  const fixture = await readFile(new URL('./fixtures/media/indexed.mp4', import.meta.url));
+  // Keep the index in the prefix, move the actual picture bytes outside it.
+  const padding = Buffer.alloc(65536);
+  padding.writeUInt32BE(padding.length); padding.write('free', 4);
+  const mdat = fixture.indexOf('mdat') - 4;
+  const offsets = fixture.indexOf('stco') + 8;
+  for (let i = 0; i < fixture.readUInt32BE(offsets); i++) {
+    const at = offsets + 4 + i * 4;
+    fixture.writeUInt32BE(fixture.readUInt32BE(at) + padding.length, at);
+  }
+  const file = Buffer.concat([fixture.subarray(0, mdat), padding, fixture.subarray(mdat)]);
+  const target = 'https://r2.googlevideo.com/videoplayback?token=never-log';
+  let redirect = false;
+  fetch.mockImplementation(async input => {
+    const request = input as Request;
+    const [, first, last] = /^bytes=(\d+)-(\d+)$/.exec(request.headers.get('range')!)!;
+    if (redirect && Number(first) > 0 && request.url !== target)
+      return new Response(null, { status: 302, headers: { location: target } });
+    const end = Math.min(Number(last), file.length - 1);
+    return new Response(file.subarray(Number(first), end + 1), { status: 206,
+      headers: { 'content-range': `bytes ${first}-${end}/${file.length}` } });
+  });
+  const record = vi.fn();
+  const source = await openYouTubeFrameSource(env, id, 640, new AbortController().signal, record);
+  const control = await source.clip(2.5);
+  redirect = true;
+  for (let i = 0; i < 6; i++) expect(await source.clip(2.5)).toEqual(control);
+  await expect(source.clip(2.5)).rejects.toMatchObject({ code: 'source' });
+  expect(createWorkerProxyTransport).toHaveBeenCalledTimes(1);
+  const requests = fetch.mock.calls.map(([request]) => request as Request);
+  const forwarded = requests.filter(request => request.url === target);
+  expect(forwarded).toHaveLength(6);
+  for (const next of forwarded) {
+    const before = requests[requests.indexOf(next) - 1]!;
+    expect(next.headers.get('range')).toBe(before.headers.get('range'));
+    expect(next.redirect).toBe('manual');
+  }
+  expect(record).toHaveBeenCalledWith(expect.objectContaining({ status: 302, redirectAction: 'limit' }));
+  expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
+  await source.close();
+});
+
+test.each(['http://r2.googlevideo.com/videoplayback', 'https://r2.googlevideo.com.evil.test/videoplayback',
+  'https://user@r2.googlevideo.com/videoplayback', 'https://r2.googlevideo.com:8443/videoplayback',
+  '/login', '#loop'])('rejects an unsafe or self redirect (%s)', async location => {
+  const { fetch } = await setup();
+  fetch.mockImplementation(async () => new Response(null, { status: 302, headers: { location } }));
+  const record = vi.fn();
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal, record)).rejects.toMatchObject({ code: 'unsupported' });
+  expect(record).toHaveBeenCalledWith(expect.objectContaining({ redirectAction: 'blocked' }));
+  expect(fetch.mock.calls.every(([request]) => (request as Request).url.startsWith('https://r1.googlevideo.com/videoplayback?'))).toBe(true);
+});
+
+test.each([302, 403, 200, 206])('rejects a second hop, denial, full body or mismatched range after a redirect (%s)', async status => {
+  const { fetch } = await setup(), cancel = vi.fn();
+  fetch.mockImplementation(async input => (input as Request).url.includes('second')
+    ? new Response(new ReadableStream({ cancel }), { status, headers: { location: '?third', 'content-range': 'bytes 8-12/15' } })
+    : new Response(null, { status: 302, headers: { location: '?second' } }));
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal)).rejects.toMatchObject({ code: 'unsupported' });
+  expect(cancel).toHaveBeenCalled();
+  expect(fetch.mock.calls.some(([r]) => (r as Request).url.includes('third'))).toBe(false);
+});
+
 test('rejects signed URLs outside the known media host before any media fetch', async () => {
   const { fetch } = await setup();
   vi.mocked(loadMediaCandidateGroup).mockResolvedValue({profile:'android', candidates:[{url:'http://127.0.0.1/admin',progressive:true,mimeType:'video/mp4; codecs="avc1"'}]});
