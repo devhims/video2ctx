@@ -9,7 +9,17 @@ export const MAX_RANGE = 4 * 1024 * 1024;
 export type TrackKind = 'audio' | 'video';
 type Mp4Guard = NonNullable<ExtractionAttempt['events'][number]['mp4Guard']>;
 export class Mp4GuardError extends FrameMediaError {
-  constructor(readonly mp4Guard: Mp4Guard, readonly declaredCount?: number, readonly trackKind?: TrackKind) { super('unsupported'); }
+  constructor(readonly mp4Guard: Mp4Guard, private readonly value?: number, readonly trackKind?: TrackKind) { super('unsupported'); }
+  get diagnostic() {
+    const label = { mp4Guard: this.mp4Guard, trackKind: this.trackKind };
+    switch (this.mp4Guard) {
+      case 'file_type_size':
+      case 'index_size': return { ...label, boxBytes: this.value };
+      case 'box_count': return { ...label, boxCount: this.value };
+      case 'index_depth': return { ...label, nestingDepth: this.value };
+      default: return { ...label, declaredCount: this.value };
+    }
+  }
 }
 export const unsupported = (guard: Mp4Guard, count?: number, trackKind?: TrackKind): never => { throw new Mp4GuardError(guard, count, trackKind); };
 export const integer = (n: number) => Number.isSafeInteger(n) && n >= 0;

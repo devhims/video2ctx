@@ -170,7 +170,9 @@ Each attempt retains at most 64 events, prioritizing the first 16 and latest 48;
 run. `diagnostics.extractionDiagnosticsTruncated` is true if another attempt could
 not be stored. Normal compact responses, live activity, evidence, and model inputs
 exclude these records. Legacy responses expose the equivalent `extractionDiagnostics`
-and `extractionDiagnosticsTruncated` fields.
+and `extractionDiagnosticsTruncated` fields. Customer responses and saved frame artifacts
+show the extraction stage and outcome. Lease identifiers, shared capacity denials,
+retry delays and coordinator RPC measurements are available in the admin trace.
 
 Stored summaries exclude raw error messages, stderr, URLs, headers, credentials,
 and image bytes. Capture is best effort: a container crash or lost response can leave

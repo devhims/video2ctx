@@ -1,3 +1,4 @@
+import { eligibleDuration } from '../runtime/video-duration-limit';
 import type { CapabilityRouteDecision } from '../contracts';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
 
@@ -51,7 +52,16 @@ export function createCapabilityProvider(
     trends: (query, limit, includeAiInsights) => provider.trends(query, limit, includeAiInsights),
     video: async (videoId, options) => {
       requirePinnedVideo(videoId);
-      return await provider.video(videoId, options);
+      let result = await provider.video(videoId, options);
+      if (!decision.savedOnly && (decision.refreshFramesOnly || decision.timestampedFrameQuestion)) {
+        if ((result.cacheStatus === 'hit' || result.cacheStatus === 'stale') && !options?.refresh &&
+          !decision.refreshEvidence && !decision.refreshDynamicData && (result.value.id !== videoId ||
+          (result.value.isLive !== true && eligibleDuration(result.value.durationSeconds) === undefined))) {
+          result = await provider.video(videoId, { ...options, refresh: true });
+        }
+        if (result.value.id !== videoId) throw new Error('Metadata did not match the requested video.');
+      }
+      return result;
     },
     tracks: async (videoId) => {
       requirePinnedVideo(videoId);

@@ -42,7 +42,7 @@ export async function readAnalysisAssets(
     () => mapInBatches(versions, async (version) => {
       context.signal.throwIfAborted();
       if (
-        context.refreshEvidence &&
+        (context.refreshEvidence || (context.refreshFramesOnly && kind === 'frame')) &&
         !(context.getEvidence?.() ?? []).some(
           (packet) =>
             packet.packetId.startsWith(`packet:${context.runId}:`) &&

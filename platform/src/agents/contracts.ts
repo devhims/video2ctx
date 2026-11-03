@@ -49,6 +49,8 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     savedOnly: z.boolean().optional(),
     skill: z.enum(['verify_saved_evidence']).optional(),
     requestedEvidence: requestedEvidenceSchema.optional(),
+    refreshFramesOnly: z.boolean().optional(),
+    timestampedFrameQuestion: z.string().trim().min(1).max(500).optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
     answerDetail: answerDetailSchema.optional(),

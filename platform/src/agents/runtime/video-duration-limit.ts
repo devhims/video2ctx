@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { preferCurrentMetadata } from './conversation-metadata';
+import type { EvidencePacket } from '../contracts';
 
 // Early-access guardrail: the agent works on videos up to a configured length. A multi-hour
 // transcript with word timings is several megabytes, and the runtime copies it for every evidence
@@ -34,6 +36,20 @@ export class VideoTooLongError extends Error {
 
 export function videoTooLong(error: unknown): error is { code: 'VIDEO_TOO_LONG' } {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'VIDEO_TOO_LONG';
+}
+
+/** Only a delivered provider metadata artifact for this exact source proves eligibility.
+ * Prefer a current observation over conversation snapshots, including an unknown duration. */
+export function verifiedFrameMetadata(videoId: string, packets: readonly EvidencePacket[]) {
+  const packet = preferCurrentMetadata(packets).reverse().find(packet => packet.kind === 'youtube_video' &&
+    packet.sources.some(source => source.provider === 'youtube' && source.videoId === videoId));
+  const data = packet?.artifacts.find(artifact => artifact.type === 'youtube_video_metadata' && artifact.data.id === videoId)?.data;
+  // A prior turn's broadcast may have ended. Check its current metadata before deciding.
+  return data?.isLive === true && packet?.packetId.startsWith('memory:') ? undefined : data;
+}
+
+export function eligibleDuration(seconds: unknown) {
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 /** Throws when a transcript's last segment ends past the limit. */

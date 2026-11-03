@@ -17,6 +17,7 @@ export function sessionProvider(
   refresh = false,
   onRetrieved?: (claim: string, version: string) => void,
   assetCache?: RunAssetCache,
+  refreshFrames = refresh,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
   const remember = (result: CachedResult<unknown>, generation: number) => {
@@ -293,7 +294,7 @@ export function sessionProvider(
             const cached = await visualSpan('session_lookup', () => mapInBatches(times, async time => {
               const key = `frame:${request.videoId}:${maxWidth}:${time}`;
               signal?.throwIfAborted();
-              const hit = !(refresh && !refreshed.has(key)) && !limits?.refresh && (await store.lookup<VideoFrames>(key));
+              const hit = !(refreshFrames && !refreshed.has(key)) && !limits?.refresh && (await store.lookup<VideoFrames>(key));
               return { time, hit };
             }));
             const frameTimingsMs = { sessionLookup: Date.now() - lookupStarted, retrieval: 0, sessionPin: 0 };
@@ -307,7 +308,7 @@ export function sessionProvider(
               // Batch misses once; successful images survive even if other timestamps fail.
               const retrievalStarted = Date.now();
               fetched = await provider.frames!({ ...request, timestampsMs: missing }, signal,
-                refresh ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic,
+                refreshFrames ? {extractionTimeoutMs:limits?.extractionTimeoutMs??45_000,refresh:true} : limits, diagnostic,
                 ...(onReady ? [(value: VideoFrames) => onReady(framesSchema.parse({ ...value,
                   frames: [...hits.flatMap(result => result.value.frames), ...value.frames].sort((a, b) => a.timestampMs - b.timestampMs),
                 }))] : []));

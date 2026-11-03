@@ -79,7 +79,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
             const throttled = code === 9423 || code === '9423' || code === 'throttled';
             reason = throttled ? 'throttled' : error instanceof FrameMediaError ? error.code : stage === 'media_source' ? 'source' : 'decode';
             record({ stage: frameAdmission && !lease ? 'media_admission' : stage, ...frameAdmission,
-              ...(error instanceof Mp4GuardError ? { mp4Guard: error.mp4Guard, declaredCount: error.declaredCount, trackKind: error.trackKind } : {}),
+              ...(error instanceof Mp4GuardError ? error.diagnostic : {}),
               timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
               outcome: 'error', code: throttled ? 'RATE_LIMITED' : 'FRAME_EXTRACTION_FAILED' });
             if (throttled) await lease?.throttle();

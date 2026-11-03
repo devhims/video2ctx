@@ -1,3 +1,4 @@
+import { storedExtractionDiagnosticSchema } from '../src/lib/extraction-diagnostics';
 import { renderStructuredAnswer } from '../src/agents/structured-answer';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
 import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
@@ -78,6 +79,30 @@ describe('compact agent response', () => {
     expect(JSON.stringify(response.result)).not.toContain('extractionId');
     expect(legacyAgentRun(run)).toHaveProperty('extractionDiagnostics', run.extractionDiagnostics);
   });
+  it('projects historical admission events out of customer diagnostics and artifact copies', () => {
+    const run = completedRun();
+    const common = { stage: 'media_admission' as const, elapsedMs: 1234, outcome: 'error' as const };
+    const operator = { leaseKind: 'media-job' as const, leaseId: '00000000-0000-4000-8000-000000000002',
+      lastDenial: 'cooldown' as const, admissionState: 'refused' as const, retryAfterMs: 30000, rpcMs: 1200, rpcAttempts: 2 };
+    const attempt = { ...extractionFixture, events: [{ ...common, ...operator }] };
+    const stored = { ...attempt, toolCallId: 'frames' };
+    run.extractionDiagnostics = [stored];
+    run.result!.artifacts = ['youtube_frame_retrieval', 'youtube_frame_analysis'].map(type =>
+      ({ type, data: { videoId: attempt.videoId, extractionDiagnostics: [attempt] } }));
+    const before = structuredClone(run);
+    const compact = compactAgentRun(run, ['artifacts', 'diagnostics']);
+    const legacy = legacyAgentRun(run);
+    expect(compact.diagnostics?.extractions?.[0]?.events).toEqual([common]);
+    expect(legacy.extractionDiagnostics?.[0]?.events).toEqual([common]);
+    for (const response of [compact, legacy]) {
+      for (const key of Object.keys(operator)) expect(JSON.stringify(response)).not.toContain(`"${key}"`);
+      for (const artifact of response.result!.artifacts!)
+        expect(artifact.data).toMatchObject({ videoId: attempt.videoId, extractionDiagnostics: [{ events: [common] }] });
+    }
+    expect(storedExtractionDiagnosticSchema.parse(run.extractionDiagnostics[0])).toEqual(stored);
+    expect(run).toEqual(before);
+  });
+
   it('exposes the stored request for every run state without regenerating it', () => {
     for (const status of ['pending', 'running', 'completed', 'failed', 'cancelled'] as const) {
       const run = completedRun();
