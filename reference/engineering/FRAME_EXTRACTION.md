@@ -700,3 +700,16 @@ Worker `b6032b1c-702c-4bd2-af40-041b379b906d` served all three replays below. Ea
 | [Live crowd repeat, all Media](https://video2ctx.dev/dashboard/sessions/4dcc6111-f721-43c1-97db-acd9f0d9ddcb) | 0.683 s | 10.002 s | 18.293 s | 23.453 s |
 
 All three replays checked stored durations and produced observations in the capture call. Stanford had previously needed a separate analysis call. The live-crowd baseline already analyzed inline. Its first replay failed to fetch the final timestamp through Media after a progressive range request returned HTTP 302 and a fragmented range request returned HTTP 403. FFmpeg recovered that timestamp. All nine fresh JPEGs were 640 × 360. Eight were byte-identical to their baseline images. The FFmpeg frame had a full-image SSIM of 0.983 against its baseline.
+
+## Live-crowd range redirects, November 3
+
+In the 38.145 s live-crowd run above, Media decoded the first two timestamps from progressive format 18. A range read for 3295.137 s received HTTP 302. The reader discarded the response, and the fragmented format 298 returned HTTP 403 on its picture range. FFmpeg recovered the remaining frame. The historical trace contains neither a redirect destination nor the CDN's reason for the 403.
+
+Worker `4cbbf59f-9efa-4b7d-b65a-b02bf3fcfe8b` can now repeat the same range once at a validated HTTPS Googlevideo playback destination through the same proxy. Both requests share the original deadline. The reader allows six followed redirects across the batch and validates the final partial response as before. Diagnostics record the redirect decision and follow-up status without storing signed URLs.
+
+| Fresh production replay | Frame provider | First visual findings | Final answer |
+| --- | ---: | ---: | ---: |
+| [First replay](https://video2ctx.dev/dashboard/sessions/7fcba392-59d6-46d6-bbcf-acdaaace2005) | 14.214 s | 23.228 s | 28.474 s |
+| [Second replay](https://video2ctx.dev/dashboard/sessions/a6c0a25e-9202-4680-8575-02ebd535172e) | 9.806 s | 17.736 s | 22.250 s |
+
+Both replays encountered format 298 picture-range denials and completed all three timestamps through format 18 in Media. Every 640 × 360 JPEG was byte-identical to the previous Media-only run. Neither replay encountered a 302. A local regression test forced a redirect on an actual MP4 picture range and verified identical clip bytes. Production latency savings specifically attributable to following a 302 remain unmeasured.
