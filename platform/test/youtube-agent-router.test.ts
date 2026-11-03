@@ -1048,6 +1048,18 @@ describe('YouTube agent capability router', () => {
     expect(finalIntentMatchesRoute(decision, 'topic_research')).toBe(false);
   });
 
+  it.each([90, undefined])('reuses verified metadata for fresh images and refreshes an unknown duration (%s)', async durationSeconds => {
+    const videoId = 'abcdefghijk';
+    const video = vi.fn<YouTubeAgentProvider['video']>()
+      .mockResolvedValueOnce({ cacheStatus: 'hit', value: { id: videoId, durationSeconds } as never })
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: { id: videoId, durationSeconds: 90 } as never });
+    const provider = createCapabilityProvider(providerWith({ video }), { route: 'inspect_video', videoId, refreshFramesOnly: true });
+    expect((await provider.video(videoId)).value.durationSeconds).toBe(90);
+    expect(video).toHaveBeenNthCalledWith(1, videoId, undefined);
+    expect(video).toHaveBeenCalledTimes(durationSeconds ? 1 : 2);
+    if (!durationSeconds) expect(video).toHaveBeenNthCalledWith(2, videoId, { refresh: true });
+  });
+
   it('pins inspect_video provider calls to the classified video', async () => {
     const video = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {} as never }));
     const provider = createCapabilityProvider(providerWith({ video }), {

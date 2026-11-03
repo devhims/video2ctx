@@ -5,7 +5,7 @@ import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cach
 import { ContextHandoff, type ResearchContext } from '../runtime/context-handoff';
 import { traceFinalizationFailure } from '../runtime/finalization-trace';
 import { hasModelTimeouts, modelRequestExhaustion, setModelAttemptGuard, setModelDeadline, withModelStreamFallback, type ModelFailoverState } from '../runtime/model-failover';
-import { agentMaxVideoSeconds, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
+import { agentMaxVideoSeconds, verifiedFrameDuration, videoDurationFailure, type VideoDurationFailure } from '../runtime/video-duration-limit';
 import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-answer';
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
@@ -273,7 +273,8 @@ async function executeResearchRunWithAssets(options: {
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
 
   const upstream = decision.savedOnly ? savedOnlyProvider() : createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache) : upstream, decision);
+  const refreshFrames = decision.refreshEvidence || (decision.route === 'inspect_video' && decision.refreshFramesOnly);
+  const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache, refreshFrames) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     runModel(options.env, options.sessionAffinity, 'low', {
       ...modelMetadata,
@@ -602,6 +603,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     researchDeadlineAt: options.researchDeadlineAt,
     researchQuestion: options.message,
     refreshEvidence: options.decision.refreshEvidence,
+    refreshFramesOnly: options.decision.route === 'inspect_video' && options.decision.refreshFramesOnly,
+    timestampedFrameQuestion: options.decision.route === 'inspect_video' && !options.decision.savedOnly
+      ? options.decision.timestampedFrameQuestion : undefined,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
     getEvidence: () => [...evidence.values()],
     transcriptSelection: {
@@ -761,7 +765,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           return persist(() => trackedContext.finalize(id, input));
         },
       };
-      if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && (options.decision.refreshDynamicData || options.decision.refreshEvidence || !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title)) {
+      if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && (options.decision.refreshDynamicData || options.decision.refreshEvidence ||
+        ((options.decision.timestampedFrameQuestion || options.decision.refreshFramesOnly) && verifiedFrameDuration(options.decision.videoId, [...evidence.values()]) === undefined)
+        || !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title)) {
         try {
           await executeGetVideo({ videoId: options.decision.videoId }, phaseContext, `initial-video:${options.decision.videoId}`);
         } catch { signal.throwIfAborted(); }
@@ -1157,7 +1163,7 @@ async function runUnifiedFinalizer(options: {
           evidenceOmittedFromContext: prepared.omitted,
           applicationDurationNotice: currentDurationNotice() || undefined,
           providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
-            ? { ...failure, message: 'VIDEO_TOO_LONG: Transcript retrieval exceeded the configured Agent duration limit.' } : failure),
+            ? { ...failure, message: 'VIDEO_TOO_LONG: The video exceeded the configured Agent duration limit.' } : failure),
           inspectionRecords,
           validationFeedback: feedback,
         })}, ...(usesSavedEvidenceSkill(options.decision)

@@ -5,7 +5,7 @@ import { evidenceFallback, hasContentEvidence } from './evidence-fallback';
 
 /** Keep unsupported requested videos visible without tainting successful replacements. */
 export function durationLimitNotice(
-  failures: readonly { durationLimit?: VideoDurationFailure }[],
+  failures: readonly { durationLimit?: VideoDurationFailure; toolName?: string }[],
   packets: readonly EvidencePacket[],
   requestedVideoIds?: readonly string[],
 ): string {
@@ -29,7 +29,9 @@ export function durationLimitNotice(
     const subject = requestedVideoIds?.length === 1 ? 'This video' : `Video https://www.youtube.com/watch?v=${failure.videoId}`;
     const duration = exact ? `${subject} is ${formatVideoDuration(knownDuration)} long.`
       : `The transcript for ${requestedVideoIds?.length === 1 ? 'this video' : `https://www.youtube.com/watch?v=${failure.videoId}`} reaches ${formatVideoDuration(failure.durationSeconds)}.`;
-    return `${duration} video2ctx currently supports Agent processing for videos up to ${formatVideoLimit(failure.limitSeconds)}. I could not analyze this video's transcript because it exceeds that limit.`;
+    const activity = failures.some(item => item.durationLimit?.videoId === failure.videoId && item.toolName === 'get_video_frames')
+      ? 'capture frames from this video' : "analyze this video's transcript";
+    return `${duration} video2ctx currently supports Agent processing for videos up to ${formatVideoLimit(failure.limitSeconds)}. I could not ${activity} because it exceeds that limit.`;
   }).join('\n\n');
 }
 

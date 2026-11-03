@@ -7666,6 +7666,14 @@
                               ]
                             }
                           },
+                          "refreshFramesOnly": {
+                            "type": "boolean"
+                          },
+                          "timestampedFrameQuestion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
                           "refreshEvidence": {
                             "type": "boolean"
                           },
@@ -9406,6 +9414,14 @@
                             "comments"
                           ]
                         }
+                      },
+                      "refreshFramesOnly": {
+                        "type": "boolean"
+                      },
+                      "timestampedFrameQuestion": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
                       },
                       "refreshEvidence": {
                         "type": "boolean"

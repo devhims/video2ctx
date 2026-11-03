@@ -52,6 +52,8 @@ export interface AgentToolContext {
   /** Longest video, in seconds, the agent will search for, retrieve or analyze. */
   maxVideoSeconds?: number;
   refreshEvidence?: boolean;
+  refreshFramesOnly?: boolean;
+  timestampedFrameQuestion?: string;
   session?: import('../../runtime/session-evidence').SessionAccess;
   assetCache?: RunAssetCache;
   /** Public activity only; never include analysis prompts or content. */

@@ -88,6 +88,32 @@ describe('retrieval with optional analysis', () => {
     if (kind === 'transcript') expect(evidencePacketForModel(packet).transcriptAnalysis?.summary).toBe('Revenue grew.');
   });
 
+  test.each([
+    { seconds: 7200, id: videoId, allowed: true },
+    { seconds: 7201, id: videoId, allowed: false },
+    { seconds: undefined, id: videoId, allowed: false },
+    { seconds: 300, id: 'another_vid', allowed: false },
+  ])('checks duration before fresh capture and inline analysis ($id, $seconds)', async ({ seconds, id, allowed }) => {
+    const { ctx } = context();
+    ctx.maxVideoSeconds = 7200;
+    ctx.refreshFramesOnly = true;
+    ctx.timestampedFrameQuestion = 'What color is the scoreboard?';
+    ctx.getEvidence = () => [{ packetId: 'memory:video', kind: 'youtube_video', sources: [{ id: 'v', provider: 'youtube', kind: 'video', videoId }],
+      artifacts: [{ type: 'youtube_video_metadata', title: 'Video', data: { id, durationSeconds: seconds } }], excerpts: [], usage: [], warnings: [] }];
+    ctx.provider.frames = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
+    ctx.analyzeFrames = vi.fn(async () => ({ findings: [{ observation: 'Green scoreboard.', timestampsMs: [1000] }], warnings: [] }));
+    const work = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'capture');
+    if (allowed) {
+      expect((await work).excerpts[0]?.text).toContain('Green scoreboard');
+      expect(ctx.provider.frames).toHaveBeenCalledWith(expect.anything(), ctx.signal, expect.objectContaining({ refresh: true }), expect.anything(), expect.anything());
+      expect(ctx.analyzeFrames).toHaveBeenCalledWith(expect.objectContaining({ focus: ctx.timestampedFrameQuestion }));
+    } else {
+      await expect(work).rejects.toThrow(seconds === 7201 ? /2 hours/ : /Verified video duration/);
+      expect(ctx.provider.frames).not.toHaveBeenCalled();
+      expect(ctx.analyzeFrames).not.toHaveBeenCalled();
+    }
+  });
+
   test('retrieval-only calls never start inference and use a different semantic key for each analysis question', async () => {
     const { ctx } = context();
     ctx.provider.frames = async () => ({ value: frames, cacheStatus: 'hit', assetVersions: [version] });
