@@ -141,12 +141,12 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
     for (let i = 0; i < timing.count; i++) {
       const n = clock.getUint32(i * 8),
         ticks = clock.getUint32(i * 8 + 4);
-      if (!n || !ticks) return unsupported('box_layout');
+      if (!n || !ticks) return; // Let the guarded legacy parser handle unusual timing runs.
       if (isVideo) timingRuns.push({ sample: timedSamples, time: durationTicks, ticks });
       timedSamples += n;
       durationTicks += n * ticks;
     }
-    if (timedSamples !== count || !integer(durationTicks)) return unsupported('track_samples', count);
+    if (timedSamples !== count || !integer(durationTicks)) return;
     // Audio never enters a parser or decoder. Its size table is skipped in place.
     if (!isVideo) continue;
     const dref = one(await children(one(minf, 'dinf')), 'dref');
@@ -196,7 +196,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
   const sync = await table(one(tables, 'stss'), 4);
   const keys = view(await bytes(sync.at, sync.count * 4));
   const key = (i: number) => keys.getUint32(i * 4) - 1;
-  if (key(0) !== 0) return unsupported('clip_layout');
+  if (key(0) < 0 || key(0) >= count) return unsupported('clip_layout');
   for (let i = 1; i < sync.count; i++)
     if (key(i) <= key(i - 1) || key(i) >= count) return unsupported('clip_layout');
 
@@ -240,6 +240,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       const wanted = seconds * timescale;
       const timing = timingRuns[floorIndex(timingRuns.length, (i) => timingRuns[i]!.time <= wanted)]!;
       const target = timing.sample + Math.floor((wanted - timing.time) / timing.ticks);
+      if (target < key(0)) return unsupported('clip_layout');
       const k = floorIndex(sync.count, (i) => key(i) <= target);
       const first = key(k),
         stop = k + 1 < sync.count ? key(k + 1) : count;
