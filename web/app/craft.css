@@ -127,29 +127,6 @@ html:has(.craft) {
   gap: clamp(var(--space-md), 3vw, var(--space-2xl));
 }
 
-.craft-nav-identity {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.craft-nav-product-hunt {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-
-.craft-nav-product-hunt img {
-  display: block;
-  width: auto;
-  height: 2.25rem;
-}
-
-@media (max-width: 720px) {
-  .craft-nav-product-hunt {
-    display: none;
-  }
-}
-
 .craft-nav-brand {
   justify-self: start;
   color: var(--ink);
