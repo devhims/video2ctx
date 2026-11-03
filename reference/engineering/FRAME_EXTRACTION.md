@@ -81,14 +81,29 @@ The `MediaFrameCapacity` Durable Object stores only random lease IDs, start time
 and cooldowns. One shared account quota allows eight Media batches, eight active
 Media calls, and at most 24 Media call starts in any 15-second window. These are
 our conservative rollout settings, not Cloudflare's published quota. Each batch
-prepares and decodes at most two frames simultaneously. Admission waits at most
-two seconds. Eight admitted batches do not guarantee eight batches decoding at
+prepares and decodes at most two frames simultaneously. The first Media batch
+lease RPC may take up to four seconds to reply, within the existing Media deadline.
+For example, a grant received at 2.618 seconds admits that batch. An explicit
+refusal can retry only within the original two seconds from the start of the
+request. Decoder and FFmpeg lease requests also keep their two-second budget. Eight admitted batches do not guarantee eight batches decoding at
 once, and admission is not a fair queue. The rate limit and admission timeout
 can still constrain bursts; sustained-load tuning remains outstanding. A Media 9423 error or HTTP 429 applies a 30-second shared cooldown.
 FFmpeg recovery has a separate two-job limit, matching the existing container pool.
 Completed or failed calls retain their rate accounting. Leases expire after 90
 seconds if a caller disappears; uncertain canceled decoder calls keep their leases.
 Admission RPC failure never bypasses the limit.
+
+Stored Media admission events carry the lease kind, random lease ID, caller RPC count
+and elapsed RPC time. An explicit denial reports the coordinator's cooldown, active
+lease limit or start-rate limit. A caller timeout distinguishes waiting for a reply
+from waiting to retry. Look up the same lease ID in the coordinator's
+`frame_lease_decision` log to see whether it granted the lease even though the
+caller had already fallen back. Sampled or missing coordinator logs leave the
+remote outcome unknown.
+
+MP4 source failures carry an allowlisted parser guard. Sample-limit failures
+include the declared count and the track kind when known. Historical `combined_samples` records with `trackKind: audio` measured the running total
+across retained tracks when the audio table was visited. These fields contain no signed URLs or media bytes.
 
 Media gets at most 20 seconds of the existing extraction budget and leaves at
 least ten seconds for recovery when that budget permits. Short-budget calls go
@@ -103,8 +118,12 @@ clip start. Regular MP4 allows a simple edit list; fragmented MP4 accepts no edi
 remove decode preroll. Other edits use FFmpeg. Fragment presentation time is normalized using the first fragment header,
 without downloading that fragment's video body. Other
 formats and uncertain broadcasts use the existing container path. Parser work is
-bounded to a 2 MiB index and 50,000 declared samples across tracks. This can send
-longer progressive videos to FFmpeg, especially when they contain audio tracks.
+bounded to a 2 MiB index and 50,000 declared samples across the tracks MP4Box receives.
+For a progressive movie, the Worker validates each recognized audio track separately
+and replaces its track box with same-size padding in a private index copy. Video
+sample offsets, seek times and source media bytes keep their original values.
+A unique direct media handler must identify the track as audio. Ambiguous tracks
+remain in the combined count. Fragmented movies retain the original combined guard.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
 fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
@@ -598,12 +617,11 @@ this same capacity classification; caller cancellation is preserved. Capacity an
 responses retain the most recent extraction ID, and source exhaustion no longer
 replaces a specific per-frame failure reason with `unsupported`.
 
-Progressive MP4 preparation inspects the source index before building a short
-clip. The 50,000-sample safety limit includes both audio and video sample tables.
-For example, 30 fps video plus about 43 AAC packets per second reaches the cap at
-roughly 11 minutes. The threshold varies with encoding. This is an application
-parser bound, not a duration limit on the clip sent to Cloudflare Media. Longer
-progressive inputs may therefore require FFmpeg even for a short requested range.
+For example, a progressive movie with 24,000 video samples and 37,816 audio
+samples can now use the managed decoder. MP4Box receives only the video table.
+A track with more than 50,000 declared samples still falls back, including an
+audio track that would otherwise be discarded. Box, table, range, clip and
+decoder admission limits remain enforced.
 
 The 90-second abandoned-work lease and awaited release RPCs remain conservative
 choices. The Media response API exposes no abort parameter; a local timeout does
@@ -624,3 +642,19 @@ public API responses retain their existing persistence guarantee. A save failure
 rejects the combined result; an analyst failure returns saved handles with an
 explicit retry warning. See [session evidence](SESSION_EVIDENCE.md#retrieval-and-analysis-in-one-call)
 for deletion fencing, billing, coalesced callers and test coverage.
+
+## November 3 production verification
+
+The parser and admission changes were deployed separately. The timings below compare each change with the Worker version immediately preceding it.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Difficult video, same six timestamps | Frame tool 30.658 s. Media supplied one 480p frame and FFmpeg supplied five 360p frames. | Frame tool 14.684 s. Media supplied all six at 360p. A second uncached batch took 14.690 s. |
+| Control video, late first grant | The caller timed out at 2.000 s. Provider retrieval took 16.069 s through FFmpeg, yielding six 360p frames. | The caller accepted the grant at 2.258 s. Provider retrieval took 12.971 s through Media, yielding six 720p frames. |
+| Control video, complete answer | 32.305 s | 30.659 s |
+
+The first row measures the complete frame tool, including previews. The second measures provider retrieval and storage, excluding analysis and previews. The uncached control selections were 36 ms apart. These individual runs establish the observed timings. A production latency percentile requires a larger sample.
+
+The parser replay showed the same scenes and scoreboard states at each timestamp. Its first frame at 61.397 s dropped from 854 × 480 to 640 × 360 because progressive format 18 succeeded before the alternate 480p source was tried. The other five kept their original resolution. [Before](https://video2ctx.dev/dashboard/sessions/7a385092-3eb7-4182-82f2-0595777679ee) · [After](https://video2ctx.dev/dashboard/sessions/6b54f4e0-2cc4-4d84-ab00-5f01832a6490)
+
+On Worker `0de6cb10-b2f9-4bb5-b471-cc7a6ffb426a`, all five fresh batches returned six Media frames. Coordinator logs confirmed first grants whose replies arrived at 2.098, 2.258 and 2.444 seconds. Twelve refreshed JPEGs at identical timestamps were byte-identical to their pre-admission-change Media outputs, six at 720p and six at 360p. [Control](https://video2ctx.dev/dashboard/sessions/2ccaac80-e687-4490-9662-1bdcfa3b0342) · [720p refresh](https://video2ctx.dev/dashboard/sessions/69f10b3c-c232-45a7-a2c1-075a3d0db1fc) · [360p refresh](https://video2ctx.dev/dashboard/sessions/d3cc6ad1-9e07-497a-9d2b-e7edd0609784)

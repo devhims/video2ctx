@@ -7,6 +7,7 @@ test('admits eight batches, rejects a ninth, and keeps FFmpeg capacity separate'
   const ids = Array.from({ length: 9 }, () => crypto.randomUUID());
   const results = await Promise.all(ids.map(id => stub.acquire(id, 'media-job')));
   expect(results.filter(r => r.admitted)).toHaveLength(8);
+  expect(results.filter(r => !r.admitted).every(r => r.denial === 'active_limit')).toBe(true);
   expect((await stub.acquire(ids[0]!, 'media-job')).admitted).toBe(true);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(true);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(true);
@@ -30,7 +31,7 @@ test('released calls still count against the sliding start-rate limit', async ()
     expect((await stub.acquire(id, 'media-frame')).admitted).toBe(true);
     await stub.release(id);
   }
-  expect(await stub.acquire(crypto.randomUUID(), 'media-frame')).toMatchObject({ admitted: false });
+  expect(await stub.acquire(crypto.randomUUID(), 'media-frame')).toMatchObject({ admitted: false, denial: 'start_limit' });
   await runInDurableObject(stub, (_instance, state) => {
     expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM starts').one().n).toBe(24);
     state.storage.sql.exec('UPDATE starts SET at = ?', Date.now() - 15001);
@@ -41,7 +42,7 @@ test('released calls still count against the sliding start-rate limit', async ()
 test('throttling persists a cooldown that leaves FFmpeg recovery available', async () => {
   const stub = env.MEDIA_FRAME_CAPACITY.getByName('cooldown');
   await stub.throttle();
-  expect((await stub.acquire(crypto.randomUUID(), 'media-job')).admitted).toBe(false);
+  expect(await stub.acquire(crypto.randomUUID(), 'media-job')).toMatchObject({ admitted: false, denial: 'cooldown' });
   expect((await stub.acquire(crypto.randomUUID(), 'media-frame')).admitted).toBe(false);
   expect((await stub.acquire(crypto.randomUUID(), 'ffmpeg-job')).admitted).toBe(true);
   await runInDurableObject(stub, (_instance, state) => {

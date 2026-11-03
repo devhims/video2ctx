@@ -1,3 +1,4 @@
+import { extractionEventSchema } from '../src/lib/extraction-diagnostics';
 import { readFile } from 'node:fs/promises';
 import { getDetails } from '../../packages/all-things-youtube/src/index';
 import { loadMediaCandidateGroup } from '../../packages/youtube-skills/src/watch/media';
@@ -190,4 +191,18 @@ test.each([true, undefined])('a confirmed live video stops all proxy discovery (
   expect(createWorkerProxyTransport).toHaveBeenCalledOnce();
   expect(fetch).not.toHaveBeenCalled();
   expect(close).toHaveBeenCalledOnce();
+});
+
+
+test('retains the precise sample guard and count in the stored projection for progressive input', async () => {
+  const { fetch } = await setup();
+  const bytes = Buffer.from(await readFile(new URL('./fixtures/media/indexed.mp4', import.meta.url)));
+  bytes.writeUInt32BE(50001, bytes.indexOf('stsz') + 12);
+  fetch.mockImplementation(async () => new Response(bytes, { status: 206,
+    headers: { 'content-range': `bytes 0-${bytes.length - 1}/${bytes.length}` } }));
+  const record = vi.fn();
+  await expect(openYouTubeFrameSource(env, id, 640, new AbortController().signal, record)).rejects.toMatchObject({ code: 'unsupported' });
+  const events = record.mock.calls.map(([event]) => extractionEventSchema.parse(event));
+  expect(events).toContainEqual(expect.objectContaining({ stage: 'media_source', formatId: 18, mp4Guard: 'track_samples',
+    trackKind: 'video', declaredCount: 50001 }));
 });

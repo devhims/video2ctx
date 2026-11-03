@@ -6774,6 +6774,91 @@
                               "bot_challenge"
                             ]
                           },
+                          "mp4Guard": {
+                            "type": "string",
+                            "enum": [
+                              "box_layout",
+                              "index_size",
+                              "index_depth",
+                              "box_count",
+                              "compact_samples",
+                              "absolute_offset",
+                              "fragment_samples",
+                              "table_entries",
+                              "combined_samples",
+                              "track_samples",
+                              "missing_index",
+                              "fragment_index",
+                              "mp4_parser",
+                              "video_track",
+                              "display_matrix",
+                              "multiple_edits",
+                              "empty_edit",
+                              "edit_rate",
+                              "duration",
+                              "clip_layout"
+                            ]
+                          },
+                          "trackKind": {
+                            "type": "string",
+                            "enum": [
+                              "audio",
+                              "video"
+                            ]
+                          },
+                          "declaredCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "leaseKind": {
+                            "type": "string",
+                            "enum": [
+                              "media-job",
+                              "media-frame",
+                              "ffmpeg-job"
+                            ]
+                          },
+                          "leaseId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "admissionState": {
+                            "type": "string",
+                            "enum": [
+                              "admitted",
+                              "refused",
+                              "rpc_timeout",
+                              "retry_timeout",
+                              "rpc_error",
+                              "canceled"
+                            ]
+                          },
+                          "lastDenial": {
+                            "type": "string",
+                            "enum": [
+                              "cooldown",
+                              "active_limit",
+                              "start_limit",
+                              "kind_mismatch"
+                            ]
+                          },
+                          "rpcMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rpcAttempts": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "retryAfterMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "egress": {
                             "type": "string",
                             "enum": [
@@ -8094,6 +8179,91 @@
                                   "proxy_tunnel_failed",
                                   "bot_challenge"
                                 ]
+                              },
+                              "mp4Guard": {
+                                "type": "string",
+                                "enum": [
+                                  "box_layout",
+                                  "index_size",
+                                  "index_depth",
+                                  "box_count",
+                                  "compact_samples",
+                                  "absolute_offset",
+                                  "fragment_samples",
+                                  "table_entries",
+                                  "combined_samples",
+                                  "track_samples",
+                                  "missing_index",
+                                  "fragment_index",
+                                  "mp4_parser",
+                                  "video_track",
+                                  "display_matrix",
+                                  "multiple_edits",
+                                  "empty_edit",
+                                  "edit_rate",
+                                  "duration",
+                                  "clip_layout"
+                                ]
+                              },
+                              "trackKind": {
+                                "type": "string",
+                                "enum": [
+                                  "audio",
+                                  "video"
+                                ]
+                              },
+                              "declaredCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "leaseKind": {
+                                "type": "string",
+                                "enum": [
+                                  "media-job",
+                                  "media-frame",
+                                  "ffmpeg-job"
+                                ]
+                              },
+                              "leaseId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "admissionState": {
+                                "type": "string",
+                                "enum": [
+                                  "admitted",
+                                  "refused",
+                                  "rpc_timeout",
+                                  "retry_timeout",
+                                  "rpc_error",
+                                  "canceled"
+                                ]
+                              },
+                              "lastDenial": {
+                                "type": "string",
+                                "enum": [
+                                  "cooldown",
+                                  "active_limit",
+                                  "start_limit",
+                                  "kind_mismatch"
+                                ]
+                              },
+                              "rpcMs": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "rpcAttempts": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "retryAfterMs": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
                               },
                               "egress": {
                                 "type": "string",
@@ -9751,6 +9921,91 @@
                               "bot_challenge"
                             ]
                           },
+                          "mp4Guard": {
+                            "type": "string",
+                            "enum": [
+                              "box_layout",
+                              "index_size",
+                              "index_depth",
+                              "box_count",
+                              "compact_samples",
+                              "absolute_offset",
+                              "fragment_samples",
+                              "table_entries",
+                              "combined_samples",
+                              "track_samples",
+                              "missing_index",
+                              "fragment_index",
+                              "mp4_parser",
+                              "video_track",
+                              "display_matrix",
+                              "multiple_edits",
+                              "empty_edit",
+                              "edit_rate",
+                              "duration",
+                              "clip_layout"
+                            ]
+                          },
+                          "trackKind": {
+                            "type": "string",
+                            "enum": [
+                              "audio",
+                              "video"
+                            ]
+                          },
+                          "declaredCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "leaseKind": {
+                            "type": "string",
+                            "enum": [
+                              "media-job",
+                              "media-frame",
+                              "ffmpeg-job"
+                            ]
+                          },
+                          "leaseId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "admissionState": {
+                            "type": "string",
+                            "enum": [
+                              "admitted",
+                              "refused",
+                              "rpc_timeout",
+                              "retry_timeout",
+                              "rpc_error",
+                              "canceled"
+                            ]
+                          },
+                          "lastDenial": {
+                            "type": "string",
+                            "enum": [
+                              "cooldown",
+                              "active_limit",
+                              "start_limit",
+                              "kind_mismatch"
+                            ]
+                          },
+                          "rpcMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rpcAttempts": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "retryAfterMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "egress": {
                             "type": "string",
                             "enum": [
@@ -10718,6 +10973,91 @@
                               "proxy_tunnel_failed",
                               "bot_challenge"
                             ]
+                          },
+                          "mp4Guard": {
+                            "type": "string",
+                            "enum": [
+                              "box_layout",
+                              "index_size",
+                              "index_depth",
+                              "box_count",
+                              "compact_samples",
+                              "absolute_offset",
+                              "fragment_samples",
+                              "table_entries",
+                              "combined_samples",
+                              "track_samples",
+                              "missing_index",
+                              "fragment_index",
+                              "mp4_parser",
+                              "video_track",
+                              "display_matrix",
+                              "multiple_edits",
+                              "empty_edit",
+                              "edit_rate",
+                              "duration",
+                              "clip_layout"
+                            ]
+                          },
+                          "trackKind": {
+                            "type": "string",
+                            "enum": [
+                              "audio",
+                              "video"
+                            ]
+                          },
+                          "declaredCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "leaseKind": {
+                            "type": "string",
+                            "enum": [
+                              "media-job",
+                              "media-frame",
+                              "ffmpeg-job"
+                            ]
+                          },
+                          "leaseId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "admissionState": {
+                            "type": "string",
+                            "enum": [
+                              "admitted",
+                              "refused",
+                              "rpc_timeout",
+                              "retry_timeout",
+                              "rpc_error",
+                              "canceled"
+                            ]
+                          },
+                          "lastDenial": {
+                            "type": "string",
+                            "enum": [
+                              "cooldown",
+                              "active_limit",
+                              "start_limit",
+                              "kind_mismatch"
+                            ]
+                          },
+                          "rpcMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rpcAttempts": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "retryAfterMs": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           },
                           "egress": {
                             "type": "string",

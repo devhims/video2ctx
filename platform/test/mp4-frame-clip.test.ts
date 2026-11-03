@@ -87,3 +87,55 @@ test('rejects fragmented trims that differ from the initial presentation offset'
   await expect(openMp4FrameSource(async (offset, length) => bytes.slice(offset, offset + length), bytes.length))
     .rejects.toMatchObject({ code: 'unsupported' });
 });
+
+function box(type: string, ...parts: Buffer[]) {
+  const body = Buffer.concat(parts), header = Buffer.alloc(8);
+  header.writeUInt32BE(8 + body.length);
+  header.write(type, 4);
+  return Buffer.concat([header, body]);
+}
+
+function handler(kind: string) {
+  const data = Buffer.alloc(24);
+  data.write(kind, 8);
+  return box('hdlr', data);
+}
+
+// Append to the tail moov, preserving every original video sample offset.
+async function withTrack(handlers: Buffer[], sampleCount: number) {
+  const movie = Buffer.from(await readFile(new URL('./fixtures/media/tail-index.mp4', import.meta.url)));
+  const sizes = Buffer.alloc(12);
+  sizes.writeUInt32BE(1, 4);
+  sizes.writeUInt32BE(sampleCount, 8);
+  const track = box('trak', box('mdia', ...handlers, box('minf', box('stbl', box('stsz', sizes)))));
+  const moov = movie.indexOf('moov') - 4;
+  expect(movie.readUInt32BE(moov) + moov).toBe(movie.length);
+  movie.writeUInt32BE(movie.length - moov + track.length, moov);
+  const original = Buffer.concat([movie, track]);
+  return openMp4FrameSource(async (offset, length) => Uint8Array.from(original.subarray(offset, offset + length)), original.length);
+}
+
+test('regular MP4 can omit an audio table when the combined counts exceed the limit', async () => {
+  const source = await withTrack([handler('soun')], 49999);
+  const original = new Uint8Array(await readFile(new URL('./fixtures/media/tail-index.mp4', import.meta.url)));
+  const video = await openMp4FrameSource(async (offset, length) => original.slice(offset, offset + length), original.length);
+  const actual = await source.clip(2.5), expected = await video.clip(2.5);
+  expect(actual.time).toBe(expected.time);
+  // The muxer can set the creation time. Compare the encoded sample payload.
+  const payload = (bytes: Uint8Array) => {
+    const data = Buffer.from(bytes), at = data.indexOf('mdat');
+    expect(at).toBeGreaterThan(0);
+    return data.subarray(at + 4);
+  };
+  expect(payload(actual.bytes)).toEqual(payload(expected.bytes));
+});
+
+test('unrecognized and ambiguous tracks still share the allocation limit', async () => {
+  for (const handlers of [[handler('text')], [handler('soun'), handler('vide')]]) {
+    await expect(withTrack(handlers, 49999)).rejects.toMatchObject({ mp4Guard: 'combined_samples' });
+  }
+});
+
+test('discarded audio still undergoes the individual sample table safety checks', async () => {
+  await expect(withTrack([handler('soun')], 50001)).rejects.toMatchObject({ mp4Guard: 'track_samples', trackKind: 'audio' });
+});
