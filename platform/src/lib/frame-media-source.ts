@@ -5,7 +5,7 @@ import { createWorkerProxyTransport } from './youtube-worker-transport';
 import { FrameMediaError, frameAbortable, frameBytes } from './frame-media-io';
 import { extractionEventSchema, type ExtractionAttempt } from './extraction-diagnostics';
 import { safeErrorLog } from './http';
-import { openMp4FrameSource } from './mp4-frame-clip';
+import { openMp4FrameSource, Mp4GuardError } from './mp4-frame-clip';
 
 function mediaUrl(value: string): string {
   const url = new URL(value);
@@ -111,7 +111,8 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
             signal.throwIfAborted();
             if (throttled) break;
           } catch (error) {
-            capture({ stage: 'media_source', outcome: 'error', formatId: candidate.formatId, code: 'MEDIA_UNAVAILABLE' });
+            capture({ stage: 'media_source', outcome: 'error', formatId: candidate.formatId, code: 'MEDIA_UNAVAILABLE',
+              ...(error instanceof Mp4GuardError ? { mp4Guard: error.mp4Guard, declaredCount: error.declaredCount, trackKind: error.trackKind } : {}) });
             console.info({ event: 'media_source_candidate_failure', videoId, slot, formatId: candidate.formatId, ...safeErrorLog(error) });
             signal.throwIfAborted();
             if (error instanceof FrameMediaError && error.code === 'budget') throw error;

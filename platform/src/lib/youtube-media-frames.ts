@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { VideoFrames } from './youtube-frames-contract';
-import { acquireFrameLease } from './frame-media-admission';
+import { acquireFrameLease, type AdmissionDetails } from './frame-media-admission';
+import { Mp4GuardError } from './mp4-frame-clip';
 import { openYouTubeFrameSources } from './frame-media-source';
 import { FrameMediaError, frameAbortable, frameBytes, jpegSize } from './frame-media-io';
 import { emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
@@ -16,13 +17,14 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
   const frames: VideoFrames['frames'] = [], events: ExtractionAttempt['events'] = [];
   let job: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
   let source: Exclude<Awaited<ReturnType<ReturnType<typeof openYouTubeFrameSources>['next']>>['value'], void> | undefined;
+  let jobAdmission: AdmissionDetails | undefined;
   let droppedEvents = 0;
   const record = (event: ExtractionAttempt['events'][number]) => { if (events.length < 54) events.push(event); else droppedEvents++; };
   let reason: FrameMediaError['code'] | undefined, imageBytes = 0, cursor = 0, stop = false;
   linkVisualExtraction(extractionId, 1);
   try {
-    job = await acquireFrameLease(env, 'media-job', signal);
-    record({ stage: 'media_admission', outcome: 'success', elapsedMs: Date.now() - started });
+    job = await acquireFrameLease(env, 'media-job', signal, undefined, details => { jobAdmission = details; });
+    record({ stage: 'media_admission', ...jobAdmission, outcome: 'success', elapsedMs: Date.now() - started });
     let sourceAttempts = 0;
     for await (const candidate of openYouTubeFrameSources(env, input.videoId, input.maxWidth, signal, record)) {
       source = candidate;
@@ -37,6 +39,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
         while (!stop && !sourceStopped && cursor < missing.length) {
           const timestampMs = missing[cursor++]!;
           let lease: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
+          let frameAdmission: AdmissionDetails | undefined;
           let settled = true, clipRejected = false;
           let stage: 'media_source' | 'media_decode' = 'media_source';
           const frameStarted = Date.now();
@@ -45,7 +48,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
             const clip = await selected.clip(timestampMs / 1000);
             signal.throwIfAborted();
             stage = 'media_decode';
-            lease = await acquireFrameLease(env, 'media-frame', signal);
+            lease = await acquireFrameLease(env, 'media-frame', signal, undefined, details => { frameAdmission = details; });
             settled = false;
             const pending = env.MEDIA.input(new Response(clip.bytes).body!)
               .transform({ width: input.maxWidth, fit: 'scale-down' })
@@ -69,13 +72,15 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
             frames.push({ timestampMs, mimeType: 'image/jpeg', ...dimensions, sourceWidth: selected.width,
               sourceHeight: selected.height, imageBase64: Buffer.from(bytes).toString('base64') });
             onFrame?.(frames.at(-1)!);
-            record({ stage: 'media_decode', timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
+            record({ stage: 'media_decode', ...frameAdmission, timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
               inputBytes: clip.bytes.byteLength, outputBytes: bytes.byteLength, outcome: 'success' });
           } catch (error) {
             const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
             const throttled = code === 9423 || code === '9423' || code === 'throttled';
             reason = throttled ? 'throttled' : error instanceof FrameMediaError ? error.code : stage === 'media_source' ? 'source' : 'decode';
-            record({ stage, timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
+            record({ stage: frameAdmission && !lease ? 'media_admission' : stage, ...frameAdmission,
+              ...(error instanceof Mp4GuardError ? { mp4Guard: error.mp4Guard, declaredCount: error.declaredCount, trackKind: error.trackKind } : {}),
+              timestampMs, formatId: selected.formatId, proxySlot: selected.slot, elapsedMs: Date.now() - frameStarted,
               outcome: 'error', code: throttled ? 'RATE_LIMITED' : 'FRAME_EXTRACTION_FAILED' });
             if (throttled) await lease?.throttle();
             if (throttled || signal.aborted || reason === 'capacity' || reason === 'budget' || (reason === 'decode' && !clipRejected)) stop = true;
@@ -95,7 +100,7 @@ export async function getYouTubeMediaFrames(env: Env, input: Input, signal: Abor
   } catch (error) {
     const exhausted = error instanceof FrameMediaError && error.code === 'unsupported';
     if (!exhausted || !reason) reason = error instanceof FrameMediaError ? error.code : 'source';
-    record({ stage: job ? 'media_source' : 'media_admission', outcome: 'error', elapsedMs: Date.now() - started,
+    record({ stage: job ? 'media_source' : 'media_admission', ...(!job && jobAdmission), outcome: 'error', elapsedMs: Date.now() - started,
       code: reason === 'capacity' ? 'RATE_LIMITED' : 'FRAME_EXTRACTION_FAILED' });
   }
   finally {
