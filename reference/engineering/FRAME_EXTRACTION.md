@@ -127,7 +127,7 @@ A unique direct media handler must identify the track as audio. Ambiguous tracks
 remain in the combined count. Fragmented movies retain the original combined guard.
 For progressive indexes larger than 64 KiB, the Worker first tries a bounded
 seek for self-contained AVC video with one sample description, explicit sync
-samples, decode-order presentation and no video edit list. It reads box headers
+samples and bounded timing tables. It reads box headers
 in 16 KiB pages, uses compact timing, keyframe and chunk-mapping tables, and
 reads only the chunk offsets and sample sizes needed to locate a selected
 keyframe group. Variable decode durations and 32- or 64-bit chunk offsets are
@@ -137,9 +137,12 @@ entries in aggregate and 1,000 selected samples. Offset and size declarations
 must fit their boxes and selected media must fit the file and range budget.
 
 This path can address more than 50,000 stored samples because it never creates
-a per-frame index for the entire track. B-frame composition tables, edit lists
-and other unsupported sparse layouts retain the established bounded parser and
-FFmpeg recovery. The 2 MiB movie-index ceiling applies before either path.
+a per-frame index for the entire track. For long constant-rate video with reordered
+pictures, the sparse reader accepts an unsigned composition-offset table and a
+single rate-one edit. It indexes only the prefix of timing runs that fits the
+remaining compact-entry budget. Each selected keyframe group must fill its edited
+presentation interval exactly once, starting with the keyframe. Out-of-budget
+seeks and unsupported layouts retain the existing recovery paths. The 2 MiB movie-index ceiling applies before either path.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
 fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
