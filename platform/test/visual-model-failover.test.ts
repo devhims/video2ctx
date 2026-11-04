@@ -172,34 +172,11 @@ it('sends frame pixels and a required schema to Terra, and bills the actual mode
       meta: { partial: false, warnings: [] } },
   })).toEqual(output);
   expect(requests[0]).toMatchObject({ url: 'https://api.openai.com/v1/responses', body: { model: TERRA_VISUAL_MODEL,
-    store: false, reasoning: { effort: 'medium' }, text: { format: { type: 'json_schema', strict: true,
+    store: false, reasoning: { effort: 'low' }, text: { format: { type: 'json_schema', strict: true,
       schema: { required: expect.arrayContaining(['findings', 'sharedFindings', 'warnings']) } } } } });
   expect(JSON.stringify(requests[0]!.body.input)).toContain('data:image/jpeg;base64,' + images[0]);
   expect(requests.at(-1)!.body.model).toBe(deepseek);
   expect(createAgentModel(configured, 'test', 'low', { model_role: 'finalizer' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
   expect(agentModelPricing(TERRA_VISUAL_MODEL + '-snapshot')).toEqual(agentModelPricing(TERRA_VISUAL_MODEL));
   expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ modelId: deepseek, pricing: agentModelPricing(deepseek) }));
-});
-
-it('waits longer for Terra to finish reasoning before using the backup', async () => {
-  vi.useFakeTimers();
-  vi.spyOn(console, 'log').mockImplementation(() => {});
-  const configured = { ...env, OPENAI_API_KEY: 'openai-test', AGENT_VISUAL_MODEL: TERRA_VISUAL_MODEL } as unknown as Env;
-  const output = { findings: [{ observation: 'One box.', timestampsMs: [1000] }], sharedFindings: [], warnings: [] };
-  const models: string[] = [];
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-    const body = JSON.parse(String(init?.body)); models.push(body.model);
-    return body.model === TERRA_VISUAL_MODEL ? new Promise(() => {}) : sseResponse(body.model, JSON.stringify(output));
-  });
-  const task = createFrameAnalyst(createAgentModel(configured, 'test', 'low', { model_role: 'visual_analyst' }))({
-    signal: new AbortController().signal, modelCallId: 'frame', focus: 'Count the boxes', frames: { videoId: 'abcdefghijk',
-      frames: [{ imageBase64: images[0]!, timestampMs: 1000, mimeType: 'image/jpeg', width: 200, height: 100 }], failures: [],
-      meta: { partial: false, warnings: [] } } });
-  // Past the 10-second role limit, a silent Terra is still reasoning.
-  await vi.advanceTimersByTimeAsync(10_001);
-  expect(models).toEqual([TERRA_VISUAL_MODEL]);
-  await vi.advanceTimersByTimeAsync(15_000);
-  expect(await task).toEqual(output);
-  expect(models).toEqual([TERRA_VISUAL_MODEL, deepseek]);
-  expect(vi.getTimerCount()).toBe(0);
 });

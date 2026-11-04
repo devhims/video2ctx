@@ -227,8 +227,6 @@ interface ModelExecutionOptions {
   role: string;
   runId?: string;
   serviceTier?: 'priority' | 'default';
-  /** Limits for primary attempts only. The fallback always keeps the role limits. */
-  primaryLimits?: ModelRoleLimits;
 }
 
 /** Every selected model uses the same role limits, even without a backup. */
@@ -279,12 +277,11 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
     const fail = (reason: ConstructorParameters<typeof ModelAttemptTimeout>[0]) => controller.abort(new ModelAttemptTimeout(reason));
     const remainingMs = Math.max(1, (state.deadlineAt ?? Infinity) - Date.now());
     const budgetMs = fallback && model === primary ? Math.max(1, remainingMs - fallbackReserveMs) : remainingMs;
-    const attemptLimits = model === primary ? options.primaryLimits ?? limits : limits;
-    const attemptLimitMs = Math.min(attemptLimits.totalMs, budgetMs);
+    const attemptLimitMs = Math.min(limits.totalMs, budgetMs);
     // A provider that stays silent until the overall limit is still a first-content failure.
-    const total = setTimeout(() => fail(budgetMs < attemptLimits.totalMs ? 'phase_budget'
+    const total = setTimeout(() => fail(budgetMs < limits.totalMs ? 'phase_budget'
       : firstContentAt === undefined ? 'first_content_timeout' : 'attempt_timeout'), attemptLimitMs);
-    const firstContentLimitMs = Math.min(attemptLimits.firstContentMs, attemptLimitMs);
+    const firstContentLimitMs = Math.min(limits.firstContentMs, attemptLimitMs);
     const firstContent = setTimeout(() => fail('first_content_timeout'), firstContentLimitMs);
     // Record the limits this attempt actually ran under, after the phase budget.
     const timeouts = { firstContentTimeoutMs: firstContentLimitMs, totalTimeoutMs: attemptLimitMs };

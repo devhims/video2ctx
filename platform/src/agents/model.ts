@@ -18,9 +18,6 @@ export const AGENT_MODEL_PRICING = {
 
 export const TERRA_VISUAL_MODEL = 'gpt-6.1-terra';
 const TERRA_PRICING = { uncachedInputUsdPerMillionTokens: 1, cachedInputUsdPerMillionTokens: .05, outputUsdPerMillionTokens: 5 };
-// The Responses API streams no reasoning, so Terra's first content arrives only after it finishes
-// reasoning. Three-sheet storyboards took up to 18 seconds and often passed the 10-second role limit.
-const TERRA_ATTEMPT_LIMITS = { firstContentMs: 25_000, totalMs: 30_000 };
 
 export function agentModelPricing(modelId: string) {
   return modelId === TERRA_VISUAL_MODEL || modelId.startsWith(TERRA_VISUAL_MODEL + '-')
@@ -81,11 +78,13 @@ function configuredAgentModel(
       specificationVersion: 'v4',
       transformParams: async ({ params }) => ({
         ...params, temperature: undefined, maxOutputTokens: (params.maxOutputTokens ?? 1600) + 2048,
-        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'medium', store: false } },
+        // The Responses API streams no reasoning, so first content waits for it. Medium reasoning
+        // pushed storyboards past the 10-second first-content limit; low matched its accuracy.
+        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'low', store: false } },
       }),
     } });
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
-    return withModelFailover({ primary, fallback, ...execution, serviceTier: 'default', primaryLimits: TERRA_ATTEMPT_LIMITS });
+    return withModelFailover({ primary, fallback, ...execution, serviceTier: 'default' });
   }
   const provider: string | undefined = backup || useVisualProfile ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
