@@ -14,6 +14,7 @@ interface Env {
   LANDING_RATE_LIMIT_SALT: string;
   OUTBOUND_PROXY_URL?: string;
   OUTBOUND_PROXY_URLS?: string;
+  OPENAI_API_KEY?: string;
   FIREWORKS_API_KEY?: string;
   OAUTH_PROXY_SECRET: string;
 }

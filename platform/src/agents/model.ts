@@ -1,10 +1,11 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { withModelFailover, withModelTimeouts, type ModelFailoverState } from './runtime/model-failover';
 import { createWorkersAI } from 'workers-ai-provider';
+import { createOpenAI } from '@ai-sdk/openai';
 import { createFireworks } from '@ai-sdk/fireworks';
 import { wrapLanguageModel, type LanguageModelUsage } from 'ai';
 import { estimateModelCostMicros } from './runtime/model-budget';
-import { fireworksFinalizerProfile, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
+import { fireworksModelPricing, fireworksFinalizerProfile, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
 export { FIREWORKS_FINALIZER_MODEL_ID, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
 
 export const AGENT_MODEL_ID = '@cf/zai-org/glm-5.3-flash';
@@ -14,6 +15,16 @@ export const AGENT_MODEL_PRICING = {
   cachedInputUsdPerMillionTokens: 0.03,
   outputUsdPerMillionTokens: 0.5,
 } as const;
+
+export const TERRA_VISUAL_MODEL = 'gpt-6.1-terra';
+// OpenAI Standard rates. The Responses API reports most input as 30-minute cache writes.
+const TERRA_PRICING = { uncachedInputUsdPerMillionTokens: 1, cachedInputUsdPerMillionTokens: .05,
+  cacheWriteInputUsdPerMillionTokens: 1.25, outputUsdPerMillionTokens: 5 };
+
+export function agentModelPricing(modelId: string) {
+  return modelId === TERRA_VISUAL_MODEL || modelId.startsWith(TERRA_VISUAL_MODEL + '-')
+    ? TERRA_PRICING : fireworksModelPricing(modelId);
+}
 
 export function estimateAgentModelCostMicros(usage: LanguageModelUsage): number {
   return estimateModelCostMicros(usage, AGENT_MODEL_PRICING);
@@ -44,6 +55,27 @@ export function createAgentModel(
   return configuredAgentModel(env, sessionAffinity, reasoningEffort, metadata, failoverState);
 }
 
+// Terra runs on OpenAI, apart from the Fireworks models behind the run-wide switch. Its own
+// switch moves only image analysis to Kimi, and a Fireworks failure leaves images on Terra.
+const visualSwitches = new WeakMap<ModelFailoverState, ModelFailoverState>();
+
+function visualFailoverState(run: ModelFailoverState): ModelFailoverState {
+  let state = visualSwitches.get(run);
+  if (!state) {
+    // Phase deadlines and the cost guard stay the run's. Resumed runs start on Terra again.
+    state = {
+      fallback: false,
+      get deadlineAt() { return run.deadlineAt; },
+      set deadlineAt(value) { run.deadlineAt = value; },
+      get beforeAttempt() { return run.beforeAttempt; },
+      set beforeAttempt(value) { run.beforeAttempt = value; },
+      onDiagnostic: event => run.onDiagnostic?.({ ...event, failoverScope: 'visual' }),
+    };
+    visualSwitches.set(run, state);
+  }
+  return state;
+}
+
 function configuredAgentModel(
   env: Env,
   sessionAffinity: string,
@@ -51,15 +83,36 @@ function configuredAgentModel(
   metadata?: Record<string, string | number | boolean | null>,
   failoverState?: ModelFailoverState,
   backup = false,
+  /** Return the configured model without its timeout and failover wrapper. */
+  standalone = false,
 ): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
   const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
-  // Frame and storyboard analysts use their own Fireworks model when one is configured.
+  // Frames and storyboards share the selected visual model.
   const visualModel = metadata?.model_role === 'visual_analyst' ? env.AGENT_VISUAL_MODEL?.trim() : undefined;
   const useVisualProfile = !backup && Boolean(visualModel);
+  const execution = { state: failoverState ?? { fallback: false },
+    role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
+  if (useVisualProfile && visualModel === TERRA_VISUAL_MODEL) {
+    if (!env.OPENAI_API_KEY?.trim()) throw new Error('OpenAI visual analyst key is not configured.');
+    const model = createOpenAI({ apiKey: env.OPENAI_API_KEY }).responses(TERRA_VISUAL_MODEL);
+    const primary = wrapLanguageModel({ model, middleware: {
+      specificationVersion: 'v4',
+      transformParams: async ({ params }) => ({
+        ...params, temperature: undefined, maxOutputTokens: (params.maxOutputTokens ?? 1600) + 2048,
+        // The Responses API streams no reasoning, so first content waits for it. Medium reasoning
+        // pushed storyboards past the 10-second first-content limit; low matched its accuracy.
+        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'low', serviceTier: 'default', store: false } },
+      }),
+    } });
+    const fallback = configuredAgentModel({ ...env, AGENT_VISUAL_MODEL: 'kimi-k3' } as unknown as Env,
+      sessionAffinity, 'low', metadata, undefined, false, true);
+    return withModelFailover({ primary, fallback, ...execution, state: visualFailoverState(execution.state),
+      serviceTier: 'default', separateProviders: true });
+  }
   const provider: string | undefined = backup || useVisualProfile ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
   const useFireworks = provider === 'fireworks';
@@ -120,9 +173,7 @@ function configuredAgentModel(
     } : params,
   } });
   // Backups run inside the same timeout policy as their primary, without a second wrapper.
-  if (backup) return configured;
-  const execution = { state: failoverState ?? { fallback: false },
-    role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
+  if (backup || standalone) return configured;
   // GLM and the configured visual model share the DeepSeek backup and the run's failover switch.
   if (useFireworks && (model.modelId === FIREWORKS_GLM_MODEL_ID || useVisualProfile)) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);

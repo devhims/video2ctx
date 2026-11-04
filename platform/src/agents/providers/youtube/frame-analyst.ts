@@ -1,3 +1,4 @@
+import { visualOutputSchema } from './visual-output-schema';
 import { VISUAL_SCOPE_GUIDANCE } from './visual-scope';
 import { VIDEO_SOURCE_CONTEXT_GUIDANCE, type VideoSourceContext } from '../../runtime/video-source-context';
 import { ATOMIC_VISUAL_FINDING_GUIDANCE } from './visual-provenance';
@@ -5,8 +6,7 @@ import { conversationHistoryForModel, CONVERSATION_CONTEXT_GUIDANCE, type Conver
 import { generateText, Output, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import { framesSchema, type VideoFrames } from '../../../lib/youtube-frames-contract';
-import { AGENT_MODEL_PRICING } from '../../model';
-import { fireworksModelPricing } from '../../fireworks-finalizer';
+import { AGENT_MODEL_PRICING, agentModelPricing } from '../../model';
 import { AGENT_VISUAL_ANALYSIS_TIMEOUT_MS, withRunDeadline } from '../../runtime/deadline';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../../runtime/model-budget';
 
@@ -36,7 +36,7 @@ export function createFrameAnalyst(model: LanguageModel, budget?: AgentModelCost
     const frame = z.literal(timestamps as [number, ...number[]]);
     const schema = analysisSchema.extend({
       findings: z.array(analysisSchema.shape.findings.element.extend({ timestampsMs: z.array(frame).length(1) })).max(6),
-      sharedFindings: z.array(analysisSchema.shape.sharedFindings.unwrap().element.extend({ timestampsMs: z.array(frame).min(2).max(3) })).max(3).default([]),
+      sharedFindings: z.array(analysisSchema.shape.sharedFindings.unwrap().element.extend({ timestampsMs: z.array(frame).min(2).max(3) })).max(3),
     });
     const result = await withRunDeadline(Date.now() + AGENT_VISUAL_ANALYSIS_TIMEOUT_MS, input.signal, signal => generateText({
       model,
@@ -50,11 +50,11 @@ export function createFrameAnalyst(model: LanguageModel, budget?: AgentModelCost
           { type: 'file' as const, data: frame.imageBase64, mediaType: 'image/jpeg' },
         ]),
       ] }],
-      output: Output.object({ schema }), maxOutputTokens: 1600, maxRetries: 0, temperature: 0,
+      output: Output.object({ schema: visualOutputSchema(schema) }), maxOutputTokens: 1600, maxRetries: 0, temperature: 0,
       abortSignal: signal, timeout: { totalMs: AGENT_VISUAL_ANALYSIS_TIMEOUT_MS },
     }), 'Frame analysis exceeded its deadline.');
     budget?.recordUsage({ callId: input.modelCallId, category: 'visual_analyst', usage: result.usage,
-      modelId: result.response.modelId, pricing: fireworksModelPricing(result.response.modelId) ?? AGENT_MODEL_PRICING });
+      modelId: result.response.modelId, pricing: agentModelPricing(result.response.modelId) ?? AGENT_MODEL_PRICING });
     input.signal.throwIfAborted();
     for (const finding of [...result.output.findings, ...result.output.sharedFindings ?? []]) {
       if (finding.timestampsMs.some(time => !timestamps.includes(time))) throw new Error('Analyst cited an unavailable frame.');

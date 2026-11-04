@@ -1,9 +1,9 @@
+import { visualOutputSchema } from './visual-output-schema';
 import { VISUAL_SCOPE_GUIDANCE } from './visual-scope';
 import { VIDEO_SOURCE_CONTEXT_GUIDANCE, type VideoSourceContext } from '../../runtime/video-source-context';
 import { ATOMIC_VISUAL_FINDING_GUIDANCE } from './visual-provenance';
 import { conversationHistoryForModel, CONVERSATION_CONTEXT_GUIDANCE, type ConversationTurn } from '../../runtime/conversation-memory';
-import { AGENT_MODEL_PRICING } from '../../model';
-import { fireworksModelPricing } from '../../fireworks-finalizer';
+import { AGENT_MODEL_PRICING, agentModelPricing } from '../../model';
 import { AGENT_VISUAL_ANALYSIS_TIMEOUT_MS, withRunDeadline } from '../../runtime/deadline';
 import { generateText, Output, type LanguageModel } from 'ai';
 import { z } from 'zod';
@@ -46,7 +46,7 @@ export function createVisualAnalyst(model: LanguageModel, modelBudget?: AgentMod
     const frame = z.literal(availableFrames as [number, ...number[]]);
     const schema = outputSchema.extend({
       findings: z.array(outputSchema.shape.findings.element.extend({ frameIndexes: z.array(frame).length(1) })).max(5),
-      sharedFindings: z.array(outputSchema.shape.sharedFindings.unwrap().element.extend({ frameIndexes: z.array(frame).min(2).max(3) })).max(3).default([]),
+      sharedFindings: z.array(outputSchema.shape.sharedFindings.unwrap().element.extend({ frameIndexes: z.array(frame).min(2).max(3) })).max(3),
     });
     const result = await withRunDeadline(Date.now() + AGENT_VISUAL_ANALYSIS_TIMEOUT_MS, input.signal, (signal) => generateText({
       model,
@@ -61,7 +61,7 @@ export function createVisualAnalyst(model: LanguageModel, modelBudget?: AgentMod
           { type: 'file' as const, data: sheet.imageBase64, mediaType: 'image/jpeg' },
         ]),
       ] }],
-      output: Output.object({ schema }),
+      output: Output.object({ schema: visualOutputSchema(schema) }),
       maxOutputTokens: 1_600,
       maxRetries: 0,
       temperature: 0,
@@ -69,7 +69,7 @@ export function createVisualAnalyst(model: LanguageModel, modelBudget?: AgentMod
       timeout: { totalMs: AGENT_VISUAL_ANALYSIS_TIMEOUT_MS },
     }), 'Visual analysis exceeded its deadline.');
     modelBudget?.recordUsage({ callId: input.modelCallId, category: 'visual_analyst', usage: result.usage,
-      modelId: result.response.modelId, pricing: fireworksModelPricing(result.response.modelId) ?? AGENT_MODEL_PRICING });
+      modelId: result.response.modelId, pricing: agentModelPricing(result.response.modelId) ?? AGENT_MODEL_PRICING });
     input.signal.throwIfAborted();
     const output = result.output;
     for (const finding of [...output.findings, ...output.sharedFindings ?? []]) {

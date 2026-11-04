@@ -6,6 +6,8 @@ export const FINALIZATION_COST_RESERVE_MICROS = 100_000;
 export interface ModelTokenPricing {
   uncachedInputUsdPerMillionTokens: number;
   cachedInputUsdPerMillionTokens: number;
+  /** Prompt-cache writes. Without a separate rate, writes cost the same as uncached input. */
+  cacheWriteInputUsdPerMillionTokens?: number;
   outputUsdPerMillionTokens: number;
 }
 
@@ -39,15 +41,18 @@ export function estimateModelCostMicros(
   pricing: ModelTokenPricing,
 ): number {
   const cachedInputTokens = nonNegative(usage.inputTokenDetails.cacheReadTokens);
+  // Providers that report cache writes exclude them from noCacheTokens.
+  const cacheWriteTokens = nonNegative(usage.inputTokenDetails.cacheWriteTokens);
   const totalInputTokens = nonNegative(usage.inputTokens);
   const uncachedInputTokens = usage.inputTokenDetails.noCacheTokens === undefined
-    ? Math.max(0, totalInputTokens - cachedInputTokens)
+    ? Math.max(0, totalInputTokens - cachedInputTokens - cacheWriteTokens)
     : nonNegative(usage.inputTokenDetails.noCacheTokens);
   const outputTokens = nonNegative(usage.outputTokens);
 
   return Math.ceil(
     uncachedInputTokens * pricing.uncachedInputUsdPerMillionTokens
     + cachedInputTokens * pricing.cachedInputUsdPerMillionTokens
+    + cacheWriteTokens * (pricing.cacheWriteInputUsdPerMillionTokens ?? pricing.uncachedInputUsdPerMillionTokens)
     + outputTokens * pricing.outputUsdPerMillionTokens,
   );
 }

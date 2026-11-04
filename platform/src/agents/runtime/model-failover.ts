@@ -14,7 +14,7 @@ export interface ModelAttemptDiagnostic {
   videoId?: string;
   modelCallId?: string;
   analysisAttempt?: number;
-  serviceTier?: 'priority';
+  serviceTier?: 'priority' | 'default';
   startedAt?: number;
   outcome?: 'succeeded' | 'failed' | 'canceled';
   reason?: string;
@@ -33,6 +33,8 @@ export interface ModelAttemptDiagnostic {
   reasoningTokens?: number;
   firstContentTimeoutMs?: number;
   totalTimeoutMs?: number;
+  /** Set when the attempt runs under image analysis's own switch rather than the run-wide one. */
+  failoverScope?: 'visual';
 }
 
 export interface ModelRoleLimits { firstContentMs: number; totalMs: number }
@@ -150,10 +152,12 @@ export async function withModelStreamFallback<T>(work: (callId: string) => Promi
   } finally { streamRequests.delete(callId); }
 }
 
-function eligible(error: unknown): boolean {
+function eligible(error: unknown, separateProviders = false): boolean {
   const status = (error as { statusCode?: number } | undefined)?.statusCode;
   // Invalid inputs and shared authentication problems cannot be repaired by changing models.
-  return status === undefined || status === 408 || status === 429 || status >= 500;
+  // A backup on another provider has its own credentials, so it can recover from them.
+  return status === undefined || status === 408 || status === 429 || status >= 500
+    || (separateProviders && (status === 401 || status === 403));
 }
 
 /** Abort races must finish even when a provider ignores its signal. */
@@ -226,7 +230,9 @@ interface ModelExecutionOptions {
   state: ModelFailoverState;
   role: string;
   runId?: string;
-  serviceTier?: 'priority';
+  serviceTier?: 'priority' | 'default';
+  /** The backup uses another provider and credentials. */
+  separateProviders?: boolean;
 }
 
 /** Every selected model uses the same role limits, even without a backup. */
@@ -240,7 +246,7 @@ export function withModelTimeouts(options: Omit<ModelExecutionOptions, 'primary'
 export function withModelFailover(options: Omit<ModelExecutionOptions, 'fallback'> & {
   fallback: LanguageModelV4;
 }): LanguageModelV4 {
-  return withModelExecution({ ...options, serviceTier: 'priority' });
+  return withModelExecution({ serviceTier: 'priority', ...options });
 }
 
 function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
@@ -265,7 +271,7 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
     }
     const signal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
     const startedAt = Date.now();
-    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: options.serviceTier,
+    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: model === fallback ? 'priority' : options.serviceTier,
       videoId: params.providerOptions?.agentDiagnostics?.videoId as string | undefined,
       modelCallId: params.providerOptions?.agentDiagnostics?.modelCallId as string | undefined,
       analysisAttempt: params.providerOptions?.agentDiagnostics?.analysisAttempt as number | undefined };
@@ -313,7 +319,7 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
       if (request.timeoutRetries > 0) {
         throw fallback ? new ModelFallbackExhaustedError(request.failures) : new ModelRequestExhaustedError(request.failures);
       }
-      if (!eligible(error)) throw error;
+      if (!eligible(error, options.separateProviders)) throw error;
       const timeAvailable = state.deadlineAt === undefined || Date.now() < state.deadlineAt;
       if (fallback && model === primary && timeAvailable) {
         if (!state.fallback) {
