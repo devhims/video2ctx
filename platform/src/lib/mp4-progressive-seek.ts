@@ -126,14 +126,14 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       sizeHeader = await fields(sizes, 12);
     const fixed = sizeHeader.getUint32(4),
       count = sizeHeader.getUint32(8);
-    if (!isVideo && !count) return; // Let the bounded legacy reader discard an empty audio track.
     if (
       sizeHeader.getUint32(0) !== 0 ||
-      !count ||
+      (isVideo && !count) ||
       count * Math.max(fixed, 1) > sourceSize ||
       sizes.body + 12 + (fixed ? 0 : count * 4) !== sizes.end
     )
       return unsupported('box_layout');
+    if (!count) return; // Let the bounded legacy reader discard an empty audio track.
     const timing = await table(one(tables, 'stts'), 8);
     const clock = view(await bytes(timing.at, timing.count * 8));
     const timingRuns: TimeRun[] = [];
