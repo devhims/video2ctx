@@ -68,8 +68,7 @@ export function buildAgentTurnResult(
   const playlistCoverage = playlistCoverageDisclosures(packets, citations.map(citation => citation.id));
   const disclosedAnswer = appendNotices(answer, playlistCoverage.notes);
 
-  const warnings = presentableWarnings([
-    ...packets.flatMap((packet) => packet.warnings),
+  const warnings = answerWarnings(packets, [
     ...input.warnings,
     ...(unresolved.size ? [{ code: 'CITATIONS_UNAVAILABLE', message: `${unresolved.size} citation${unresolved.size === 1 ? '' : 's'} did not match the saved sources and ${unresolved.size === 1 ? 'is' : 'are'} marked [source unavailable].` }] : []),
   ]);
@@ -89,20 +88,25 @@ export function buildAgentTurnResult(
   });
 }
 
-/** Codes whose messages restate one limitation. The first per video stands for the rest. */
-const ONE_PER_VIDEO_WARNING_CODES = new Set(['SELECTED_FRAME_EVIDENCE', 'SAMPLED_VISUAL_EVIDENCE', 'VISUAL_ANALYSIS_WARNING',
-  'TRANSCRIPT_ANALYST_WARNING', 'SAVED_VIDEO_METADATA', 'HISTORICAL_VIDEO_METADATA']);
-/** A count of failed frames that the per-frame FRAME_UNAVAILABLE warnings already state. */
+/** Fixed-text notes that say the same thing for every source, so one entry stands for all. */
+const BOILERPLATE_WARNING_CODES = new Set(['SELECTED_FRAME_EVIDENCE', 'SAMPLED_VISUAL_EVIDENCE']);
+/** A count of failed frames that the batch's own FRAME_UNAVAILABLE warnings already state. */
 const GENERIC_FRAME_FAILURE = /requested frame(?:\(s\)|s)? could not be extracted/i;
 
-/** Warnings shown with the answer: duplicate and restated limitations collapse, distinct ones remain. */
-export function presentableWarnings<T extends { code: string; message: string; videoId?: string }>(warnings: T[]): T[] {
-  const unavailableFrames = warnings.some((warning) => warning.code === 'FRAME_UNAVAILABLE');
+/** Warnings shown with the answer. Each packet's warnings are reduced within that packet, because
+ * warnings name no video; across packets only boilerplate collapses and other text must match exactly. */
+export function answerWarnings<T extends { code: string; message: string; videoId?: string }>(
+  packets: ReadonlyArray<{ warnings: readonly T[] }>, extra: readonly T[] = [],
+): T[] {
+  const reduced = packets.flatMap((packet) => {
+    const listsFailures = packet.warnings.some((warning) => warning.code === 'FRAME_UNAVAILABLE');
+    return listsFailures
+      ? packet.warnings.filter((warning) => !(warning.code === 'FRAME_EXTRACTION_WARNING' && GENERIC_FRAME_FAILURE.test(warning.message)))
+      : packet.warnings;
+  });
   const seen = new Set<string>();
-  return warnings.filter((warning) => {
-    if (unavailableFrames && warning.code === 'FRAME_EXTRACTION_WARNING' && GENERIC_FRAME_FAILURE.test(warning.message)) return false;
-    const key = ONE_PER_VIDEO_WARNING_CODES.has(warning.code)
-      ? `${warning.code}:${warning.videoId ?? ""}` : `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
+  return [...reduced, ...extra].filter((warning) => {
+    const key = BOILERPLATE_WARNING_CODES.has(warning.code) ? warning.code : `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
