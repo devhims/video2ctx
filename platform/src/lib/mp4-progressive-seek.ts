@@ -126,6 +126,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       sizeHeader = await fields(sizes, 12);
     const fixed = sizeHeader.getUint32(4),
       count = sizeHeader.getUint32(8);
+    if (!isVideo && !count) return; // Let the bounded legacy reader discard an empty audio track.
     if (
       sizeHeader.getUint32(0) !== 0 ||
       !count ||
@@ -265,11 +266,15 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       let sample = chunkStart,
         rule = start.rule,
         previousEnd = 0;
+      const ranges: Array<{ start: number; end: number }> = [];
+      let reordered = false;
       for (let chunk = start.chunk; chunk <= last.chunk; chunk++) {
         if (rules[rule + 1]?.chunk === chunk) rule++;
         const pos = (chunk - start.chunk) * stride;
         let offset = stride === 4 ? offsets.getUint32(pos) : Number(offsets.getBigUint64(pos));
-        if (!integer(offset) || offset < previousEnd) return unsupported('clip_layout');
+        if (!integer(offset)) return unsupported('clip_layout');
+        const chunkOffset = offset;
+        if (offset < previousEnd) reordered = true;
         const chunkEnd = Math.min(stop, sample + rules[rule]!.perChunk);
         while (sample < chunkEnd) {
           const size = fixed || sizes!.getUint32((sample - chunkStart) * 4);
@@ -288,7 +293,14 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
           offset += size;
           sample++;
         }
+        ranges.push({ start: chunkOffset, end: offset });
         previousEnd = offset;
+      }
+      // File order can differ from decode order. Sort only the ranges used for
+      // overlap validation; keep the selected samples in their original order.
+      if (reordered) {
+        ranges.sort((a, b) => a.start - b.start);
+        if (ranges.some((range, i) => i > 0 && range.start < ranges[i - 1]!.end)) return unsupported('clip_layout');
       }
       return selected;
     },
