@@ -1,5 +1,5 @@
 import { executeGetVideo } from './get-video';
-import { eligibleDuration, verifiedFrameMetadata, VideoTooLongError } from '../../../runtime/video-duration-limit';
+import { eligibleDuration, isLiveBroadcast, verifiedFrameMetadata, VideoTooLongError } from '../../../runtime/video-duration-limit';
 import { frameSelectionsSchema } from '../../../runtime/frame-selection';
 import { withPreviewCleanup } from '../../../runtime/preview-lifecycle';
 import { retrieveWithAnalysis, retrievalAnalysisSchema, retrySavedAnalysis } from './retrieval-analysis';
@@ -64,7 +64,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (context.maxVideoSeconds !== undefined) {
-        if (metadata?.isLive === true) throw new Error('Cannot capture frames from a live broadcast. Select a completed video.');
+        if (isLiveBroadcast(metadata)) throw new Error('Cannot capture frames from a live broadcast. Select a completed video.');
         const duration = eligibleDuration(metadata?.durationSeconds);
         if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
@@ -138,7 +138,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
 
   if (context.maxVideoSeconds === undefined) return capture(undefined);
   const metadata = verifiedFrameMetadata(request.videoId, context.getEvidence?.() ?? []);
-  if (metadata?.isLive === true || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
+  if (isLiveBroadcast(metadata) || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
   // Meter and deduplicate the prerequisite before the frame tool holds credits.
   return executeGetVideo({ videoId: request.videoId }, context, `frame-metadata:${request.videoId}`)
     .then(packet => capture(verifiedFrameMetadata(request.videoId, [packet])));

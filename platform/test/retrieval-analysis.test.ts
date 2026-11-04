@@ -116,7 +116,12 @@ describe('retrieval with optional analysis', () => {
     }
   });
 
-  test.each([false, true])('loads missing duration through the evidence tool before reserving frame credits (live=%s)', async isLive => {
+  test.each([
+    { isLive: false, durationSeconds: 100, refused: false },
+    // Published isLive also marks finished stream recordings, which report a length.
+    { isLive: true, durationSeconds: 100, refused: false },
+    { isLive: true, durationSeconds: 0, refused: true },
+  ])('loads missing duration through the evidence tool before reserving frame credits (%o)', async ({ isLive, durationSeconds, refused }) => {
     const { ctx } = context();
     ctx.maxVideoSeconds = 7200;
     ctx.pinnedVideoId = undefined; // A topic or comparison request without a bootstrap metadata packet.
@@ -125,12 +130,12 @@ describe('retrieval with optional analysis', () => {
       tools.push(execution.toolName);
       if (execution.toolName === 'get_video') return { packetId: 'loaded', kind: 'youtube_video', excerpts: [], warnings: [], usage: [],
         sources: [{ id: 'v', provider: 'youtube', kind: 'video', videoId }],
-        artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, isLive, durationSeconds: 100 } }] };
+        artifacts: [{ type: 'youtube_video_metadata', data: { id: videoId, isLive, durationSeconds } }] };
       return execution.execute();
     };
     ctx.provider.frames = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
     const task = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'frame');
-    if (isLive) {
+    if (refused) {
       await expect(task).rejects.toThrow(/live broadcast/);
       expect(ctx.provider.frames).not.toHaveBeenCalled();
     } else { await task; expect(ctx.provider.frames).toHaveBeenCalledOnce(); }

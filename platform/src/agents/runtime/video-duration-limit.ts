@@ -45,7 +45,13 @@ export function verifiedFrameMetadata(videoId: string, packets: readonly Evidenc
     packet.sources.some(source => source.provider === 'youtube' && source.videoId === videoId));
   const data = packet?.artifacts.find(artifact => artifact.type === 'youtube_video_metadata' && artifact.data.id === videoId)?.data;
   // A prior turn's broadcast may have ended. Check its current metadata before deciding.
-  return data?.isLive === true && packet?.packetId.startsWith('memory:') ? undefined : data;
+  return isLiveBroadcast(data) && packet?.packetId.startsWith('memory:') ? undefined : data;
+}
+
+/** A broadcast still in progress. Published metadata's isLive flag also marks completed
+ * stream recordings, which report a length; extraction verifies those broadcasts ended. */
+export function isLiveBroadcast(metadata: { isLive?: unknown; durationSeconds?: unknown } | undefined): boolean {
+  return metadata?.isLive === true && eligibleDuration(metadata.durationSeconds) === undefined;
 }
 
 export function eligibleDuration(seconds: unknown) {
