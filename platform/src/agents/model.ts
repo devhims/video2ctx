@@ -55,6 +55,27 @@ export function createAgentModel(
   return configuredAgentModel(env, sessionAffinity, reasoningEffort, metadata, failoverState);
 }
 
+// Terra runs on OpenAI, apart from the Fireworks models behind the run-wide switch. Its own
+// switch moves only image analysis to Kimi, and a Fireworks failure leaves images on Terra.
+const visualSwitches = new WeakMap<ModelFailoverState, ModelFailoverState>();
+
+function visualFailoverState(run: ModelFailoverState): ModelFailoverState {
+  let state = visualSwitches.get(run);
+  if (!state) {
+    // Phase deadlines and the cost guard stay the run's. Resumed runs start on Terra again.
+    state = {
+      fallback: false,
+      get deadlineAt() { return run.deadlineAt; },
+      set deadlineAt(value) { run.deadlineAt = value; },
+      get beforeAttempt() { return run.beforeAttempt; },
+      set beforeAttempt(value) { run.beforeAttempt = value; },
+      onDiagnostic: event => run.onDiagnostic?.({ ...event, failoverScope: 'visual' }),
+    };
+    visualSwitches.set(run, state);
+  }
+  return state;
+}
+
 function configuredAgentModel(
   env: Env,
   sessionAffinity: string,
@@ -62,6 +83,8 @@ function configuredAgentModel(
   metadata?: Record<string, string | number | boolean | null>,
   failoverState?: ModelFailoverState,
   backup = false,
+  /** Return the configured model without its timeout and failover wrapper. */
+  standalone = false,
 ): LanguageModelV4 {
   const isFinalizer = metadata?.model_role === 'finalizer';
   const isTextRole = ['classifier', 'agent_core', 'transcript_analyst'].includes(String(metadata?.model_role));
@@ -85,8 +108,10 @@ function configuredAgentModel(
         providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'low', serviceTier: 'default', store: false } },
       }),
     } });
-    const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
-    return withModelFailover({ primary, fallback, ...execution, serviceTier: 'default' });
+    const fallback = configuredAgentModel({ ...env, AGENT_VISUAL_MODEL: 'kimi-k3' } as unknown as Env,
+      sessionAffinity, 'low', metadata, undefined, false, true);
+    return withModelFailover({ primary, fallback, ...execution, state: visualFailoverState(execution.state),
+      serviceTier: 'default', separateProviders: true });
   }
   const provider: string | undefined = backup || useVisualProfile ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
@@ -148,7 +173,7 @@ function configuredAgentModel(
     } : params,
   } });
   // Backups run inside the same timeout policy as their primary, without a second wrapper.
-  if (backup) return configured;
+  if (backup || standalone) return configured;
   // GLM and the configured visual model share the DeepSeek backup and the run's failover switch.
   if (useFireworks && (model.modelId === FIREWORKS_GLM_MODEL_ID || useVisualProfile)) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);

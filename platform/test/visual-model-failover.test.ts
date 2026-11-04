@@ -6,7 +6,7 @@ import { generateText } from 'ai';
 import { agentModelPricing, createAgentModel, FIREWORKS_GLM_MODEL_ID, TERRA_VISUAL_MODEL } from '../src/agents/model';
 import { createFrameAnalyst } from '../src/agents/providers/youtube/frame-analyst';
 import { createVisualAnalyst } from '../src/agents/providers/youtube/visual-analyst';
-import type { ModelFailoverState } from '../src/agents/runtime/model-failover';
+import type { ModelAttemptDiagnostic, ModelFailoverState } from '../src/agents/runtime/model-failover';
 import { sseResponse } from './fixtures/model-streams';
 
 const deepseek = 'accounts/fireworks/models/deepseek-v4p1-flash';
@@ -154,29 +154,100 @@ describe('configured visual model', () => {
   });
 });
 
-
-it('sends frame pixels and a required schema to Terra, and bills the actual model after failover', async () => {
-  const configured = { ...env, OPENAI_API_KEY: 'openai-test', AGENT_VISUAL_MODEL: TERRA_VISUAL_MODEL } as unknown as Env;
-  const requests: { url: string; body: any }[] = [];
+describe('Terra visual model', () => {
+  const kimi = 'accounts/fireworks/models/kimi-k3';
+  const terraEnv = { ...env, OPENAI_API_KEY: 'openai-test', AGENT_VISUAL_MODEL: TERRA_VISUAL_MODEL } as unknown as Env;
   const output = { findings: [{ observation: 'One box.', timestampsMs: [1000] }], sharedFindings: [], warnings: [] };
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-    const body = JSON.parse(String(init?.body)); requests.push({ url: String(url), body });
-    if (body.model === TERRA_VISUAL_MODEL) return Response.json({ error: { message: 'temporarily unavailable' } }, { status: 503 });
-    return sseResponse(body.model, JSON.stringify(output));
+  const analyzeFrames = (state?: ModelFailoverState, budget?: Parameters<typeof createFrameAnalyst>[1]) =>
+    createFrameAnalyst(createAgentModel(terraEnv, 'test', 'low', { model_role: 'visual_analyst' }, state), budget)({
+      signal: new AbortController().signal, modelCallId: 'frame', focus: 'Count the boxes', frames: { videoId: 'abcdefghijk',
+        frames: [{ imageBase64: images[0]!, timestampMs: 1000, mimeType: 'image/jpeg', width: 200, height: 100 }], failures: [],
+        meta: { partial: false, warnings: [] } } });
+  const mockProviders = (stalled: string[]) => {
+    const requests: { url: string; body: any }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const body = JSON.parse(String(init?.body)); requests.push({ url: String(url), body });
+      if (stalled.includes(body.model)) return new Promise(() => {});
+      if (body.model === TERRA_VISUAL_MODEL) return Response.json({ error: { message: 'unavailable' } }, { status: terraStatus });
+      return sseResponse(body.model, JSON.stringify(output));
+    });
+    return requests;
+  };
+  let terraStatus = 503;
+  afterEach(() => { terraStatus = 503; });
+
+  it('sends frame pixels and a required schema to Terra, and bills Kimi after failover', async () => {
+    const requests = mockProviders([]);
+    const recordUsage = vi.fn();
+    expect(await analyzeFrames(undefined, { limitMicros: 100000, currentCostMicros: () => 0, recordUsage })).toEqual(output);
+    expect(requests[0]).toMatchObject({ url: 'https://api.openai.com/v1/responses', body: { model: TERRA_VISUAL_MODEL,
+      store: false, service_tier: 'default', reasoning: { effort: 'low' }, text: { format: { type: 'json_schema', strict: true,
+        schema: { required: expect.arrayContaining(['findings', 'sharedFindings', 'warnings']) } } } } });
+    expect(JSON.stringify(requests[0]!.body.input)).toContain('data:image/jpeg;base64,' + images[0]);
+    expect(requests.at(-1)!.body).toMatchObject({ model: kimi, service_tier: 'priority', reasoning_effort: 'low' });
+    expect(createAgentModel(terraEnv, 'test', 'low', { model_role: 'finalizer' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
+    expect(agentModelPricing(TERRA_VISUAL_MODEL + '-snapshot')).toEqual(agentModelPricing(TERRA_VISUAL_MODEL));
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ modelId: kimi, pricing: agentModelPricing(kimi) }));
   });
-  const recordUsage = vi.fn();
-  const model = createAgentModel(configured, 'test', 'low', { model_role: 'visual_analyst' });
-  expect(await createFrameAnalyst(model, { limitMicros: 100000, currentCostMicros: () => 0, recordUsage })({
-    signal: new AbortController().signal, modelCallId: 'frame', focus: 'Count the boxes', frames: { videoId: 'abcdefghijk',
-      frames: [{ imageBase64: images[0]!, timestampMs: 1000, mimeType: 'image/jpeg', width: 200, height: 100 }], failures: [],
-      meta: { partial: false, warnings: [] } },
-  })).toEqual(output);
-  expect(requests[0]).toMatchObject({ url: 'https://api.openai.com/v1/responses', body: { model: TERRA_VISUAL_MODEL,
-    store: false, service_tier: 'default', reasoning: { effort: 'low' }, text: { format: { type: 'json_schema', strict: true,
-      schema: { required: expect.arrayContaining(['findings', 'sharedFindings', 'warnings']) } } } } });
-  expect(JSON.stringify(requests[0]!.body.input)).toContain('data:image/jpeg;base64,' + images[0]);
-  expect(requests.at(-1)!.body.model).toBe(deepseek);
-  expect(createAgentModel(configured, 'test', 'low', { model_role: 'finalizer' }).modelId).toBe(FIREWORKS_GLM_MODEL_ID);
-  expect(agentModelPricing(TERRA_VISUAL_MODEL + '-snapshot')).toEqual(agentModelPricing(TERRA_VISUAL_MODEL));
-  expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ modelId: deepseek, pricing: agentModelPricing(deepseek) }));
+
+  it('uses Kimi when OpenAI rejects the Terra key', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    terraStatus = 401;
+    const requests = mockProviders([]);
+    expect(await analyzeFrames()).toEqual(output);
+    expect(requests.map(request => request.body.model)).toEqual([TERRA_VISUAL_MODEL, kimi]);
+  });
+
+  it('moves only image analysis to Kimi when Terra stalls', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const requests = mockProviders([TERRA_VISUAL_MODEL]);
+    const events: ModelAttemptDiagnostic[] = [];
+    const state: ModelFailoverState = { fallback: false, onDiagnostic: event => events.push(event) };
+    const first = analyzeFrames(state);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await first).toEqual(output);
+    expect(requests.map(request => request.body.model)).toEqual([TERRA_VISUAL_MODEL, kimi]);
+    // The image switch stays on for the run, while the run-wide switch keeps GLM.
+    expect(await analyzeFrames(state)).toEqual(output);
+    await generateText({ model: createAgentModel(terraEnv, 'test', 'low', { model_role: 'agent_core' }, state), prompt: 'continue' });
+    expect(requests.slice(2).map(request => request.body.model)).toEqual([kimi, FIREWORKS_GLM_MODEL_ID]);
+    expect(state.fallback).toBe(false);
+    expect(events.filter(event => event.event === 'fallback')).toEqual([expect.objectContaining({ modelId: TERRA_VISUAL_MODEL, failoverScope: 'visual' })]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps image analysis on Terra when the Fireworks models fall back', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const requests: { body: any }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); requests.push({ body });
+      if (body.model === FIREWORKS_GLM_MODEL_ID) return new Promise(() => {});
+      return body.model === TERRA_VISUAL_MODEL ? openAIResponse(JSON.stringify(output)) : sseResponse(body.model, JSON.stringify(output));
+    });
+    const state: ModelFailoverState = { fallback: false };
+    const research = generateText({ model: createAgentModel(terraEnv, 'test', 'low', { model_role: 'agent_core' }, state), prompt: 'research' });
+    await vi.advanceTimersByTimeAsync(10_001);
+    await research;
+    expect(state.fallback).toBe(true);
+    expect(await analyzeFrames(state)).toEqual(output);
+    expect(requests.map(request => request.body.model)).toEqual([FIREWORKS_GLM_MODEL_ID, deepseek, TERRA_VISUAL_MODEL]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
+
+/** A minimal streamed Responses API reply. */
+function openAIResponse(text: string) {
+  const events = [
+    { type: 'response.created', response: { id: 'resp_1', created_at: 1, model: TERRA_VISUAL_MODEL, service_tier: 'default' } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'msg_1', role: 'assistant', status: 'in_progress', content: [] } },
+    { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: text, logprobs: [] },
+    { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'msg_1', role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text, annotations: [], logprobs: [] }] } },
+    { type: 'response.completed', response: { id: 'resp_1', status: 'completed', service_tier: 'default',
+      usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens: 20, output_tokens_details: { reasoning_tokens: 0 } } } },
+  ];
+  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+    { headers: { 'content-type': 'text/event-stream' } });
+}

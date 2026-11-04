@@ -1880,7 +1880,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     return {
       fallback: this.sql`SELECT id FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback' LIMIT 1`.length > 0,
       onDiagnostic: event => {
-        this.recordEvent(runId, event.event === 'fallback' ? 'model.fallback' : 'model.attempt', { ...event });
+        // Only run-wide fallbacks restore the switch on resume; image fallbacks are recorded apart.
+        this.recordEvent(runId, event.event !== 'fallback' ? 'model.attempt'
+          : event.failoverScope === 'visual' ? 'model.visual_fallback' : 'model.fallback', { ...event });
         if (this.#deleted || event.event !== 'attempt_finished') return;
         // The latency index is diagnostic. Its failure must not interrupt the model call.
         try { this.traceManager.recordModelAttempt(runId, event); }

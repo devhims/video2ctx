@@ -66,6 +66,18 @@ test.each(['response_timeout', 'phase_budget'])('restores %s fallback for the sa
   });
 });
 
+test('records image fallbacks apart, so a resumed run keeps the run-wide models', async () => {
+  const { runtime, runId } = await seed('model-fallback-visual');
+  await runInDurableObject(runtime, async instance => {
+    const reader = instance as unknown as { modelFailoverState(runId: string): import('../src/agents/runtime/model-failover').ModelFailoverState };
+    reader.modelFailoverState(runId).onDiagnostic?.({ event: 'fallback', callId: 'call', attemptId: 'attempt', modelId: 'gpt-6.1-terra',
+      role: 'visual_analyst', serviceTier: 'default', reason: 'first_content_timeout', failoverScope: 'visual' });
+    expect(reader.modelFailoverState(runId).fallback).toBe(false);
+    expect(instance.sql`SELECT * FROM agent_events WHERE run_id = ${runId} AND type = 'model.visual_fallback'`).toHaveLength(1);
+    expect(instance.sql`SELECT * FROM agent_events WHERE run_id = ${runId} AND type = 'model.fallback'`).toHaveLength(0);
+  });
+});
+
 test('publishes finished model attempts to the D1 latency index and retries when D1 is unavailable', async () => {
   const { runtime, userId, runId, conversationId } = await seed('model-attempt-index', 'running');
   await runInDurableObject(runtime, async instance => {
