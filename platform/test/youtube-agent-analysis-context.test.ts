@@ -184,7 +184,8 @@ it.each([
   const captured = (id: string): EvidencePacket => ({ packetId: `frames:${id}`, kind: 'youtube_frames',
     sources: [{ id: `youtube:${id}:frames`, provider: 'youtube', kind: 'frames', videoId: id }],
     excerpts: [{ id: `frames:${id}:0`, sourceId: `youtube:${id}:frames`, text: 'Visual observation.', startMs: 1000, endMs: 1000 }],
-    artifacts: [{ type: 'youtube_frame_analysis', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } }], warnings: [], usage: [] });
+    artifacts: [{ type: 'youtube_frame_analysis', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } },
+      { type: 'youtube_frame_retrieval', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } }], warnings: [], usage: [] });
   const empty = (id: string): EvidencePacket => ({ packetId: id, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [], usage: [] });
   const context = { runId: 'frame-release', signal: controller.signal, provider: { frames: vi.fn() },
     transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Compare the presenters', analyze: vi.fn() },
@@ -222,14 +223,17 @@ it.each([
   { name: 'frames inherited from earlier turns', recorded: false, repeat: false, reserve: 2 },
   // A repeated identical request reuses one saved result and counts once.
   { name: 'repeated request for one video', recorded: false, repeat: true, reserve: 1 },
-])('derives the frame reserve from distinct captures of this run: $name', async ({ recorded, repeat, reserve }) => {
+  // Repeating a capture whose analysis failed returns a fresh analysis of the saved images only.
+  { name: 'analysis retry for one video', recorded: false, repeat: true, retry: true, reserve: 1 },
+])('derives the frame reserve from distinct captures of this run: $name', async ({ recorded, repeat, retry, reserve }) => {
   const controller = new AbortController();
   const [first, second] = [videoId, 'B2QtJKMlYTp'];
   const executions: EvidenceToolExecution[] = [];
   const captured = (id: string): EvidencePacket => ({ packetId: `frames:${id}`, kind: 'youtube_frames',
     sources: [{ id: `youtube:${id}:frames`, provider: 'youtube', kind: 'frames', videoId: id }],
     excerpts: [{ id: `frames:${id}:0`, sourceId: `youtube:${id}:frames`, text: 'Visual observation.', startMs: 1000, endMs: 1000 }],
-    artifacts: [{ type: 'youtube_frame_analysis', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } }], warnings: [], usage: [] });
+    artifacts: [{ type: 'youtube_frame_analysis', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } },
+      { type: 'youtube_frame_retrieval', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } }], warnings: [], usage: [] });
   const empty: EvidencePacket = { packetId: 'transcript', kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [], usage: [] };
   const recovered = repeat ? [] : [captured(first), captured(second)];
   const context = { runId: 'frame-captures', signal: controller.signal, provider: { frames: vi.fn() },
@@ -242,7 +246,12 @@ it.each([
   calls.run = async ctx => {
     const run = (toolName: EvidenceToolExecution['toolName'], id: string, packet: EvidencePacket) =>
       ctx.executeEvidenceTool({ toolCallId: id, toolName, operation: 'transcript', semanticKey: id, input: {}, execute: async () => packet });
-    if (repeat) for (const call of ['frames-1', 'frames-2']) await run('get_video_frames', call, captured(first));
+    if (repeat) {
+      await run('get_video_frames', 'frames-1', captured(first));
+      const again = captured(first);
+      await run('get_video_frames', 'frames-2', retry ? { ...again, packetId: `analysis:${first}`,
+        artifacts: again.artifacts.filter(artifact => artifact.type === 'youtube_frame_analysis') } : again);
+    }
     await run('get_video_transcript', 'transcript', empty);
     return {};
   };

@@ -482,8 +482,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const frameSubjects = options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds ?? [];
   const currentFrameReserve = () => {
     if (!frameReserveCalls) return 0;
+    // Only a frame retrieval record marks a capture. A retried analysis of saved images returns
+    // analysis alone through the same request and must not release another video's call.
     const frames = [...evidence.values()].filter(packet => packet.kind === 'youtube_frames' && packet.artifacts.some(artifact =>
-      Array.isArray(artifact.data.frames) && artifact.data.frames.length > 0));
+      artifact.type === 'youtube_frame_retrieval' && Array.isArray(artifact.data.frames) && artifact.data.frames.length > 0));
     const records = frames.length ? options.context.evidenceRunRecords?.(frames.map(packet => packet.packetId)) : undefined;
     const captures = frames.filter(packet => capturedThisInvocation.has(packet.packetId)
       || records?.get(packet.packetId)?.createdByTool === 'get_video_frames');
