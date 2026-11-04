@@ -1,12 +1,14 @@
 import { extractionEventSchema } from '../src/lib/extraction-diagnostics';
 import { readFile } from 'node:fs/promises';
 import { getDetails } from '../../packages/all-things-youtube/src/index';
+import { verifyCompletedBroadcast } from '../../packages/youtube-skills/src/watch/innertube';
 import { loadMediaCandidateGroup } from '../../packages/youtube-skills/src/watch/media';
 import { createWorkerProxyTransport } from '../src/lib/youtube-worker-transport';
 import { openYouTubeFrameSources } from '../src/lib/frame-media-source';
 import { reportProxyOutcomes, normalizedProxyUrls, planProxyOrder } from '../src/lib/proxy-health';
 vi.mock('../../packages/all-things-youtube/src/index', () => ({ getDetails: vi.fn() }));
 vi.mock('../../packages/youtube-skills/src/watch/media', () => ({ loadMediaCandidateGroup: vi.fn() }));
+vi.mock('../../packages/youtube-skills/src/watch/innertube', () => ({ verifyCompletedBroadcast: vi.fn() }));
 vi.mock('../src/lib/youtube-worker-transport', () => ({ createWorkerProxyTransport: vi.fn() }));
 vi.mock('../src/lib/proxy-health', () => ({ normalizedProxyUrls: vi.fn(() => ['https://private-test-proxy.invalid']),
   planProxyOrder: vi.fn(async () => ({ order: [0] })), reportProxyOutcomes: vi.fn(async () => {}) }));
@@ -19,6 +21,7 @@ async function openYouTubeFrameSource(...args: Parameters<typeof openYouTubeFram
 const env = {} as Env;
 const id = 'abcdefghijk';
 async function setup() {
+  vi.mocked(verifyCompletedBroadcast).mockRejectedValue(new Error('Unconfirmed broadcast'));
   const bytes = new Uint8Array(await readFile(new URL('./fixtures/media/indexed.mp4', import.meta.url)));
   vi.mocked(getDetails).mockResolvedValue({ isLive: false } as Awaited<ReturnType<typeof getDetails>>);
   vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ profile: 'android', candidates: [{ url: 'https://r1.googlevideo.com/videoplayback?secret=never-log',
@@ -193,6 +196,16 @@ test('reuses the source player live flag instead of fetching unrelated video met
   vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ ...group!, isLive: false });
   const source = await openYouTubeFrameSource(env, id, 640, new AbortController().signal);
   expect(getDetails).not.toHaveBeenCalled();
+  await source.close();
+});
+test('an explicitly ended broadcast can reach Media despite the legacy live flag', async () => {
+  await setup();
+  const group = await vi.mocked(loadMediaCandidateGroup).getMockImplementation()!(1, id, 640, {});
+  vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ ...group!, isLive: true });
+  vi.mocked(verifyCompletedBroadcast).mockResolvedValue(undefined);
+  const source = await openYouTubeFrameSource(env, id, 640, new AbortController().signal);
+  expect((await source.clip(2.5)).bytes.length).toBeGreaterThan(0);
+  expect(verifyCompletedBroadcast).toHaveBeenCalledOnce();
   await source.close();
 });
 test('a live source player is rejected before media bytes or secondary metadata are fetched', async () => {

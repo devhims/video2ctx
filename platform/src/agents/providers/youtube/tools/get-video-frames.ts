@@ -64,8 +64,10 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (context.maxVideoSeconds !== undefined) {
-        if (metadata?.isLive === true) throw new Error('Cannot capture frames from a live broadcast. Select a completed video.');
         const duration = eligibleDuration(metadata?.durationSeconds);
+        // YouTube's isLiveContent flag also covers archived broadcasts. For a
+        // known duration, the extraction provider verifies whether the stream ended.
+        if (duration === undefined && metadata?.isLive === true) throw new Error('Cannot capture a broadcast without a verified recording duration.');
         if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
       }
