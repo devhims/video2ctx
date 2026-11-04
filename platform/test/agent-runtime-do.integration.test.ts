@@ -2054,6 +2054,32 @@ test.each([false, true])('automatic metadata leaves four provider slots for late
   });
 });
 
+test('keeps the last provider calls for exact frames when a request requires images', async () => {
+  const { runtime, runId } = await seed('frame-reserve', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+    };
+    const call = (toolName: EvidenceToolExecution['toolName'], index: number) => writer.executeEvidenceTool(runId, {
+      toolCallId: `${toolName}-${index}`, toolName, operation: toolName === 'get_video_frames' ? 'frames' : 'transcript',
+      semanticKey: `${toolName}:${index}`, input: {}, frameReserveCalls: 2, execute: async () => ({
+        packetId: `${toolName}:${runId}:${index}`, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [],
+        usage: [{ operation: 'transcript', cacheStatus: 'hit', credits: 1 }],
+      }),
+    });
+    // The seed's provider row stands for the search. Other retrieval stops two calls early.
+    for (let index = 0; index < 8; index++) await call('get_video_transcript', index);
+    await expect(call('get_video_storyboard', 0)).rejects.toMatchObject({ code: 'AGENT_TOOL_BUDGET_EXCEEDED',
+      message: expect.stringContaining('reserved for get_video_frames') });
+    // Exact frames use the reserved calls, then the normal limit applies.
+    await call('get_video_frames', 0);
+    await call('get_video_frames', 1);
+    await expect(call('get_video_frames', 2)).rejects.toMatchObject({ code: 'AGENT_TOOL_BUDGET_EXCEEDED',
+      message: expect.stringContaining('budget is exhausted') });
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='get_video_frames' AND status='completed'`).toHaveLength(2);
+  });
+});
+
 type LineageRuntime = { readConversationHistory(row: unknown): ConversationTurn[] };
 const lineageVideo = 'abcdefghijk';
 const lineageSource = { id: `youtube:${lineageVideo}:transcript`, provider: 'youtube', kind: 'transcript',

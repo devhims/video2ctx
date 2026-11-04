@@ -132,3 +132,45 @@ it.each([false, true])('preserves eight transcript retrievals across sequential 
   expect(video).toHaveBeenCalledTimes(2);
   expect(providerRows).toHaveLength(11);
 });
+
+it.each(['required', 'helpful'] as const)('keeps provider calls for exact frames only when images are %s', async visualEvidence => {
+  const controller = new AbortController();
+  const video = vi.fn(async () => ({ cacheStatus: 'hit', value: { id: videoId, title: 'BBC interview', description,
+    channel: { id: 'bbc', name: 'BBC News' }, url: `https://www.youtube.com/watch?v=${videoId}`, keywords: [], availability: { status: 'OK' },
+    meta: { source: 'allthingsyoutube', partial: false, warnings: [], fetchedAt: new Date().toISOString() } } }));
+  const executions: EvidenceToolExecution[] = [];
+  const packet = (id: string, observed = false): EvidencePacket => ({ packetId: id, kind: observed ? 'youtube_frames' : 'youtube_transcript',
+    sources: [{ id: `youtube:${videoId}:frames`, provider: 'youtube', kind: 'frames', videoId }],
+    excerpts: observed ? [{ id: `${id}:0`, sourceId: `youtube:${videoId}:frames`, text: 'Visual observation.', startMs: 1000, endMs: 1000 }] : [],
+    artifacts: observed ? [{ type: 'youtube_frame_analysis', data: {} }] : [], warnings: [], usage: [] });
+  const context = { runId: `frame-reserve-${visualEvidence}`, signal: controller.signal, provider: { video, frames: vi.fn() },
+    transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Compare the camera angles', analyze: vi.fn() },
+    analyzeFrames: vi.fn(async () => ({ findings: [], warnings: [] })),
+    executeEvidenceTool: async (execution: EvidenceToolExecution) => { executions.push(execution); return execution.execute(); },
+    finalize: vi.fn(async () => ({})),
+  } as unknown as AgentToolContext;
+  calls.run = async ctx => {
+    const run = (toolName: EvidenceToolExecution['toolName'], observed = false) => ctx.executeEvidenceTool({ toolCallId: toolName,
+      toolName, operation: 'transcript', semanticKey: toolName, input: {}, execute: async () => packet(toolName, observed) });
+    await run('get_video_transcript');
+    await run('get_video_storyboard');
+    await run('get_video_frames', true);
+    // An analyst's automatic metadata lookup keeps the frame reserve instead of a transcript reserve.
+    await ctx.analyzeFrames!({ signal: controller.signal, modelCallId: 'test', focus: 'Camera angle', frames: { videoId } } as Parameters<NonNullable<AgentToolContext['analyzeFrames']>>[0]);
+    return {};
+  };
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: `step:${step}`, toolName: step++ === 0 ? 'research_video_transcripts' : 'finalize_answer', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, warnings: [],
+    usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
+  }) });
+  await runResearchAgentWithModel({ model, message: 'Compare the camera angles', context, decision: {
+    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 4, useStoryboard: true, visualEvidence,
+    ...(visualEvidence === 'required' ? { visualRequirements: ['camera angle'] } : {}),
+  } });
+  const reserve = visualEvidence === 'required' ? 2 : undefined;
+  expect(executions.map(execution => [execution.toolName, execution.frameReserveCalls])).toEqual([
+    ['get_video_transcript', reserve], ['get_video_storyboard', reserve], ['get_video_frames', reserve], ['get_video', reserve]]);
+  expect(executions.find(execution => execution.toolName === 'get_video')!.reserveProviderCalls).toBe(visualEvidence === 'required' ? 0 : 4);
+});
