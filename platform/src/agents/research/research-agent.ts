@@ -474,6 +474,13 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // such as transcripts, metadata or storyboards cannot spend the whole budget.
   const frameReserveCalls = visualEvidenceLevel(options.decision) === 'required' && !options.decision.savedOnly
     && toolNames.includes('get_video_frames') && !!options.context.provider.frames ? FRAME_RESERVE_CALLS : 0;
+  // Each successful capture in this run releases one kept call, and the reserve ends once every
+  // named subject has exact frames, so later retrieval such as transcripts is not refused.
+  const capturedFrameVideos = new Set<string>();
+  let frameCaptures = 0;
+  const frameSubjects = options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds ?? [];
+  const currentFrameReserve = () => !frameReserveCalls || (frameSubjects.length && frameSubjects.every(id => capturedFrameVideos.has(id)))
+    ? 0 : Math.max(0, frameReserveCalls - frameCaptures);
   const contextHandoff = new ContextHandoff(options.recoveredResearchContext, options.persistResearchContext);
   let researchComplete = false;
   const completeResearchTools: ToolSet = completionTool === COMPLETE_RESEARCH_TOOL_NAME && toolNames.includes(FINALIZE_ANSWER_TOOL_NAME)
@@ -706,9 +713,14 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         ...(evidenceToolVideoId(execution) ? { videoId: evidenceToolVideoId(execution) } : {}),
       });
       try {
-        // A frame tool's own duration lookup sets its reserve explicitly and may use the kept calls.
-        const packet = await options.context.executeEvidenceTool(frameReserveCalls && execution.frameReserveCalls === undefined
-          ? { ...execution, frameReserveCalls } : execution);
+        // A frame tool's own duration lookup sets its reserve explicitly.
+        const reserve = execution.frameReserveCalls === undefined ? currentFrameReserve() : 0;
+        const packet = await options.context.executeEvidenceTool(reserve ? { ...execution, frameReserveCalls: reserve } : execution);
+        if (execution.toolName === 'get_video_frames' && packet.artifacts.some(artifact =>
+          Array.isArray(artifact.data.frames) && artifact.data.frames.length > 0)) {
+          frameCaptures++;
+          for (const source of packet.sources) if (source.videoId) capturedFrameVideos.add(source.videoId);
+        }
         evidence.set(packet.packetId, packet);
         const retained = new Set(preferCurrentMetadata([...evidence.values()]).map(item => item.packetId));
         for (const id of evidence.keys()) if (!retained.has(id)) evidence.delete(id);
@@ -833,7 +845,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
               ? ['', `Pinned video ID: ${options.decision.videoId}`]
               : ['', `Research breadth: ${options.decision.researchBreadth ?? 'focused'}. Target ${researchVideoTarget(options.decision)} distinct videos as a research target.${visualRequired ? ' Analyze transcripts only for parts of the request that speech answers.' : ' Analyze selected transcripts together.'} A missed target alone is not an unmet user requirement; report only actual unanswered parts as ANSWER_SCOPE_SHORTFALL.`]),
             ...(visualRequired
-              ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. ${completionTool} stays unavailable until analyzed images provide observations or no visual retrieval path remains.${frameReserveCalls ? ` The last ${frameReserveCalls} provider tool calls are reserved for get_video_frames; other retrieval is refused once only those remain.` : ''}`]
+              ? [`Required visual evidence: ${visualRequirements.length ? visualRequirements.join('; ') : 'the visible facts in the request'}. ${completionTool} stays unavailable until analyzed images provide observations or no visual retrieval path remains.${frameReserveCalls ? ` Until exact frames are captured, the last provider tool calls are reserved for get_video_frames; other retrieval is refused once only those remain.` : ''}`]
               : visualEvidenceLevel(options.decision) === 'helpful' ? ['Visual tools are optional for this request. Use them only when images add needed detail.'] : []),
             ...(options.context.currentDate ? ['', options.context.currentDate, 'When a search depends on a relative date, put the absolute year or date in the query.'] : []),
           ].join('\n'),

@@ -2112,6 +2112,37 @@ test.each([0, 2])('lets the frame tool check duration and capture with two provi
   });
 });
 
+test('two concurrent frame requests with two provider calls left capture one video instead of none', async () => {
+  const { runtime, runId } = await seed('frame-reserve-concurrent', 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+    };
+    const executeEvidenceTool = (execution: EvidenceToolExecution) =>
+      writer.executeEvidenceTool(runId, { ...execution, frameReserveCalls: execution.frameReserveCalls ?? 2 });
+    for (let index = 0; index < 8; index++) await executeEvidenceTool({ toolCallId: `transcript-${index}`, toolName: 'get_video_transcript',
+      operation: 'transcript', semanticKey: `transcript:${index}`, input: {}, execute: async () => ({
+        packetId: `transcript:${runId}:${index}`, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [],
+        usage: [{ operation: 'transcript', cacheStatus: 'hit', credits: 1 }] }) });
+    const video = vi.fn(async (id: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id, title: 'Talk', channel: { id: 'c', name: 'C', url: 'https://www.youtube.com/channel/c' },
+      thumbnails: [], durationSeconds: 600, isLive: false, url: `https://www.youtube.com/watch?v=${id}`, keywords: [],
+      availability: { status: 'OK', playable: true }, meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } }));
+    const frames = vi.fn(async (request: { videoId: string }) => ({ cacheStatus: 'miss' as const, value: { videoId: request.videoId, failures: [], meta: { partial: false, warnings: [] },
+      frames: [{ timestampMs: 1000, mimeType: 'image/jpeg' as const, width: 640, height: 360, imageBase64: '/9j/2Q==' }] } }));
+    const context = { runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { video, frames } as unknown as AgentToolContext['provider'], finalize: vi.fn(), maxVideoSeconds: 7200,
+      researchDeadlineAt: Date.now() + 120_000, getEvidence: () => [], executeEvidenceTool } as unknown as AgentToolContext;
+    const results = await Promise.allSettled(['abcdefghijk', 'bcdefghijkl'].map(videoId =>
+      executeGetVideoFrames({ videoId, timestampsMs: [1000] }, context, `frames-${videoId}`)));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({ reason: { code: 'AGENT_TOOL_BUDGET_EXCEEDED',
+      message: expect.stringContaining("verify this video's duration and capture its frames") } });
+    expect(video).toHaveBeenCalledOnce();
+    expect(frames).toHaveBeenCalledOnce();
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId}`).toHaveLength(11);
+  });
+});
+
 type LineageRuntime = { readConversationHistory(row: unknown): ConversationTurn[] };
 const lineageVideo = 'abcdefghijk';
 const lineageSource = { id: `youtube:${lineageVideo}:transcript`, provider: 'youtube', kind: 'transcript',

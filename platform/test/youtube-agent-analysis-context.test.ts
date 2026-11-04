@@ -174,3 +174,43 @@ it.each(['required', 'helpful'] as const)('keeps provider calls for exact frames
     ['get_video_transcript', reserve], ['get_video_storyboard', reserve], ['get_video_frames', reserve], ['get_video', reserve]]);
   expect(executions.find(execution => execution.toolName === 'get_video')!.reserveProviderCalls).toBe(visualEvidence === 'required' ? 0 : 4);
 });
+
+it.each([
+  { subjects: undefined, reserves: [2, 1, undefined] },
+  { subjects: [videoId], reserves: [2, undefined, undefined] },
+])('releases the frame reserve as captures succeed (subjects $subjects)', async ({ subjects, reserves }) => {
+  const controller = new AbortController();
+  const executions: EvidenceToolExecution[] = [];
+  const captured = (id: string): EvidencePacket => ({ packetId: `frames:${id}`, kind: 'youtube_frames',
+    sources: [{ id: `youtube:${id}:frames`, provider: 'youtube', kind: 'frames', videoId: id }],
+    excerpts: [{ id: `frames:${id}:0`, sourceId: `youtube:${id}:frames`, text: 'Visual observation.', startMs: 1000, endMs: 1000 }],
+    artifacts: [{ type: 'youtube_frame_analysis', data: { frames: [{ timestampMs: 1000, width: 640, height: 360 }] } }], warnings: [], usage: [] });
+  const empty = (id: string): EvidencePacket => ({ packetId: id, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [], usage: [] });
+  const context = { runId: 'frame-release', signal: controller.signal, provider: { frames: vi.fn() },
+    transcriptPolicy: { mode: 'contextual_analysis', researchQuestion: 'Compare the presenters', analyze: vi.fn() },
+    analyzeFrames: vi.fn(),
+    executeEvidenceTool: async (execution: EvidenceToolExecution) => { executions.push(execution); return execution.execute(); },
+    finalize: vi.fn(async () => ({})),
+  } as unknown as AgentToolContext;
+  calls.run = async ctx => {
+    const run = (toolName: EvidenceToolExecution['toolName'], id: string, packet: EvidencePacket) =>
+      ctx.executeEvidenceTool({ toolCallId: id, toolName, operation: 'transcript', semanticKey: id, input: {}, execute: async () => packet });
+    await run('get_video_transcript', 'transcript-1', empty('transcript-1'));
+    await run('get_video_frames', 'frames-1', captured(videoId));
+    await run('get_video_transcript', 'transcript-2', empty('transcript-2'));
+    await run('get_video_frames', 'frames-2', captured('B2QtJKMlYTp'));
+    await run('get_video_transcript', 'transcript-3', empty('transcript-3'));
+    return {};
+  };
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: `step:${step}`, toolName: step++ === 0 ? 'research_video_transcripts' : 'finalize_answer', input: '{}' }],
+    finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, warnings: [],
+    usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
+  }) });
+  await runResearchAgentWithModel({ model, message: 'Compare how the presenters look and what they say', context, decision: {
+    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 2, useStoryboard: true, visualEvidence: 'required',
+    visualRequirements: ['presenter appearance'], ...(subjects ? { comparisonVideoIds: subjects } : {}),
+  } });
+  expect(executions.filter(execution => execution.toolName === 'get_video_transcript').map(execution => execution.frameReserveCalls)).toEqual(reserves);
+});
