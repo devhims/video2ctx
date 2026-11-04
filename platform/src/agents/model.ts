@@ -1,10 +1,11 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { withModelFailover, withModelTimeouts, type ModelFailoverState } from './runtime/model-failover';
 import { createWorkersAI } from 'workers-ai-provider';
+import { createOpenAI } from '@ai-sdk/openai';
 import { createFireworks } from '@ai-sdk/fireworks';
 import { wrapLanguageModel, type LanguageModelUsage } from 'ai';
 import { estimateModelCostMicros } from './runtime/model-budget';
-import { fireworksFinalizerProfile, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
+import { fireworksModelPricing, fireworksFinalizerProfile, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
 export { FIREWORKS_FINALIZER_MODEL_ID, FINALIZER_THINKING_TOKENS } from './fireworks-finalizer';
 
 export const AGENT_MODEL_ID = '@cf/zai-org/glm-5.3-flash';
@@ -14,6 +15,17 @@ export const AGENT_MODEL_PRICING = {
   cachedInputUsdPerMillionTokens: 0.03,
   outputUsdPerMillionTokens: 0.5,
 } as const;
+
+export const TERRA_VISUAL_MODEL = 'gpt-6.1-terra';
+const TERRA_PRICING = { uncachedInputUsdPerMillionTokens: 1, cachedInputUsdPerMillionTokens: .05, outputUsdPerMillionTokens: 5 };
+// The Responses API streams no reasoning, so Terra's first content arrives only after it finishes
+// reasoning. Three-sheet storyboards took up to 18 seconds and often passed the 10-second role limit.
+const TERRA_ATTEMPT_LIMITS = { firstContentMs: 25_000, totalMs: 30_000 };
+
+export function agentModelPricing(modelId: string) {
+  return modelId === TERRA_VISUAL_MODEL || modelId.startsWith(TERRA_VISUAL_MODEL + '-')
+    ? TERRA_PRICING : fireworksModelPricing(modelId);
+}
 
 export function estimateAgentModelCostMicros(usage: LanguageModelUsage): number {
   return estimateModelCostMicros(usage, AGENT_MODEL_PRICING);
@@ -57,9 +69,24 @@ function configuredAgentModel(
   const textModel = env.AGENT_TEXT_MODEL?.trim();
   if (isTextRole && env.AGENT_TEXT_PROVIDER && !textModel) throw new Error('Text model is not configured.');
   const useTextProfile = isTextRole && Boolean(textModel);
-  // Frame and storyboard analysts use their own Fireworks model when one is configured.
+  // Frames and storyboards share the selected visual model.
   const visualModel = metadata?.model_role === 'visual_analyst' ? env.AGENT_VISUAL_MODEL?.trim() : undefined;
   const useVisualProfile = !backup && Boolean(visualModel);
+  const execution = { state: failoverState ?? { fallback: false },
+    role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
+  if (useVisualProfile && visualModel === TERRA_VISUAL_MODEL) {
+    if (!env.OPENAI_API_KEY?.trim()) throw new Error('OpenAI visual analyst key is not configured.');
+    const model = createOpenAI({ apiKey: env.OPENAI_API_KEY }).responses(TERRA_VISUAL_MODEL);
+    const primary = wrapLanguageModel({ model, middleware: {
+      specificationVersion: 'v4',
+      transformParams: async ({ params }) => ({
+        ...params, temperature: undefined, maxOutputTokens: (params.maxOutputTokens ?? 1600) + 2048,
+        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'medium', store: false } },
+      }),
+    } });
+    const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
+    return withModelFailover({ primary, fallback, ...execution, serviceTier: 'default', primaryLimits: TERRA_ATTEMPT_LIMITS });
+  }
   const provider: string | undefined = backup || useVisualProfile ? 'fireworks' : isFinalizer ? env.AGENT_FINALIZER_PROVIDER
     : useTextProfile ? (env.AGENT_TEXT_PROVIDER ?? 'fireworks') : (env.AGENT_GLM_PROVIDER ?? 'fireworks');
   const useFireworks = provider === 'fireworks';
@@ -121,8 +148,6 @@ function configuredAgentModel(
   } });
   // Backups run inside the same timeout policy as their primary, without a second wrapper.
   if (backup) return configured;
-  const execution = { state: failoverState ?? { fallback: false },
-    role: String(metadata?.model_role ?? 'agent'), runId: metadata?.agent_run_id as string | undefined };
   // GLM and the configured visual model share the DeepSeek backup and the run's failover switch.
   if (useFireworks && (model.modelId === FIREWORKS_GLM_MODEL_ID || useVisualProfile)) {
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);

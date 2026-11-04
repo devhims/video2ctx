@@ -39,3 +39,6 @@ AGENT_FINALIZER_REASONING_EFFORT=medium
 # Set the GLM provider used for research and visual analysis.
 AGENT_GLM_PROVIDER=fireworks
 FIREWORKS_API_KEY=
+
+# Used by the Terra frame and storyboard analyst.
+OPENAI_API_KEY=

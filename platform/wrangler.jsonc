@@ -54,7 +54,7 @@
     "AGENT_FINALIZER_MODEL": "glm-5p3-flash",
     "AGENT_FINALIZER_REASONING_EFFORT": "medium",
     // Frame and storyboard analysts. An empty value keeps GLM Flash; both fail over to DeepSeek.
-    "AGENT_VISUAL_MODEL": "kimi-k3",
+    "AGENT_VISUAL_MODEL": "gpt-6.1-terra",
     // All authenticated users with data access can use the Agent.
     "AGENT_ACCESS_MODE": "all",
     "AGENT_MAX_VIDEO_SECONDS": "7200",

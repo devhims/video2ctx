@@ -14,7 +14,7 @@ export interface ModelAttemptDiagnostic {
   videoId?: string;
   modelCallId?: string;
   analysisAttempt?: number;
-  serviceTier?: 'priority';
+  serviceTier?: 'priority' | 'default';
   startedAt?: number;
   outcome?: 'succeeded' | 'failed' | 'canceled';
   reason?: string;
@@ -226,7 +226,9 @@ interface ModelExecutionOptions {
   state: ModelFailoverState;
   role: string;
   runId?: string;
-  serviceTier?: 'priority';
+  serviceTier?: 'priority' | 'default';
+  /** Limits for primary attempts only. The fallback always keeps the role limits. */
+  primaryLimits?: ModelRoleLimits;
 }
 
 /** Every selected model uses the same role limits, even without a backup. */
@@ -240,7 +242,7 @@ export function withModelTimeouts(options: Omit<ModelExecutionOptions, 'primary'
 export function withModelFailover(options: Omit<ModelExecutionOptions, 'fallback'> & {
   fallback: LanguageModelV4;
 }): LanguageModelV4 {
-  return withModelExecution({ ...options, serviceTier: 'priority' });
+  return withModelExecution({ serviceTier: 'priority', ...options });
 }
 
 function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
@@ -265,7 +267,7 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
     }
     const signal = params.abortSignal ? AbortSignal.any([params.abortSignal, controller.signal]) : controller.signal;
     const startedAt = Date.now();
-    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: options.serviceTier,
+    const fields = { callId, attemptId, modelId: model.modelId, role, serviceTier: model === fallback ? 'priority' : options.serviceTier,
       videoId: params.providerOptions?.agentDiagnostics?.videoId as string | undefined,
       modelCallId: params.providerOptions?.agentDiagnostics?.modelCallId as string | undefined,
       analysisAttempt: params.providerOptions?.agentDiagnostics?.analysisAttempt as number | undefined };
@@ -277,11 +279,12 @@ function withModelExecution(options: ModelExecutionOptions): LanguageModelV4 {
     const fail = (reason: ConstructorParameters<typeof ModelAttemptTimeout>[0]) => controller.abort(new ModelAttemptTimeout(reason));
     const remainingMs = Math.max(1, (state.deadlineAt ?? Infinity) - Date.now());
     const budgetMs = fallback && model === primary ? Math.max(1, remainingMs - fallbackReserveMs) : remainingMs;
-    const attemptLimitMs = Math.min(limits.totalMs, budgetMs);
+    const attemptLimits = model === primary ? options.primaryLimits ?? limits : limits;
+    const attemptLimitMs = Math.min(attemptLimits.totalMs, budgetMs);
     // A provider that stays silent until the overall limit is still a first-content failure.
-    const total = setTimeout(() => fail(budgetMs < limits.totalMs ? 'phase_budget'
+    const total = setTimeout(() => fail(budgetMs < attemptLimits.totalMs ? 'phase_budget'
       : firstContentAt === undefined ? 'first_content_timeout' : 'attempt_timeout'), attemptLimitMs);
-    const firstContentLimitMs = Math.min(limits.firstContentMs, attemptLimitMs);
+    const firstContentLimitMs = Math.min(attemptLimits.firstContentMs, attemptLimitMs);
     const firstContent = setTimeout(() => fail('first_content_timeout'), firstContentLimitMs);
     // Record the limits this attempt actually ran under, after the phase budget.
     const timeouts = { firstContentTimeoutMs: firstContentLimitMs, totalTimeoutMs: attemptLimitMs };
