@@ -42,7 +42,7 @@ export interface YouTubeAgentProvider {
   search(query: string, filters?: SearchFilters): Promise<CachedResult<SearchResponse>>;
   browse(options?: BrowseOptions): Promise<CachedResult<BrowseResponse>>;
   trends(query: string, limit: number, includeAiInsights: boolean): Promise<CachedResult<TrendReport>>;
-  video(videoId: string, options?: { refresh?: boolean; includeSignals?: boolean }): Promise<CachedResult<AgentVideo>>;
+  video(videoId: string, options?: { refresh?: boolean; includeSignals?: boolean; requireFrameDuration?: boolean }): Promise<CachedResult<AgentVideo>>;
   tracks(videoId: string): Promise<CachedResult<CaptionTrackList>>;
   transcript(videoId: string, language?: string, options?: { refresh?: boolean }, onDiagnostic?: ExtractionDiagnosticSink, onReady?: (value: Transcript) => void): Promise<CachedResult<Transcript>>;
   comments(

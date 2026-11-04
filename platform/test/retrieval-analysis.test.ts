@@ -8,6 +8,8 @@ import type { AgentToolContext } from '../src/agents/providers/youtube/tool-cont
 import { createGetVideoFramesTool, executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
 import { createGetVideoStoryboardTool, executeGetVideoStoryboard } from '../src/agents/providers/youtube/tools/get-video-storyboard';
 import { createGetVideoTranscriptTool, executeGetVideoTranscriptForModel } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import { executeGetVideo } from '../src/agents/providers/youtube/tools/get-video';
+import type { AgentVideo } from '../src/agents/providers/youtube/provider';
 import { createCapabilityProvider } from '../src/agents/research/capability-provider';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
 import { retrieveWithAnalysis } from '../src/agents/providers/youtube/tools/retrieval-analysis';
@@ -135,6 +137,39 @@ describe('retrieval with optional analysis', () => {
       expect(ctx.provider.frames).not.toHaveBeenCalled();
     } else { await task; expect(ctx.provider.frames).toHaveBeenCalledOnce(); }
     expect(tools).toEqual(['get_video', 'get_video_frames']);
+  });
+
+  test.each([90, 7201, undefined])('a frame prerequisite can repair an incomplete cached topic metadata packet (%s)', async durationSeconds => {
+    const { ctx } = context();
+    ctx.pinnedVideoId = undefined;
+    ctx.maxVideoSeconds = 7200;
+    const base: AgentVideo = { type: 'video', id: videoId, thumbnails: [], isLive: false,
+      channel: { id: 'channel', name: 'Channel', url: 'https://www.youtube.com/@channel' },
+      meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+      keywords: [], title: 'Fixture', availability: { playable: true, status: 'OK' }, url: 'https://www.youtube.com/watch?v=' + videoId };
+    const video = vi.fn<AgentToolContext['provider']['video']>(async (_id, options) => options?.refresh
+      ? { cacheStatus: 'miss', value: { ...base, durationSeconds } } : { cacheStatus: 'hit', value: base });
+    const capture = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
+    ctx.provider = createCapabilityProvider({ ...ctx.provider, video, frames: capture }, { route: 'topic_research' });
+    // Match durable deduplication: a prior metadata-only result can already exist.
+    const packets = new Map<string, EvidencePacket>();
+    ctx.getEvidence = () => [...packets.values()];
+    ctx.executeEvidenceTool = async execution => {
+      const packet = packets.get(execution.semanticKey) ?? await execution.execute();
+      packets.set(execution.semanticKey, packet);
+      return packet;
+    };
+    await executeGetVideo({ videoId }, ctx, 'ordinary');
+    expect(video).toHaveBeenCalledTimes(1);
+    const result = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'capture');
+    if (durationSeconds === 90) {
+      await result;
+      expect(capture).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toThrow(durationSeconds ? /2 hours/ : /duration is unavailable/);
+      expect(capture).not.toHaveBeenCalled();
+    }
+    expect(video.mock.calls.filter(([, options]) => options?.refresh)).toHaveLength(1);
   });
 
   test('does not inherit a pinned question for exploratory captures', async () => {

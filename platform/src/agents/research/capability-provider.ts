@@ -22,8 +22,20 @@ export function createCapabilityProvider(
   const savedProvider = provider;
   provider = {
     ...provider,
-    video: (id, options) => decision.refreshDynamicData || decision.refreshEvidence
-      ? savedProvider.video(id, { ...options, refresh: true, ...(decision.refreshDynamicData ? { includeSignals: true } : {}) }) : savedProvider.video(id, options),
+    video: async (id, options) => {
+      const readOptions = decision.refreshDynamicData || decision.refreshEvidence
+        ? { ...options, refresh: true, ...(decision.refreshDynamicData ? { includeSignals: true } : {}) } : options;
+      let result = await savedProvider.video(id, readOptions);
+      const needsDuration = options?.requireFrameDuration || (decision.route === 'inspect_video' &&
+        (decision.refreshFramesOnly || decision.timestampedFrameQuestion));
+      if (!decision.savedOnly && needsDuration) {
+        const missingDuration = result.value.isLive !== true && eligibleDuration(result.value.durationSeconds) === undefined;
+        if (!readOptions?.refresh && (result.cacheStatus === 'hit' || result.cacheStatus === 'stale') && (result.value.id !== id || missingDuration))
+          result = await savedProvider.video(id, { ...options, refresh: true });
+        if (result.value.id !== id) throw new Error('Metadata did not match the requested video.');
+      }
+      return result;
+    },
     // A pinned saved-page read continues a page this session already holds; it never refreshes.
     comments: (id, options) => decision.refreshDynamicData && !options?.pageVersion
       ? savedProvider.comments(id, { ...options, refresh: true }) : savedProvider.comments(id, options),
@@ -52,16 +64,7 @@ export function createCapabilityProvider(
     trends: (query, limit, includeAiInsights) => provider.trends(query, limit, includeAiInsights),
     video: async (videoId, options) => {
       requirePinnedVideo(videoId);
-      let result = await provider.video(videoId, options);
-      if (!decision.savedOnly && (decision.refreshFramesOnly || decision.timestampedFrameQuestion)) {
-        if ((result.cacheStatus === 'hit' || result.cacheStatus === 'stale') && !options?.refresh &&
-          !decision.refreshEvidence && !decision.refreshDynamicData && (result.value.id !== videoId ||
-          (result.value.isLive !== true && eligibleDuration(result.value.durationSeconds) === undefined))) {
-          result = await provider.video(videoId, { ...options, refresh: true });
-        }
-        if (result.value.id !== videoId) throw new Error('Metadata did not match the requested video.');
-      }
-      return result;
+      return provider.video(videoId, options);
     },
     tracks: async (videoId) => {
       requirePinnedVideo(videoId);
