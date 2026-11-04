@@ -139,7 +139,10 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   if (context.maxVideoSeconds === undefined) return capture(undefined);
   const metadata = verifiedFrameMetadata(request.videoId, context.getEvidence?.() ?? []);
   if (metadata?.isLive === true || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
-  // Meter and deduplicate the prerequisite before the frame tool holds credits.
-  return executeGetVideo({ videoId: request.videoId }, context, `frame-metadata:${request.videoId}`)
+  // Meter and deduplicate the prerequisite before the frame tool holds credits. The duration
+  // check belongs to capture, so it may use provider calls kept for exact frames.
+  return executeGetVideo({ videoId: request.videoId }, { ...context,
+    executeEvidenceTool: execution => context.executeEvidenceTool({ ...execution, frameReserveCalls: 0 }) },
+  `frame-metadata:${request.videoId}`)
     .then(packet => capture(verifiedFrameMetadata(request.videoId, [packet])));
 }

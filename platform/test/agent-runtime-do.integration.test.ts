@@ -9,6 +9,7 @@ import { getTranscriptWithCache } from '../src/lib/youtube';
 import { readAdminToolTrace } from '../src/agents/runtime/admin-tool-traces';
 import { createWorkerExtractionRunner } from '../src/lib/youtube-worker-extraction';
 import { executeGetVideoTranscript, TRANSCRIPT_PAGE_SIZE } from '../src/agents/providers/youtube/tools/get-video-transcript';
+import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
 import type { AgentToolContext, EvidenceToolExecution } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
@@ -2077,6 +2078,37 @@ test('keeps the last provider calls for exact frames when a request requires ima
     await expect(call('get_video_frames', 2)).rejects.toMatchObject({ code: 'AGENT_TOOL_BUDGET_EXCEEDED',
       message: expect.stringContaining('budget is exhausted') });
     expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId} AND tool_name='get_video_frames' AND status='completed'`).toHaveLength(2);
+  });
+});
+
+test.each([0, 2])('lets the frame tool check duration and capture with two provider calls left, frame reserve %s', async reserve => {
+  const { runtime, runId } = await seed(`frame-reserve-duration-${reserve}`, 'running');
+  await runInDurableObject(runtime, async instance => {
+    const writer = instance as unknown as {
+      executeEvidenceTool(runId: string, execution: EvidenceToolExecution): Promise<EvidencePacket>;
+    };
+    // Like the research agent, add the reserve unless the call sets its own.
+    const executeEvidenceTool = (execution: EvidenceToolExecution) =>
+      writer.executeEvidenceTool(runId, { ...execution, frameReserveCalls: execution.frameReserveCalls ?? reserve });
+    // The seed's provider row stands for the search. Eight more leave two of the eleven calls.
+    for (let index = 0; index < 8; index++) await executeEvidenceTool({ toolCallId: `transcript-${index}`, toolName: 'get_video_transcript',
+      operation: 'transcript', semanticKey: `transcript:${index}`, input: {}, execute: async () => ({
+        packetId: `transcript:${runId}:${index}`, kind: 'youtube_transcript', sources: [], excerpts: [], artifacts: [], warnings: [],
+        usage: [{ operation: 'transcript', cacheStatus: 'hit', credits: 1 }] }) });
+    const video = vi.fn(async (id: string) => ({ cacheStatus: 'miss' as const, value: { type: 'video', id, title: 'Lecture', channel: { id: 'c', name: 'C', url: 'https://www.youtube.com/channel/c' },
+      thumbnails: [], durationSeconds: 600, isLive: false, url: `https://www.youtube.com/watch?v=${id}`, keywords: [],
+      availability: { status: 'OK', playable: true }, meta: { source: 'allthingsyoutube', fetchedAt: new Date().toISOString(), partial: false, warnings: [] } } }));
+    const frames = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: { videoId: 'abcdefghijk', failures: [], meta: { partial: false, warnings: [] },
+      frames: [{ timestampMs: 1000, mimeType: 'image/jpeg' as const, width: 640, height: 360, imageBase64: '/9j/2Q==' }] } }));
+    const context = { runId, signal: new AbortController().signal, transcriptPolicy: { mode: 'complete_transcript' },
+      provider: { video, frames } as unknown as AgentToolContext['provider'], finalize: vi.fn(), maxVideoSeconds: 7200,
+      researchDeadlineAt: Date.now() + 120_000, getEvidence: () => [], executeEvidenceTool } as unknown as AgentToolContext;
+    await executeGetVideoFrames({ videoId: 'abcdefghijk', timestampsMs: [1000] }, context, 'frames');
+    expect(video).toHaveBeenCalledOnce();
+    expect(frames).toHaveBeenCalledOnce();
+    expect(instance.sql`SELECT tool_call_id, status FROM agent_tool_calls WHERE run_id=${runId} AND tool_call_id IN ('frame-metadata:abcdefghijk', 'frames') ORDER BY tool_call_id`)
+      .toEqual([{ tool_call_id: 'frame-metadata:abcdefghijk', status: 'completed' }, { tool_call_id: 'frames', status: 'completed' }]);
+    expect(instance.sql`SELECT * FROM agent_tool_calls WHERE run_id=${runId}`).toHaveLength(11);
   });
 });
 

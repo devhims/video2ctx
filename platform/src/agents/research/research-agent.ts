@@ -706,7 +706,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         ...(evidenceToolVideoId(execution) ? { videoId: evidenceToolVideoId(execution) } : {}),
       });
       try {
-        const packet = await options.context.executeEvidenceTool(frameReserveCalls ? { ...execution, frameReserveCalls } : execution);
+        // A frame tool's own duration lookup sets its reserve explicitly and may use the kept calls.
+        const packet = await options.context.executeEvidenceTool(frameReserveCalls && execution.frameReserveCalls === undefined
+          ? { ...execution, frameReserveCalls } : execution);
         evidence.set(packet.packetId, packet);
         const retained = new Set(preferCurrentMetadata([...evidence.values()]).map(item => item.packetId));
         for (const id of evidence.keys()) if (!retained.has(id)) evidence.delete(id);
