@@ -474,13 +474,22 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // such as transcripts, metadata or storyboards cannot spend the whole budget.
   const frameReserveCalls = visualEvidenceLevel(options.decision) === 'required' && !options.decision.savedOnly
     && toolNames.includes('get_video_frames') && !!options.context.provider.frames ? FRAME_RESERVE_CALLS : 0;
-  // Each successful capture in this run releases one kept call, and the reserve ends once every
-  // named subject has exact frames, so later retrieval such as transcripts is not refused.
-  const capturedFrameVideos = new Set<string>();
-  let frameCaptures = 0;
+  // Each distinct capture result of this run releases one kept call, and the reserve ends once
+  // every named subject has exact frames, so later retrieval such as transcripts is not refused.
+  // Captures count by packet, so a repeated request reusing its saved result counts once, and the
+  // run's tool records restore captures made before a resume.
+  const capturedThisInvocation = new Set<string>();
   const frameSubjects = options.decision.route === 'inspect_video' ? [options.decision.videoId] : options.decision.comparisonVideoIds ?? [];
-  const currentFrameReserve = () => !frameReserveCalls || (frameSubjects.length && frameSubjects.every(id => capturedFrameVideos.has(id)))
-    ? 0 : Math.max(0, frameReserveCalls - frameCaptures);
+  const currentFrameReserve = () => {
+    if (!frameReserveCalls) return 0;
+    const frames = [...evidence.values()].filter(packet => packet.kind === 'youtube_frames' && packet.artifacts.some(artifact =>
+      Array.isArray(artifact.data.frames) && artifact.data.frames.length > 0));
+    const records = frames.length ? options.context.evidenceRunRecords?.(frames.map(packet => packet.packetId)) : undefined;
+    const captures = frames.filter(packet => capturedThisInvocation.has(packet.packetId)
+      || records?.get(packet.packetId)?.createdByTool === 'get_video_frames');
+    const videos = new Set(captures.flatMap(packet => packet.sources.flatMap(source => source.videoId ? [source.videoId] : [])));
+    return frameSubjects.length && frameSubjects.every(id => videos.has(id)) ? 0 : Math.max(0, frameReserveCalls - captures.length);
+  };
   const contextHandoff = new ContextHandoff(options.recoveredResearchContext, options.persistResearchContext);
   let researchComplete = false;
   const completeResearchTools: ToolSet = completionTool === COMPLETE_RESEARCH_TOOL_NAME && toolNames.includes(FINALIZE_ANSWER_TOOL_NAME)
@@ -716,11 +725,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         // A frame tool's own duration lookup sets its reserve explicitly.
         const reserve = execution.frameReserveCalls === undefined ? currentFrameReserve() : 0;
         const packet = await options.context.executeEvidenceTool(reserve ? { ...execution, frameReserveCalls: reserve } : execution);
-        if (execution.toolName === 'get_video_frames' && packet.artifacts.some(artifact =>
-          Array.isArray(artifact.data.frames) && artifact.data.frames.length > 0)) {
-          frameCaptures++;
-          for (const source of packet.sources) if (source.videoId) capturedFrameVideos.add(source.videoId);
-        }
+        if (execution.toolName === 'get_video_frames') capturedThisInvocation.add(packet.packetId);
         evidence.set(packet.packetId, packet);
         const retained = new Set(preferCurrentMetadata([...evidence.values()]).map(item => item.packetId));
         for (const id of evidence.keys()) if (!retained.has(id)) evidence.delete(id);
