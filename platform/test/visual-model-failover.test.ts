@@ -172,7 +172,7 @@ it('sends frame pixels and a required schema to Terra, and bills the actual mode
       meta: { partial: false, warnings: [] } },
   })).toEqual(output);
   expect(requests[0]).toMatchObject({ url: 'https://api.openai.com/v1/responses', body: { model: TERRA_VISUAL_MODEL,
-    store: false, reasoning: { effort: 'low' }, text: { format: { type: 'json_schema', strict: true,
+    store: false, service_tier: 'default', reasoning: { effort: 'low' }, text: { format: { type: 'json_schema', strict: true,
       schema: { required: expect.arrayContaining(['findings', 'sharedFindings', 'warnings']) } } } } });
   expect(JSON.stringify(requests[0]!.body.input)).toContain('data:image/jpeg;base64,' + images[0]);
   expect(requests.at(-1)!.body.model).toBe(deepseek);

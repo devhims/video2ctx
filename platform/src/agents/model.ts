@@ -17,7 +17,9 @@ export const AGENT_MODEL_PRICING = {
 } as const;
 
 export const TERRA_VISUAL_MODEL = 'gpt-6.1-terra';
-const TERRA_PRICING = { uncachedInputUsdPerMillionTokens: 1, cachedInputUsdPerMillionTokens: .05, outputUsdPerMillionTokens: 5 };
+// OpenAI Standard rates. The Responses API reports most input as 30-minute cache writes.
+const TERRA_PRICING = { uncachedInputUsdPerMillionTokens: 1, cachedInputUsdPerMillionTokens: .05,
+  cacheWriteInputUsdPerMillionTokens: 1.25, outputUsdPerMillionTokens: 5 };
 
 export function agentModelPricing(modelId: string) {
   return modelId === TERRA_VISUAL_MODEL || modelId.startsWith(TERRA_VISUAL_MODEL + '-')
@@ -80,7 +82,7 @@ function configuredAgentModel(
         ...params, temperature: undefined, maxOutputTokens: (params.maxOutputTokens ?? 1600) + 2048,
         // The Responses API streams no reasoning, so first content waits for it. Medium reasoning
         // pushed storyboards past the 10-second first-content limit; low matched its accuracy.
-        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'low', store: false } },
+        providerOptions: { ...params.providerOptions, openai: { reasoningEffort: 'low', serviceTier: 'default', store: false } },
       }),
     } });
     const fallback = configuredAgentModel(env, sessionAffinity, 'low', metadata, undefined, true);
