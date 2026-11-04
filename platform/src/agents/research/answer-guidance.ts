@@ -44,11 +44,12 @@ ${EVIDENCE_LIMITATIONS}
 export const RESEARCH_ANSWER_GUIDANCE = `${ANSWER_SCOPE_GUIDANCE}
 ${RESEARCH_REQUIREMENTS}`;
 
-/** A visible budget for the answer text, so ordinary answers stay scannable. */
+/** A default budget for the answer text, so ordinary answers stay scannable. A length the user asks for wins. */
 export function answerLengthGuidance(detail: 'standard' | 'detailed' | undefined): string {
+  const explicit = 'When the user asks for a specific length or word count, follow that request instead of this default.';
   return detail === 'detailed'
-    ? 'Length: keep the answer under about 700 words, counting tables and lists. Cover each requested item once at the requested depth, then stop. Do not add a closing summary that repeats earlier points.'
-    : 'Length: aim for about 150 to 400 words, counting tables and lists. Cover each requested item once, then stop. Do not add background, a closing summary or a section that repeats earlier points. When the requested count or format needs more room, shorten each item instead of dropping requested items.';
+    ? `Length: when the user does not specify a length, keep the answer under about 700 words, counting tables and lists. ${explicit} Cover each requested item once at the requested depth, then stop. Do not add a closing summary that repeats earlier points.`
+    : `Length: when the user does not specify a length, aim for about 150 to 400 words, counting tables and lists. ${explicit} Cover each requested item once, then stop. Do not add background, a closing summary or a section that repeats earlier points. When the requested count or format needs more room, shorten each item instead of dropping requested items.`;
 }
 
 export function finalizationAnswerGuidance(route: 'topic_research' | 'inspect_video'): string {

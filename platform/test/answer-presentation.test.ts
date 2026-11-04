@@ -2,6 +2,7 @@ import { answerWarnings } from '../src/agents/finalizer';
 import { answerLengthGuidance } from '../src/agents/research/answer-guidance';
 import { executeGetVideo } from '../src/agents/providers/youtube/tools/get-video';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
+import { analyzeFrameEvidence } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { officialAnalysis } from './fixtures/saved-replays';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
 import type { EvidencePacket } from '../src/agents/contracts';
@@ -50,10 +51,24 @@ describe('answer warnings', () => {
   });
 });
 
+it.each(['analysis first', 'capture first'] as const)('shows the selected-frame note with its timestamp caveat whatever the order (%s)', async order => {
+  const analyzed = await analyzeFrameEvidence({ videoId: 'aaaaaaaaaaa', failures: [], meta: { partial: false, warnings: [] },
+    frames: [{ timestampMs: 1000, mimeType: 'image/jpeg', width: 640, height: 360, imageBase64: '/9j/2Q==' }] }, 'Describe the frame',
+    { ...context({}), analyzeFrames: async () => ({ findings: [{ observation: 'A desk.', timestampsMs: [1000] }], warnings: [] }) }, 'saved-analysis');
+  const captured = await frameBatch('bbbbbbbbbbb', [], []);
+  const notes = answerWarnings(order === 'analysis first' ? [analyzed, captured] : [captured, analyzed])
+    .filter(warning => warning.code === 'SELECTED_FRAME_EVIDENCE');
+  expect(analyzed.warnings.find(warning => warning.code === 'SELECTED_FRAME_EVIDENCE')!.message).not.toContain('Timestamps');
+  expect(notes).toEqual([expect.objectContaining({ message: 'Observations cover selected still frames only. Timestamps identify requested seek positions.' })]);
+});
+
 describe('answer length', () => {
-  it('gives each answer detail a visible length budget', () => {
-    expect(answerLengthGuidance('standard')).toContain('150 to 400 words');
-    expect(answerLengthGuidance(undefined)).toContain('150 to 400 words');
-    expect(answerLengthGuidance('detailed')).toContain('700 words');
+  it('gives each answer detail a default length budget that an explicit request overrides', () => {
+    for (const detail of ['standard', undefined] as const) {
+      expect(answerLengthGuidance(detail)).toContain('when the user does not specify a length, aim for about 150 to 400 words');
+      expect(answerLengthGuidance(detail)).toContain('follow that request instead of this default');
+    }
+    expect(answerLengthGuidance('detailed')).toContain('when the user does not specify a length, keep the answer under about 700 words');
+    expect(answerLengthGuidance('detailed')).toContain('follow that request instead of this default');
   });
 });

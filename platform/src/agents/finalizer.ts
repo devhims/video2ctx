@@ -88,8 +88,12 @@ export function buildAgentTurnResult(
   });
 }
 
-/** Fixed-text notes that say the same thing for every source, so one entry stands for all. */
-const BOILERPLATE_WARNING_CODES = new Set(['SELECTED_FRAME_EVIDENCE', 'SAMPLED_VISUAL_EVIDENCE']);
+/** Fixed-text notes that say the same thing for every source. One canonical entry stands for all,
+ * whichever producer's wording arrives first. */
+const BOILERPLATE_WARNINGS: Record<string, string> = {
+  SELECTED_FRAME_EVIDENCE: 'Observations cover selected still frames only. Timestamps identify requested seek positions.',
+  SAMPLED_VISUAL_EVIDENCE: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.',
+};
 /** A count of failed frames that the batch's own FRAME_UNAVAILABLE warnings already state. */
 const GENERIC_FRAME_FAILURE = /requested frame(?:\(s\)|s)? could not be extracted/i;
 
@@ -105,10 +109,11 @@ export function answerWarnings<T extends { code: string; message: string; videoI
       : packet.warnings;
   });
   const seen = new Set<string>();
-  return [...reduced, ...extra].filter((warning) => {
-    const key = BOILERPLATE_WARNING_CODES.has(warning.code) ? warning.code : `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
-    if (seen.has(key)) return false;
+  return [...reduced, ...extra].flatMap((warning) => {
+    const canonical = Object.hasOwn(BOILERPLATE_WARNINGS, warning.code) ? BOILERPLATE_WARNINGS[warning.code]! : undefined;
+    const key = canonical ? warning.code : `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
+    if (seen.has(key)) return [];
     seen.add(key);
-    return true;
+    return [canonical ? { ...warning, message: canonical } : warning];
   });
 }
