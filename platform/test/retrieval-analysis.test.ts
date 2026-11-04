@@ -131,7 +131,7 @@ describe('retrieval with optional analysis', () => {
     ctx.provider.frames = vi.fn(async () => ({ value: frames, cacheStatus: 'miss' as const, assetVersions: [version] }));
     const task = executeGetVideoFrames({ videoId, timestampsMs: [1000] }, ctx, 'frame');
     if (durationSeconds === undefined || durationSeconds > 7200) {
-      await expect(task).rejects.toThrow(durationSeconds === undefined ? /recording duration/ : /2 hours/);
+      await expect(task).rejects.toThrow(durationSeconds === undefined ? /Verified video duration/ : /2 hours/);
       expect(ctx.provider.frames).not.toHaveBeenCalled();
     } else { await task; expect(ctx.provider.frames).toHaveBeenCalledOnce(); }
     expect(tools).toEqual(['get_video', 'get_video_frames']);

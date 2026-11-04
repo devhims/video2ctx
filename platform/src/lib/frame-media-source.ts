@@ -1,5 +1,4 @@
 import { getDetails } from '../../../packages/all-things-youtube/src/index';
-import { verifyCompletedBroadcast } from '../../../packages/youtube-skills/src/watch/innertube';
 import { loadMediaCandidateGroup } from '../../../packages/youtube-skills/src/watch/media';
 import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { createWorkerProxyTransport } from './youtube-worker-transport';
@@ -44,7 +43,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
   for (const slot of plan.order.slice(0, 4)) {
     signal.throwIfAborted();
     const transport = createWorkerProxyTransport(urls[slot]!);
-    let answered = false, throttled = false, served = false, sourceFailed = false, checkingBroadcast = false;
+    let answered = false, throttled = false, served = false, sourceFailed = false, live = false;
     const capture = (event: unknown) => {
       const value = event as { reason?: unknown; code?: unknown };
       const botChallenge = typeof value.reason === 'string' && /confirm.*(?:not a bot|aren.t a bot)|unusual traffic|automated requests/i.test(value.reason);
@@ -68,21 +67,16 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
     };
     try {
       const options = { fetch: tracked, retry: { policy: { maxAttempts: 1, attemptTimeoutMs: 8000 } } };
-      let verifiedEnded = false;
       let metadata: Awaited<ReturnType<typeof getDetails>> | undefined;
       for (const profile of [1, 0]) {
         const group = await frameAbortable(signal, () => loadMediaCandidateGroup(profile, videoId, maxWidth, options, true, event => capture({ ...event,
           code: event.error ? extractionEventSchema.shape.code.safeParse(safeErrorLog(event.error).errorCode).data ?? 'UNKNOWN' : undefined })));
         if (!group) { if (throttled) break; continue; }
-        // isLiveContent also marks archived streams. Require the same end-of-broadcast
-        // proof as FFmpeg before allowing a flagged source to supply picture bytes.
+        // The playable source response already identifies ordinary versus live
+        // content. Only older/ambiguous responses need a second metadata request.
         if (group.isLive === undefined) metadata ??= await frameAbortable(signal, () => getDetails({ videoId, ...options }));
-        if ((group.isLive ?? metadata?.isLive) && !verifiedEnded) {
-          checkingBroadcast = true;
-          await frameAbortable(signal, () => verifyCompletedBroadcast(videoId, options));
-          checkingBroadcast = false;
-          verifiedEnded = true;
-        }
+        live = group.isLive === true || (group.isLive === undefined && metadata?.isLive === true);
+        if (live) throw new FrameMediaError('unsupported');
         const [preferred, ...alternates] = group.candidates.filter(c => c.mimeType.includes('avc1'));
         // Prefer detail first, then the progressive source that avoids adaptive range failures.
         const candidates = preferred ? [preferred, ...alternates.filter(c => c.progressive), ...alternates.filter(c => !c.progressive)] : [];
@@ -159,8 +153,7 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
       capture({ stage: 'player', outcome: 'error', proxySlot: slot, code: extractionEventSchema.shape.code.safeParse(safeErrorLog(error).errorCode).data ?? 'UNKNOWN' });
       console.info({ event: 'media_source_route_failure', videoId, slot, ...safeErrorLog(error) });
       signal.throwIfAborted();
-      if (error instanceof FrameMediaError && error.code === 'budget') throw error;
-      if (checkingBroadcast) throw new FrameMediaError('unsupported');
+      if (live || (error instanceof FrameMediaError && error.code === 'budget')) throw error;
     }
     finally {
       if (throttled) outcomes.push({ slot, outcome: 'rate_limited' });

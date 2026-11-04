@@ -65,9 +65,6 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
       context.signal.throwIfAborted();
       if (context.maxVideoSeconds !== undefined) {
         const duration = eligibleDuration(metadata?.durationSeconds);
-        // YouTube's isLiveContent flag also covers archived broadcasts. For a
-        // known duration, the extraction provider verifies whether the stream ended.
-        if (duration === undefined && metadata?.isLive === true) throw new Error('Cannot capture a broadcast without a verified recording duration.');
         if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
       }
@@ -140,7 +137,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
 
   if (context.maxVideoSeconds === undefined) return capture(undefined);
   const metadata = verifiedFrameMetadata(request.videoId, context.getEvidence?.() ?? []);
-  if (metadata?.isLive === true || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
+  if (eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
   // Meter and deduplicate the prerequisite before the frame tool holds credits.
   return executeGetVideo({ videoId: request.videoId }, context, `frame-metadata:${request.videoId}`)
     .then(packet => capture(verifiedFrameMetadata(request.videoId, [packet])));

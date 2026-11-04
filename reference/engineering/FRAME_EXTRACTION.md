@@ -11,11 +11,8 @@ uses the MP4 index to locate the selected keyframe groups, and packages a short 
 requested timestamp. Cloudflare decodes that clip into a JPEG. The original video
 can exceed Media's input duration limit because only the short clip is submitted.
 
-The agent requires a known duration within its configured limit before requesting
-frames. A live-content flag also appears on recordings of past broadcasts. For
-flagged sources, Media verifies the broadcast end through the same player check as
-FFmpeg before reading picture bytes. A missing player flag retains the separate
-metadata lookup.
+Source discovery reuses the playable player's live-content flag. A missing flag
+retains the separate metadata lookup, and live content retains FFmpeg recovery.
 A bounded 64 KiB prefix read normally contains the MP4 index and first fragment
 header, avoiding separate proxy requests for each small box. Larger or tail indexes
 still use precise bounded range reads.
