@@ -133,11 +133,12 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
     if (isVideo && count <= MAX_SAMPLES && (boxes.some(b => b.type === 'edts') || tables.some(b => b.type === 'ctts'))) return;
     if (
       sizeHeader.getUint32(0) !== 0 ||
-      !count ||
+      (isVideo && !count) ||
       count * Math.max(fixed, 1) > sourceSize ||
       sizes.body + 12 + (fixed ? 0 : count * 4) !== sizes.end
     )
       return unsupported('box_layout');
+    if (!count) continue; // An empty audio track has nothing to skip; keep reading the video.
     const timing = await table(one(tables, 'stts'), 8);
     const clock = view(await bytes(timing.at, timing.count * 8));
     const timingRuns: TimeRun[] = [];
@@ -333,11 +334,15 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       let sample = chunkStart,
         rule = start.rule,
         previousEnd = 0;
+      const ranges: Array<{ start: number; end: number }> = [];
+      let reordered = false;
       for (let chunk = start.chunk; chunk <= last.chunk; chunk++) {
         if (rules[rule + 1]?.chunk === chunk) rule++;
         const pos = (chunk - start.chunk) * stride;
         let offset = stride === 4 ? offsets.getUint32(pos) : Number(offsets.getBigUint64(pos));
-        if (!integer(offset) || offset < previousEnd) return unsupported('clip_layout');
+        if (!integer(offset)) return unsupported('clip_layout');
+        const chunkOffset = offset;
+        if (offset < previousEnd) reordered = true;
         const chunkEnd = Math.min(stop, sample + rules[rule]!.perChunk);
         while (sample < chunkEnd) {
           const size = fixed || sizes!.getUint32((sample - chunkStart) * 4);
@@ -363,7 +368,16 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
           offset += size;
           sample++;
         }
+        ranges.push({ start: chunkOffset, end: offset });
         previousEnd = offset;
+      }
+      // File order can differ from decode order. Sort only the ranges used for
+      // overlap validation; keep the selected samples in their original order.
+      // Each range runs from its chunk's start to the last selected sample in it, so
+      // every byte a selected sample uses is checked. The last chunk's unread tail is not.
+      if (reordered) {
+        ranges.sort((a, b) => a.start - b.start);
+        if (ranges.some((range, i) => i > 0 && range.start < ranges[i - 1]!.end)) return unsupported('clip_layout');
       }
       return selected;
     },

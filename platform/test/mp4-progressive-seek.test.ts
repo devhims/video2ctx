@@ -14,7 +14,7 @@ function box(type: string, ...parts: Buffer[]) {
 
 // A regular tail-index movie with two chunk rules and two timing runs. The
 // 60,200 entries in stsz are required on disk, but never expanded in memory by the reader.
-function movie(wideOffsets = false, reordered = false) {
+function movie(wideOffsets = false, reordered = false, emptyAudio = false) {
   const count = 60200,
     chunks = 15100;
   const sizes = Buffer.alloc(count * 4),
@@ -77,9 +77,15 @@ function movie(wideOffsets = false, reordered = false) {
     box('stss', words(0, sync.length, ...sync)),
   );
   const dinf = box('dinf', box('dref', words(0, 1), box('url ', words(1))));
+  const sound = Buffer.alloc(24);
+  sound.write('soun', 8);
+  // A declared audio track with no samples, placed before the video.
+  const audio = emptyAudio ? box('trak', box('mdia', box('hdlr', sound), box('minf', box('stbl',
+    box('stsz', words(0, 0, 0)), box('stts', words(0, 0)))))) : Buffer.alloc(0);
   const moov = box(
     'moov',
     box('mvhd', mvhd),
+    audio,
     box('trak', box('tkhd', tkhd), edit, box('mdia', box('mdhd', mdhd), box('hdlr', handler), box('minf', dinf, stbl))),
   );
   const file = Buffer.concat([ftyp, mdat, moov]),
@@ -134,6 +140,56 @@ test('rejects oversized GOPs and unsafe 64-bit offsets before fetching media', a
     await expect(source.clip(0)).rejects.toMatchObject({ code: 'unsupported' });
     expect(reads.slice(before).every((r) => r.offset >= indexAt)).toBe(true);
   }
+});
+
+test('retains video when the first track is empty audio in a large movie index', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const file = await readFile(new URL('./fixtures/media/tail-index.mp4', import.meta.url));
+  const at = file.indexOf('moov') - 4, children = file.subarray(at + 8);
+  const first = children.readUInt32BE(0), handler = Buffer.alloc(24);
+  handler.write('soun', 8);
+  const audio = box('trak', box('mdia', box('hdlr', handler), box('minf', box('stbl',
+    box('stsz', words(0, 0, 0)), box('stts', words(0, 0))))));
+  const padded = Buffer.concat([file.subarray(0, at), box('moov', children.subarray(0, first), audio,
+    children.subarray(first), box('free', Buffer.alloc(70000)))]);
+  async function payload(bytes: Buffer) {
+    const source = await openMp4FrameSource(async (o, n) => Uint8Array.from(bytes.subarray(o, o+n)), bytes.length);
+    const clip = Buffer.from((await source.clip(2.5)).bytes);
+    return clip.subarray(clip.indexOf('mdat') + 4);
+  }
+  expect(await payload(padded)).toEqual(await payload(file));
+});
+
+test('keeps a long movie on the fast path when an empty audio track precedes the video', async () => {
+  // 60,200 samples exceed the legacy parser's limit, so only the sparse reader can open this movie.
+  const { file, indexAt, indexSize, open } = movie(false, false, true);
+  const read = async (at: number, size: number) => Uint8Array.from(file.subarray(at, at + size));
+  expect(await openSparseProgressiveIndex(read, indexAt, indexSize, file.length)).toBeDefined();
+  async function payload(clip: Promise<{ bytes: Uint8Array }>) {
+    const bytes = Buffer.from((await clip).bytes);
+    return bytes.subarray(bytes.indexOf('mdat') + 4);
+  }
+  const withAudio = await open(), plain = await movie().open();
+  for (const seconds of [0.5, 1500]) expect(await payload(withAudio.clip(seconds))).toEqual(await payload(plain.clip(seconds)));
+});
+
+test('allows reordered chunks but rejects overlapping chunks before a picture read', async () => {
+  const { file, indexAt, open, reads } = movie();
+  const table = file.indexOf('stco', indexAt) + 12;
+  const first = file.readUInt32BE(table), second = file.readUInt32BE(table + 4);
+  const a = Buffer.from(file.subarray(first, second)), b = Buffer.from(file.subarray(second, second + a.length));
+  async function payload() {
+    const clip = Buffer.from((await (await open()).clip(0)).bytes);
+    return clip.subarray(clip.indexOf('mdat') + 4);
+  }
+  const expected = await payload();
+  b.copy(file, first); a.copy(file, second);
+  file.writeUInt32BE(second, table); file.writeUInt32BE(first, table + 4);
+  expect(await payload()).toEqual(expected);
+  file.writeUInt32BE(second + 2, table + 8);
+  const source = await open(), before = reads.length;
+  await expect(source.clip(0)).rejects.toMatchObject({ mp4Guard: 'clip_layout' });
+  expect(reads.slice(before).every(r => r.offset >= indexAt)).toBe(true);
 });
 
 test('an edit list and B-frame timing in a large index retain the established parser', async () => {
