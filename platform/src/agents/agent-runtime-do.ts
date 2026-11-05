@@ -854,8 +854,12 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         FROM agent_tool_calls WHERE run_id = ${runId}
       `[0];
       const reserved = analysis ? 0 : execution.reserveProviderCalls ?? 0;
-      if ((analysis ? counts?.analysis_count ?? 0 : counts?.provider_count ?? 0) + reserved >= MAX_TOOL_CALLS - 1)
+      const used = analysis ? counts?.analysis_count ?? 0 : counts?.provider_count ?? 0;
+      if (used + reserved >= MAX_TOOL_CALLS - 1)
         throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The evidence tool budget is exhausted. Finalize with available evidence.');
+      const frameReserve = analysis || execution.toolName === 'get_video_frames' ? 0 : execution.frameReserveCalls ?? 0;
+      if (used + reserved + frameReserve >= MAX_TOOL_CALLS - 1)
+        throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'The remaining evidence tool calls are reserved for get_video_frames. Take exact frames of the located moments now, or finalize with the available evidence.');
     };
     assertAdmission();
     const hold = toolCreditHold(execution.operation, analysis);

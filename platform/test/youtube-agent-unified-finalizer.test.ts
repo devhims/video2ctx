@@ -77,6 +77,8 @@ it.each(['context_answer', 'clarification', 'rejected'] as const)('routes %s thr
   expect(prompt).toContain('The man is the interviewer.');
   expect(prompt).toContain('Never use em dashes (—) or dashes (-) in responses. Use a comma, colon, parentheses, or two separate sentences instead.');
   expect(prompt.indexOf('conversationHistory')).toBeLessThan(prompt.lastIndexOf('Correct your previous statement.'));
+  // A clarification or rejection is one short reply and gets no answer length budget.
+  expect(prompt.includes('Length: when the user does not specify a length')).toBe(intent === 'context_answer');
 });
 
 it('streams provisional text, clears a rejected draft, and commits the repaired answer', async () => {
