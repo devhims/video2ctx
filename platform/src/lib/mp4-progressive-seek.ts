@@ -5,6 +5,10 @@ import { boxAt, integer, MAX_SAMPLES, unsupported, type Mp4RangeReader } from '.
 type Box = { type: string; body: number; end: number };
 const view = (bytes: Uint8Array) => new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 const PAGE = 16 * 1024;
+// One retained checkpoint per RUN_STEP composition-offset runs, scanned in
+// SCAN_RUNS-run reads. A 1,000-sample group then re-reads about 9 KiB of runs.
+const RUN_STEP = 64;
+const SCAN_RUNS = 32 * 1024;
 
 class UnsupportedLayout extends Error {}
 
@@ -227,7 +231,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
   const editBoxes = video.track.filter(box => box.type === 'edts');
   const reordered = tables.some(box => box.type === 'ctts');
   let presentationOffset = 0;
-  let compositionOffset: ((sample: number) => number) | undefined;
+  let compositionWindow: ((first: number, stop: number) => Promise<(sample: number) => number>) | undefined;
   if (editBoxes.length || reordered) {
     // Keep the established parser for short edited movies. For long movies accept
     // only a constant-rate track and a single rate-one edit aligned with each GOP.
@@ -239,24 +243,45 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       edit.getInt32(12) < 0 || edit.getUint32(16) !== 65536) return;
     presentationOffset = edit.getInt32(12);
     const offsets = await table(one(tables, 'ctts'), 8, true);
-    // Anchor at sample zero. Never infer an offset from an unvalidated tail or
-    // materialize one record per frame. Leave all retained run tables within budget.
-    const runs = Math.min(offsets.count, MAX_SAMPLES - compactEntries);
-    if (!runs) return;
-    const values = view(await bytes(offsets.at, runs * 8));
-    const ends = new Uint32Array(runs);
+    // Validate every run once, but retain only the first sample of each RUN_STEP
+    // runs. Never materialize one record per frame or per run.
+    const marks = Math.ceil(offsets.count / RUN_STEP);
+    compactEntries += marks + 1;
+    if (compactEntries > MAX_SAMPLES) return;
+    const starts = new Uint32Array(marks + 1);
     let covered = 0;
-    for (let i = 0; i < runs; i++) {
-      const length = values.getUint32(i * 8);
-      covered += length;
-      if (!length || covered > count) return unsupported('box_layout');
-      ends[i] = covered;
+    for (let run = 0; run < offsets.count; run += SCAN_RUNS) {
+      const n = Math.min(SCAN_RUNS, offsets.count - run),
+        values = view(await exact(offsets.at + run * 8, n * 8));
+      for (let i = 0; i < n; i++) {
+        if ((run + i) % RUN_STEP === 0) starts[(run + i) / RUN_STEP] = covered;
+        const length = values.getUint32(i * 8);
+        covered += length;
+        if (!length || covered > count) return unsupported('box_layout');
+      }
     }
-    if (runs === offsets.count && covered !== count) return unsupported('box_layout');
-    compositionOffset = sample => {
-      if (sample >= covered) return unsupported('table_entries', offsets.count);
-      const run = floorIndex(runs, i => i === 0 || ends[i - 1]! <= sample);
-      return values.getUint32(run * 8 + 4);
+    if (covered !== count) return unsupported('box_layout');
+    starts[marks] = count;
+    // Read only the runs between the checkpoints around one bounded group. The
+    // re-read runs must land on the same checkpoints the scan recorded.
+    compositionWindow = async (first, stop) => {
+      const from = floorIndex(marks, j => starts[j]! <= first),
+        to = floorIndex(marks + 1, j => starts[j]! < stop) + 1;
+      const lo = from * RUN_STEP,
+        hi = Math.min(offsets.count, to * RUN_STEP);
+      const values = view(await bytes(offsets.at + lo * 8, (hi - lo) * 8));
+      const group = new Uint32Array(stop - first);
+      let sample = starts[from]!;
+      for (let run = lo; run < hi; run++) {
+        if (run % RUN_STEP === 0 && sample !== starts[run / RUN_STEP]) return unsupported('box_layout');
+        const length = values.getUint32((run - lo) * 8),
+          value = values.getUint32((run - lo) * 8 + 4);
+        if (!length) return unsupported('box_layout');
+        for (let s = Math.max(sample, first); s < Math.min(sample + length, stop); s++) group[s - first] = value;
+        sample += length;
+      }
+      if (sample !== starts[to]) return unsupported('box_layout');
+      return s => group[s - first]!;
     };
   }
 
@@ -295,9 +320,10 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       const chunkStart = first - start.skip,
         sizeCount = stop - chunkStart;
       if (sizeCount > MAX_SAMPLES) return unsupported('table_entries', sizeCount);
-      const [offsets, sizes] = await Promise.all([
+      const [offsets, sizes, compositionOffset] = await Promise.all([
         bytes(chunks.at + start.chunk * stride, (last.chunk - start.chunk + 1) * stride).then(view),
         fixed ? undefined : bytes(sizesAt + chunkStart * 4, sizeCount * 4).then(view),
+        compositionWindow?.(first, stop),
       ]);
       // The bounded group must display exactly once in each presentation slot.
       // This rules out open GOPs, gaps, overlaps and edits that would shift a seek.
