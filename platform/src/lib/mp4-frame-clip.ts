@@ -135,7 +135,7 @@ export async function openMp4FrameSource(read: Mp4RangeReader, size: number) {
         if (sparse) return { duration: sparse.duration, width: sparse.width, height: sparse.height,
           async clip(time: number) {
             const samples = await sparse.groupAt(time);
-            return remuxGroup(samples, read, size, time * sparse.timescale, sparse.timescale,
+            return remuxGroup(samples, read, size, time * sparse.timescale + sparse.presentationOffset, sparse.timescale,
               sparse.width, sparse.height, sparse.avcConfig);
           } };
       }
