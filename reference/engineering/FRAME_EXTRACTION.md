@@ -127,7 +127,7 @@ A unique direct media handler must identify the track as audio. Ambiguous tracks
 remain in the combined count. Fragmented movies retain the original combined guard.
 For progressive indexes larger than 64 KiB, the Worker first tries a bounded
 seek for self-contained AVC video with one sample description, explicit sync
-samples, decode-order presentation and no video edit list. It reads box headers
+samples and bounded timing tables. It reads box headers
 in 16 KiB pages, uses compact timing, keyframe and chunk-mapping tables, and
 reads only the chunk offsets and sample sizes needed to locate a selected
 keyframe group. Variable decode durations and 32- or 64-bit chunk offsets are
@@ -137,9 +137,12 @@ entries in aggregate and 1,000 selected samples. Offset and size declarations
 must fit their boxes and selected media must fit the file and range budget.
 
 This path can address more than 50,000 stored samples because it never creates
-a per-frame index for the entire track. B-frame composition tables, edit lists
-and other unsupported sparse layouts retain the established bounded parser and
-FFmpeg recovery. The 2 MiB movie-index ceiling applies before either path.
+a per-frame index for the entire track. For long constant-rate video with reordered
+pictures, the sparse reader accepts an unsigned composition-offset table and a
+single rate-one edit. It indexes only the prefix of timing runs that fits the
+remaining compact-entry budget. Each selected keyframe group must fill its edited
+presentation interval exactly once, starting with the keyframe. Out-of-budget
+seeks and unsupported layouts retain the existing recovery paths. The 2 MiB movie-index ceiling applies before either path.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
 fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
@@ -734,3 +737,9 @@ The experiment used one primer, waited 75 seconds after it completed, then reque
 The first-call penalty in this pair was concentrated before method entry. The traces do not split that interval into routing, dispatch, or object activation. The earlier 2.618 s incident predates these spans. The experiment used full trace capture temporarily. Production trace sampling was then set to 10% and verified through the script settings API.
 
 The 10% trace sample applies to the whole Worker. Operators can use the lease decision's first-call marker to compare admission waits across instance lifetimes and investigate future late grants. The measured pair does not establish a latency percentile or explain the earlier 2.618 s incident. Evaluate trace volume and cost against the number of usable slow-grant traces before increasing sampling.
+
+## Stanford CS229 display-order verification, November 4
+
+The progressive format-18 source for `UzxYlbK2c7E` had 123,462 video samples, a single edit starting 1,001 ticks into a 30,000 Hz timeline, and 56,339 composition-time runs. The original sparse reader passed the edited track to the legacy parser, which rejected the video sample count. Locally, the revised reader's three remuxed clips decoded to identical RGB pixels to independent FFmpeg seeks on the original track at 271.137, 1358.137 and 2445.137 seconds.
+
+Production Worker `c72b9755-78fa-49d1-b176-e06621796075` captured all three frames through Media using format 18 in 8.875 seconds, without FFmpeg. Including provider persistence, retrieval took 11.113 seconds. The complete frame tool took 13.964 seconds versus the earlier 44.943-second failure. Visual findings were ready at 23.786 seconds and the final answer at 28.214 seconds. The replay explicitly requested fresh pictures and analysis. The original run fell back to a transcript after capture failed. All three persisted JPEGs were 480 × 360. Full-frame SSIM against the independently decoded references was 0.9848, 0.9882 and 0.9919 in timestamp order. [Original run](https://www.video2ctx.dev/dashboard/sessions/85624c90-9619-463d-bb64-03d1128889b2) · [Fresh production replay](https://www.video2ctx.dev/dashboard/sessions/66d3c00e-aecb-4de8-b872-19c8debfa84e)

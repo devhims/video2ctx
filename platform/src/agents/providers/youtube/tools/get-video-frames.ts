@@ -1,4 +1,5 @@
 import { executeGetVideo } from './get-video';
+import { ApiError } from '../../../../lib/http';
 import { eligibleDuration, verifiedFrameMetadata, VideoTooLongError } from '../../../runtime/video-duration-limit';
 import { frameSelectionsSchema } from '../../../runtime/frame-selection';
 import { withPreviewCleanup } from '../../../runtime/preview-lifecycle';
@@ -64,7 +65,6 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
     execute: () => diagnoseVisualTool('frames', async () => {
       context.signal.throwIfAborted();
       if (context.maxVideoSeconds !== undefined) {
-        if (metadata?.isLive === true) throw new Error('Cannot capture frames from a live broadcast. Select a completed video.');
         const duration = eligibleDuration(metadata?.durationSeconds);
         if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
@@ -138,8 +138,16 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
 
   if (context.maxVideoSeconds === undefined) return capture(undefined);
   const metadata = verifiedFrameMetadata(request.videoId, context.getEvidence?.() ?? []);
-  if (metadata?.isLive === true || eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
-  // Meter and deduplicate the prerequisite before the frame tool holds credits.
-  return executeGetVideo({ videoId: request.videoId }, context, `frame-metadata:${request.videoId}`)
+  if (eligibleDuration(metadata?.durationSeconds) !== undefined) return capture(metadata);
+  // Meter and deduplicate the prerequisite before the frame tool holds credits. The duration
+  // check belongs to capture: it may use provider calls kept for exact frames, but runs only
+  // when one call still remains for that capture.
+  return executeGetVideo({ videoId: request.videoId }, { ...context,
+    executeEvidenceTool: execution => context.executeEvidenceTool({ ...execution, frameReserveCalls: 1 }) },
+  `frame-metadata:${request.videoId}`)
+    .catch(error => {
+      if ((error as { code?: unknown })?.code !== 'AGENT_TOOL_BUDGET_EXCEEDED') throw error;
+      throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'Too few evidence tool calls remain to verify this video\'s duration and capture its frames. Finalize with the available evidence.');
+    })
     .then(packet => capture(verifiedFrameMetadata(request.videoId, [packet])));
 }
