@@ -242,7 +242,51 @@ test('uses display order and the timeline edit only within validated, bounded gr
   const source = await open();
   expect((await source.clip(10)).time).toBe(0);
   expect((await source.clip(10.1)).time).toBeCloseTo(0.1);
-  await expect(source.clip(1900)).rejects.toMatchObject({ mp4Guard: 'table_entries' });
+});
+
+test('seeks B-frame groups across the whole composition-offset table', async () => {
+  const { file, indexAt, reads, open } = movie(false, true);
+  const ctts = file.indexOf('ctts', indexAt) - 4,
+    cttsEnd = ctts + file.readUInt32BE(ctts);
+  const source = await open();
+  // 60,200 one-sample runs exceed the 50,000-entry budget, so these groups lie
+  // past any prefix that could be retained in memory.
+  for (const seconds of [1667.1, 1900, 1950.5, 2005.9]) {
+    const before = reads.length;
+    const clip = await source.clip(seconds);
+    expect(clip.time).toBeCloseTo(seconds % 1);
+    const bytes = Buffer.from(clip.bytes),
+      payload = bytes.indexOf('mdat') + 4;
+    expect(bytes[payload + 4]).toBe(0x65);
+    expect(bytes[payload + 5]).toBe((Math.floor(seconds) * 30) % 251);
+    const window = reads.slice(before).filter(r => r.offset < cttsEnd && r.offset + r.size > ctts);
+    expect(window.reduce((n, r) => n + r.size, 0)).toBeLessThanOrEqual(2 * 16 * 1024);
+  }
+  await expect(source.clip(source.duration)).rejects.toMatchObject({ code: 'unsupported' });
+});
+
+test.each([[0, 60195], [2, 60195], [0, 60199], [2, 60199]])('rejects a run of %i samples near the end of the table (run %i)', async (length, run) => {
+  const { file, indexAt, open } = movie(false, true);
+  file.writeUInt32BE(length, file.indexOf('ctts', indexAt) + 12 + run * 8);
+  await expect(open()).rejects.toMatchObject({ mp4Guard: 'box_layout' });
+});
+
+test('rejects a misplaced offset in a late group without affecting earlier groups', async () => {
+  const { file, indexAt, open } = movie(false, true);
+  // Sample 60,001 is the second picture of the group starting at 60,000 (2,000 s).
+  file.writeUInt32BE(0, file.indexOf('ctts', indexAt) + 12 + 60001 * 8 + 4);
+  const source = await open();
+  expect((await source.clip(1999.5)).time).toBeCloseTo(0.5);
+  await expect(source.clip(2000.1)).rejects.toMatchObject({ mp4Guard: 'clip_layout' });
+});
+
+test('rejects runs that change after the table was validated', async () => {
+  const { file, indexAt, open } = movie(false, true);
+  const source = await open();
+  // A source that serves a different table later must not shift the samples.
+  file.writeUInt32BE(2, file.indexOf('ctts', indexAt) + 12 + 57010 * 8);
+  await expect(source.clip(1900)).rejects.toMatchObject({ mp4Guard: 'box_layout' });
+  expect((await source.clip(10)).time).toBe(0);
 });
 
 test.each(['overlap', 'gap', 'zero run', 'shifted keyframe'])('rejects invalid presentation timing (%s)', async problem => {
