@@ -347,6 +347,8 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       }
       // File order can differ from decode order. Sort only the ranges used for
       // overlap validation; keep the selected samples in their original order.
+      // Each range runs from its chunk's start to the last selected sample in it, so
+      // every byte a selected sample uses is checked. The last chunk's unread tail is not.
       if (reordered) {
         ranges.sort((a, b) => a.start - b.start);
         if (ranges.some((range, i) => i > 0 && range.start < ranges[i - 1]!.end)) return unsupported('clip_layout');

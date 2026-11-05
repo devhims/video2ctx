@@ -136,7 +136,8 @@ in that chunk. A lookup handles at most 50,000 such sizes, 50,000 compact table
 entries in aggregate and 1,000 selected samples. Offset and size declarations
 must fit their boxes and selected media must fit the file and range budget. An audio
 track with no samples is skipped. A selected group's chunks may appear in any
-file order, provided their byte ranges do not overlap.
+file order, provided the bytes read for the clip do not overlap. Bytes after the
+last selected sample are not read, so they are not checked.
 
 This path can address more than 50,000 stored samples because it never creates
 a per-frame index for the entire track. For long constant-rate video with reordered
