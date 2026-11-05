@@ -52,11 +52,16 @@ export function numberedItemsMismatch(output: Pick<z.infer<typeof finalizationOu
   return numbers.size !== expected || !Array.from({ length: expected }, (_, index) => index + 1).every(number => numbers.has(number));
 }
 
-/** An answer made only of filler or a promise of future work is not an answer. */
-export function fillerOnlyAnswer(output: { blocks: { text: string }[] }): boolean {
+/** An answer made only of filler, a promise of future work, or a placeholder is not an answer.
+ * A placeholder is a block whose rendered prose holds no letter or digit in any language once
+ * the renderer's own citations are removed, such as "…" with citations: it would display as
+ * citation chips with no answer. Code, links and literal text the renderer preserves count as text. */
+export function fillerOnlyAnswer(output: { blocks: { text: string }[] }, aliases: ReadonlyMap<string, string> = new Map()): boolean {
   const fragment = /^(?:the|a|an|and|but|because|however|therefore)[,:]?$/i;
   const promise = /^(?:I(?:['’]ll| will| am going to)|Let me) (?:first )?(?:look up|check|search|retrieve|fetch|inspect|read|analy[sz]e)\b[^.!?]*(?:[.!?])?$/i;
-  return output.blocks.every(block => fragment.test(block.text.trim()) || promise.test(block.text.trim()));
+  const placeholder = (text: string) => !/[\p{L}\p{N}]/u.test(mapCitationProse(renderInlineCitations(text, aliases),
+    prose => prose.replace(/\[cite:[^\]]*\]|\[source unavailable\]/g, ''), false, LINK_NODES));
+  return output.blocks.every(block => fragment.test(block.text.trim()) || promise.test(block.text.trim()) || placeholder(block.text));
 }
 
 /** Keep the complete blocks of an answer cut off at the output-token limit. A block
@@ -249,25 +254,30 @@ export function blockReferences(block: { text: string; evidenceIds: readonly str
   return [...new Set([...block.evidenceIds.map(id => aliases.get(id) ?? id), ...inline])];
 }
 
+/** Rewrite every model citation form in a block as canonical [cite:id] markers, leaving code,
+ * links and literal text unchanged. Inline references stay where the model placed them, even
+ * when the block did not declare them; persisted evidence validation decides whether each one
+ * resolves. A marker with no usable reference is shown as unavailable rather than dropped. */
+function renderInlineCitations(text: string, aliases: ReadonlyMap<string, string>, placed = new Set<string>()): string {
+  return mapCitationProse(normalizeBareReferences(resolveAliasForms(text, aliases)), prose => prose
+    .replace(INLINE_MARKER, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
+      const ids = markerReferences((inlineId ?? escapedId)!, aliases);
+      if (!ids.length) return '[source unavailable]';
+      for (const id of ids) placed.add(id);
+      return ids.map(id => `[cite:${id}]`).join(' ');
+    }));
+}
+
 export function renderStructuredAnswer(value: z.infer<typeof structuredAnswerSchema> | z.infer<typeof clarificationAnswerSchema> | z.infer<typeof contextAnswerSchema>, aliases: ReadonlyMap<string, string> = new Map()): FinalizeAnswerInput {
   const input = value.intent === 'clarification' || value.intent === 'rejected' ? clarificationAnswerSchema.parse(value)
     : value.intent === 'context_answer' ? contextAnswerSchema.parse(value) : structuredAnswerSchema.parse(value);
   // Not an answer at all: the one content check that still earns a repair.
-  if (fillerOnlyAnswer(input)) throw new z.ZodError([{ code: 'custom', path: ['blocks'],
-    message: 'The answer is only a fragment or promise of future work. Answer the request now, or state the concrete missing context. Do not report planned work as completed.' }]);
+  if (fillerOnlyAnswer(input, aliases)) throw new z.ZodError([{ code: 'custom', path: ['blocks'],
+    message: 'The answer is only a fragment or promise of future work, or a placeholder with no answer text. Answer the request now, or state the concrete missing context. Do not report planned work as completed.' }]);
   const answer = input.blocks.map(block => {
     const declared = new Set(block.evidenceIds.map(id => aliases.get(id) ?? id));
     const placed = new Set<string>();
-    // Inline references stay where the model placed them, even when the block did not
-    // declare them; persisted evidence validation decides whether each one resolves.
-    // A marker with no usable reference is shown as unavailable rather than dropped.
-    const text = mapCitationProse(normalizeBareReferences(resolveAliasForms(block.text, aliases)), prose => prose
-      .replace(INLINE_MARKER, (_marker, inlineId: string | undefined, escapedId: string | undefined) => {
-        const ids = markerReferences((inlineId ?? escapedId)!, aliases);
-        if (!ids.length) return '[source unavailable]';
-        for (const id of ids) placed.add(id);
-        return ids.map(id => `[cite:${id}]`).join(' ');
-      }));
+    const text = renderInlineCitations(block.text, aliases, placed);
     const remaining = [...declared].filter(id => !placed.has(id)).map(id => `[cite:${id}]`).join(' ');
     // Appending text to the final table row would create an extra cell.
     if (remaining && endsInCodeBlock(text)) return `Sources: ${remaining}\n\n${text}`;
