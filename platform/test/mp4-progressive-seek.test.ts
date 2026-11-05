@@ -14,7 +14,7 @@ function box(type: string, ...parts: Buffer[]) {
 
 // A regular tail-index movie with two chunk rules and two timing runs. The
 // 60,200 entries in stsz are required on disk, but never expanded in memory by the reader.
-function movie(wideOffsets = false) {
+function movie(wideOffsets = false, reordered = false) {
   const count = 60200,
     chunks = 15100;
   const sizes = Buffer.alloc(count * 4),
@@ -38,7 +38,7 @@ function movie(wideOffsets = false) {
     at++; // Mimic interleaved bytes between chunks.
   }
   const mdat = box('mdat', media.subarray(0, at));
-  const ticks = count + 100,
+  const ticks = reordered ? count : count + 100,
     tkhd = Buffer.alloc(84),
     mdhd = Buffer.alloc(24),
     mvhd = Buffer.alloc(100);
@@ -60,10 +60,17 @@ function movie(wideOffsets = false) {
     box('avc1', visual, box('avcC', Buffer.from([1, 77, 0, 30, 255, 224, 0]))),
   );
   const sync = Array.from({ length: Math.ceil(count / 30) }, (_, n) => 1 + n * 30);
+  const composition = Buffer.alloc(reordered ? count * 8 : 0);
+  for (let i = 0; i < composition.length / 8; i++) {
+    composition.writeUInt32BE(1, i * 8);
+    composition.writeUInt32BE([1, 2, 0][i % 3]!, i * 8 + 4);
+  }
+  const edit = reordered ? box('edts', box('elst', words(0, 1, ticks, 1, 65536))) : Buffer.alloc(0);
   const stbl = box(
     'stbl',
     stsd,
-    box('stts', words(0, 2, 100, 2, count - 100, 1)),
+    box('stts', reordered ? words(0, 1, count, 1) : words(0, 2, 100, 2, count - 100, 1)),
+    reordered ? box('ctts', words(0, count), composition) : Buffer.alloc(0),
     box('stsc', words(0, 2, 1, 2, 1, 101, 4, 1)),
     box('stsz', words(0, 0, count), sizes),
     box(wideOffsets ? 'co64' : 'stco', words(0, chunks), offsets),
@@ -73,7 +80,7 @@ function movie(wideOffsets = false) {
   const moov = box(
     'moov',
     box('mvhd', mvhd),
-    box('trak', box('tkhd', tkhd), box('mdia', box('mdhd', mdhd), box('hdlr', handler), box('minf', dinf, stbl))),
+    box('trak', box('tkhd', tkhd), edit, box('mdia', box('mdhd', mdhd), box('hdlr', handler), box('minf', dinf, stbl))),
   );
   const file = Buffer.concat([ftyp, mdat, moov]),
     indexAt = ftyp.length + mdat.length;
@@ -206,3 +213,29 @@ test.each([[12, 1, true], [11, 1, false], [12, 0, false], [0, 1, false]] as cons
     if (supported) expect((await sparse!.groupAt(2.1))[0]?.is_sync).toBe(true);
     else expect(sparse).toBeUndefined(); // openMp4FrameSource will apply the legacy parser's own limits.
   });
+
+test('uses display order and the timeline edit only within validated, bounded groups', async () => {
+  const { file, indexAt, indexSize, open } = movie(false, true);
+  const sparse = await openSparseProgressiveIndex(async (at, size) => Uint8Array.from(file.subarray(at, at + size)),
+    indexAt, indexSize, file.length);
+  const samples = await sparse!.groupAt(10);
+  expect(samples.slice(0, 3).map(s => [s.dts, s.cts])).toEqual([[300, 301], [301, 303], [302, 302]]);
+  const source = await open();
+  expect((await source.clip(10)).time).toBe(0);
+  expect((await source.clip(10.1)).time).toBeCloseTo(0.1);
+  await expect(source.clip(1900)).rejects.toMatchObject({ mp4Guard: 'table_entries' });
+});
+
+test.each(['overlap', 'gap', 'zero run', 'shifted keyframe'])('rejects invalid presentation timing (%s)', async problem => {
+  const { file, indexAt, open } = movie(false, true);
+  const at = file.indexOf('ctts', indexAt) + 12;
+  if (problem === 'zero run') {
+    file.writeUInt32BE(0, at);
+    await expect(open()).rejects.toMatchObject({ mp4Guard: 'box_layout' });
+  } else {
+    if (problem === 'shifted keyframe') file.writeUInt32BE(2, at + 4);
+    else file.writeUInt32BE(problem === 'gap' ? 100 : 0, at + 12);
+    const source = await open();
+    await expect(source.clip(0)).rejects.toMatchObject({ mp4Guard: 'clip_layout' });
+  }
+});

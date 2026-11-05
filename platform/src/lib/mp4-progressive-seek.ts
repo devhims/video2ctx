@@ -1,4 +1,4 @@
-// Sparse seek for self-contained, decode-order H.264 MP4s. No untrusted MP4
+// Sparse seek for self-contained H.264 MP4s. No untrusted MP4
 // table is handed to MP4Box here. Unsupported layouts use the existing parser.
 import { boxAt, integer, MAX_SAMPLES, unsupported, type Mp4RangeReader } from './mp4-frame-index';
 
@@ -110,7 +110,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
     const kind = handler.getUint32(8);
     if (kind !== 0x76696465 && kind !== 0x736f756e) return; // vide, soun
     const isVideo = kind === 0x76696465;
-    if (isVideo && (video || boxes.some((box) => box.type === 'edts'))) return;
+    if (isVideo && video) return;
     const minf = await children(one(media, 'minf'));
     if (minf.some((b) => !['vmhd', 'smhd', 'dinf', 'stbl', 'free'].includes(b.type))) return;
     const tables = await children(one(minf, 'stbl'));
@@ -118,7 +118,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       tables.some(
         (b) =>
           !['stsd', 'stts', 'stsc', 'stco', 'co64', 'stsz', 'stss'].includes(b.type) &&
-          (isVideo || !['sgpd', 'sbgp'].includes(b.type)),
+          (isVideo ? b.type !== 'ctts' : !['sgpd', 'sbgp'].includes(b.type)),
       )
     )
       return;
@@ -126,6 +126,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       sizeHeader = await fields(sizes, 12);
     const fixed = sizeHeader.getUint32(4),
       count = sizeHeader.getUint32(8);
+    if (isVideo && count <= MAX_SAMPLES && (boxes.some(b => b.type === 'edts') || tables.some(b => b.type === 'ctts'))) return;
     if (
       sizeHeader.getUint32(0) !== 0 ||
       (isVideo && !count) ||
@@ -224,6 +225,42 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
   }
   if (total !== count) return unsupported('clip_layout');
 
+  const editBoxes = video.track.filter(box => box.type === 'edts');
+  const reordered = tables.some(box => box.type === 'ctts');
+  let presentationOffset = 0;
+  let compositionOffset: ((sample: number) => number) | undefined;
+  if (editBoxes.length || reordered) {
+    // Keep the established parser for short edited movies. For long movies accept
+    // only a constant-rate track and a single rate-one edit aligned with each GOP.
+    if (!reordered || editBoxes.length !== 1 || timingRuns.length !== 1) return;
+    const edits = await children(editBoxes[0]!);
+    if (edits.length !== 1 || edits[0]!.type !== 'elst' || edits[0]!.end - edits[0]!.body !== 20) return;
+    const edit = await fields(edits[0]!, 20);
+    if (edit.getUint32(0) !== 0 || edit.getUint32(4) !== 1 || edit.getUint32(8) !== tkhd.getUint32(20) ||
+      edit.getInt32(12) < 0 || edit.getUint32(16) !== 65536) return;
+    presentationOffset = edit.getInt32(12);
+    const offsets = await table(one(tables, 'ctts'), 8, true);
+    // Anchor at sample zero. Never infer an offset from an unvalidated tail or
+    // materialize one record per frame. Leave all retained run tables within budget.
+    const runs = Math.min(offsets.count, MAX_SAMPLES - compactEntries);
+    if (!runs) return;
+    const values = view(await bytes(offsets.at, runs * 8));
+    const ends = new Uint32Array(runs);
+    let covered = 0;
+    for (let i = 0; i < runs; i++) {
+      const length = values.getUint32(i * 8);
+      covered += length;
+      if (!length || covered > count) return unsupported('box_layout');
+      ends[i] = covered;
+    }
+    if (runs === offsets.count && covered !== count) return unsupported('box_layout');
+    compositionOffset = sample => {
+      if (sample >= covered) return unsupported('table_entries', offsets.count);
+      const run = floorIndex(runs, i => i === 0 || ends[i - 1]! <= sample);
+      return values.getUint32(run * 8 + 4);
+    };
+  }
+
   function decodeTime(sample: number) {
     const run = timingRuns[floorIndex(timingRuns.length, (i) => timingRuns[i]!.sample <= sample)]!;
     return run.time + (sample - run.sample) * run.ticks;
@@ -233,6 +270,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
   return {
     duration,
     timescale,
+    presentationOffset,
     width,
     height,
     avcConfig,
@@ -262,6 +300,10 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
         bytes(chunks.at + start.chunk * stride, (last.chunk - start.chunk + 1) * stride).then(view),
         fixed ? undefined : bytes(sizesAt + chunkStart * 4, sizeCount * 4).then(view),
       ]);
+      // The bounded group must display exactly once in each presentation slot.
+      // This rules out open GOPs, gaps, overlaps and edits that would shift a seek.
+      const displaySlots = compositionOffset ? new Uint8Array(stop - first) : undefined;
+      const firstPresentation = decodeTime(first) + presentationOffset;
       const selected = [];
       let sample = chunkStart,
         rule = start.rule,
@@ -281,12 +323,19 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
           if (!size || !integer(offset + size)) return unsupported('clip_layout');
           if (sample >= first) {
             const dts = decodeTime(sample);
+            const cts = dts + (compositionOffset?.(sample) ?? 0);
+            if (displaySlots) {
+              const slot = (cts - firstPresentation) / timingRuns[0]!.ticks;
+              if (!integer(slot) || slot >= displaySlots.length || displaySlots[slot] || (sample === first && slot !== 0))
+                return unsupported('clip_layout');
+              displaySlots[slot] = 1;
+            }
             selected.push({
               offset,
               size,
               duration: decodeTime(sample + 1) - dts,
               dts,
-              cts: dts,
+              cts,
               is_sync: sample === first,
             });
           }

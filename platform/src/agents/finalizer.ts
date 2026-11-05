@@ -68,8 +68,7 @@ export function buildAgentTurnResult(
   const playlistCoverage = playlistCoverageDisclosures(packets, citations.map(citation => citation.id));
   const disclosedAnswer = appendNotices(answer, playlistCoverage.notes);
 
-  const warnings = deduplicateWarnings([
-    ...packets.flatMap((packet) => packet.warnings),
+  const warnings = answerWarnings(packets, [
     ...input.warnings,
     ...(unresolved.size ? [{ code: 'CITATIONS_UNAVAILABLE', message: `${unresolved.size} citation${unresolved.size === 1 ? '' : 's'} did not match the saved sources and ${unresolved.size === 1 ? 'is' : 'are'} marked [source unavailable].` }] : []),
   ]);
@@ -89,12 +88,32 @@ export function buildAgentTurnResult(
   });
 }
 
-function deduplicateWarnings<T extends { code: string; message: string; videoId?: string }>(warnings: T[]): T[] {
+/** Fixed-text notes that say the same thing for every source. One canonical entry stands for all,
+ * whichever producer's wording arrives first. */
+const BOILERPLATE_WARNINGS: Record<string, string> = {
+  SELECTED_FRAME_EVIDENCE: 'Observations cover selected still frames only. Timestamps identify requested seek positions.',
+  SAMPLED_VISUAL_EVIDENCE: 'Observations cover sampled storyboard frames only. Brief events and small text may be missed.',
+};
+/** A count of failed frames that the batch's own FRAME_UNAVAILABLE warnings already state. */
+const GENERIC_FRAME_FAILURE = /requested frame(?:\(s\)|s)? could not be extracted/i;
+
+/** Warnings shown with the answer. Each packet's warnings are reduced within that packet, because
+ * warnings name no video; across packets only boilerplate collapses and other text must match exactly. */
+export function answerWarnings<T extends { code: string; message: string; videoId?: string }>(
+  packets: ReadonlyArray<{ warnings: readonly T[] }>, extra: readonly T[] = [],
+): T[] {
+  const reduced = packets.flatMap((packet) => {
+    const listsFailures = packet.warnings.some((warning) => warning.code === 'FRAME_UNAVAILABLE');
+    return listsFailures
+      ? packet.warnings.filter((warning) => !(warning.code === 'FRAME_EXTRACTION_WARNING' && GENERIC_FRAME_FAILURE.test(warning.message)))
+      : packet.warnings;
+  });
   const seen = new Set<string>();
-  return warnings.filter((warning) => {
-    const key = `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
-    if (seen.has(key)) return false;
+  return [...reduced, ...extra].flatMap((warning) => {
+    const canonical = Object.hasOwn(BOILERPLATE_WARNINGS, warning.code) ? BOILERPLATE_WARNINGS[warning.code]! : undefined;
+    const key = canonical ? warning.code : `${warning.code}:${warning.videoId ?? ""}:${warning.message}`;
+    if (seen.has(key)) return [];
     seen.add(key);
-    return true;
+    return [canonical ? { ...warning, message: canonical } : warning];
   });
 }

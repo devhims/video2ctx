@@ -32,6 +32,10 @@ export interface EvidenceToolExecution {
   /** Supplemental lookups leave this many provider slots for required retrieval.
    * Trusted runtime policy only, never a model-supplied tool argument. */
   reserveProviderCalls?: number;
+  /** Leave this many provider slots for exact frames on routes that require images.
+   * Admission only: unlike reserveProviderCalls, it does not change credit waiting. A frame tool's duration
+   * lookup sets 1, keeping only the call for its own capture. Trusted runtime policy only. */
+  frameReserveCalls?: number;
   /** Retry only analysis of a completed retrieval whose analyst failed. The runtime
    * invokes this for a new call ID, never by re-running extraction or its billing. */
   retrySavedAnalysis?: (packet: EvidencePacket) => Promise<EvidencePacket>;

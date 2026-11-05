@@ -1068,6 +1068,18 @@ describe('YouTube agent capability router', () => {
     expect(video).toHaveBeenCalledOnce();
   });
 
+  it.each(['direct', 'recovered'])('keeps a frame-only refresh on a %s two-video comparison', async mode => {
+    const ids = ['abcdefghijk', 'lmnopqrstuv'];
+    const output = mode === 'direct'
+      ? { route: 'topic_research', comparisonVideoIds: ids, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['read the clocks'] }
+      : { route: 'inspect_video', videoId: ids[0], comparisonVideoIds: ids, refreshFramesOnly: true, visualEvidence: 'invalid' };
+    const pending = classifyCapabilityWithModel({ message: 'Compare fresh frames from https://youtu.be/abcdefghijk and https://youtu.be/lmnopqrstuv',
+      model: sequenceClassifier([output]), signal: new AbortController().signal });
+    const route = mode === 'direct' ? await pending : await expectLastResort(pending);
+    expect(route).toMatchObject({ route: 'topic_research', comparisonVideoIds: ids, refreshFramesOnly: true, useStoryboard: true });
+    expect(route).not.toHaveProperty('refreshEvidence', true);
+  });
+
   it('carries the timestamp question across recovery candidates for the same video', async () => {
     const videoId = 'abcdefghijk', question = 'What does the scoreboard show at 1:00?';
     const model = sequenceClassifier([

@@ -9,7 +9,13 @@ Answer visible questions from analyzed images. Metadata and captions locate mome
 
 ## Locate
 
-Reuse adequate saved analysis first. When a new inspection needs locating, use relevant title, description or chapter timestamps and spoken introductions from captions. If the location remains unclear, retrieve a small spread of storyboard sheets with get_video_storyboard and an analysis question. A chapter is a timestamped section listed by the publisher, not an inferred scene boundary. Fetch captions only when speech helps locate or identify the subject. Respect the user's chosen inspection method.
+Reuse adequate saved analysis first. Choose how to locate by what the question needs:
+
+- The look of a whole video, such as camera style, colors, set or diagram style: a small spread of storyboard sheets. Captions add nothing.
+- A visual moment with no spoken cue: scan storyboard sheets with an analysis question. One call can include many sheets.
+- A moment defined by topic or speech, such as the slide for a named concept or a spoken introduction: use title, description or chapter timestamps first, then captions. Retrieve the transcript without an analysis question and find the passage with search_originals. A transcript analyst never answers visual questions.
+
+A chapter is a timestamped section listed by the publisher, not an inferred scene boundary. In topic research, fetch captions only for videos you will inspect. The last provider calls are kept for get_video_frames, so do not spend them on other retrieval. Respect the user's chosen inspection method.
 
 For a presenter question, an introduction is a lead, not proof the presenter is on screen. A storyboard overview can locate her actual appearance. Prefer a few frames that answer the question over a six-frame quota or unexplained samples across the whole video. Questions about changes across the video need wider coverage.
 
