@@ -134,7 +134,7 @@ async function openIndex(read: Mp4RangeReader, base: number, length: number, sou
       sizes.body + 12 + (fixed ? 0 : count * 4) !== sizes.end
     )
       return unsupported('box_layout');
-    if (!count) return; // Let the bounded legacy reader discard an empty audio track.
+    if (!count) continue; // An empty audio track has nothing to skip; keep reading the video.
     const timing = await table(one(tables, 'stts'), 8);
     const clock = view(await bytes(timing.at, timing.count * 8));
     const timingRuns: TimeRun[] = [];

@@ -134,7 +134,9 @@ keyframe group. Variable decode durations and 32- or 64-bit chunk offsets are
 supported. A selected group's first chunk may require scanning preceding sizes
 in that chunk. A lookup handles at most 50,000 such sizes, 50,000 compact table
 entries in aggregate and 1,000 selected samples. Offset and size declarations
-must fit their boxes and selected media must fit the file and range budget.
+must fit their boxes and selected media must fit the file and range budget. An audio
+track with no samples is skipped. A selected group's chunks may appear in any
+file order, provided their byte ranges do not overlap.
 
 This path can address more than 50,000 stored samples because it never creates
 a per-frame index for the entire track. For long constant-rate video with reordered

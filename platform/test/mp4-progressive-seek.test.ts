@@ -14,7 +14,7 @@ function box(type: string, ...parts: Buffer[]) {
 
 // A regular tail-index movie with two chunk rules and two timing runs. The
 // 60,200 entries in stsz are required on disk, but never expanded in memory by the reader.
-function movie(wideOffsets = false, reordered = false) {
+function movie(wideOffsets = false, reordered = false, emptyAudio = false) {
   const count = 60200,
     chunks = 15100;
   const sizes = Buffer.alloc(count * 4),
@@ -77,9 +77,15 @@ function movie(wideOffsets = false, reordered = false) {
     box('stss', words(0, sync.length, ...sync)),
   );
   const dinf = box('dinf', box('dref', words(0, 1), box('url ', words(1))));
+  const sound = Buffer.alloc(24);
+  sound.write('soun', 8);
+  // A declared audio track with no samples, placed before the video.
+  const audio = emptyAudio ? box('trak', box('mdia', box('hdlr', sound), box('minf', box('stbl',
+    box('stsz', words(0, 0, 0)), box('stts', words(0, 0)))))) : Buffer.alloc(0);
   const moov = box(
     'moov',
     box('mvhd', mvhd),
+    audio,
     box('trak', box('tkhd', tkhd), edit, box('mdia', box('mdhd', mdhd), box('hdlr', handler), box('minf', dinf, stbl))),
   );
   const file = Buffer.concat([ftyp, mdat, moov]),
@@ -152,6 +158,19 @@ test('retains video when the first track is empty audio in a large movie index',
     return clip.subarray(clip.indexOf('mdat') + 4);
   }
   expect(await payload(padded)).toEqual(await payload(file));
+});
+
+test('keeps a long movie on the fast path when an empty audio track precedes the video', async () => {
+  // 60,200 samples exceed the legacy parser's limit, so only the sparse reader can open this movie.
+  const { file, indexAt, indexSize, open } = movie(false, false, true);
+  const read = async (at: number, size: number) => Uint8Array.from(file.subarray(at, at + size));
+  expect(await openSparseProgressiveIndex(read, indexAt, indexSize, file.length)).toBeDefined();
+  async function payload(clip: Promise<{ bytes: Uint8Array }>) {
+    const bytes = Buffer.from((await clip).bytes);
+    return bytes.subarray(bytes.indexOf('mdat') + 4);
+  }
+  const withAudio = await open(), plain = await movie().open();
+  for (const seconds of [0.5, 1500]) expect(await payload(withAudio.clip(seconds))).toEqual(await payload(plain.clip(seconds)));
 });
 
 test('allows reordered chunks but rejects overlapping chunks before a picture read', async () => {
