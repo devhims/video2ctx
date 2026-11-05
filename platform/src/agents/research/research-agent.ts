@@ -273,7 +273,7 @@ async function executeResearchRunWithAssets(options: {
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
 
   const upstream = decision.savedOnly ? savedOnlyProvider() : createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const refreshFrames = decision.refreshEvidence || (decision.route === 'inspect_video' && decision.refreshFramesOnly);
+  const refreshFrames = decision.refreshEvidence || decision.refreshFramesOnly;
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache, refreshFrames) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     runModel(options.env, options.sessionAffinity, 'low', {
@@ -627,7 +627,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     researchDeadlineAt: options.researchDeadlineAt,
     researchQuestion: options.message,
     refreshEvidence: options.decision.refreshEvidence,
-    refreshFramesOnly: options.decision.route === 'inspect_video' && options.decision.refreshFramesOnly,
+    refreshFramesOnly: options.decision.refreshFramesOnly,
     timestampedFrameQuestion: options.decision.route === 'inspect_video' && !options.decision.savedOnly
       ? options.decision.timestampedFrameQuestion : undefined,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,

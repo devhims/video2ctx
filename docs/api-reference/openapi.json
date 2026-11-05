@@ -7597,6 +7597,9 @@
                               ]
                             }
                           },
+                          "refreshFramesOnly": {
+                            "type": "boolean"
+                          },
                           "refreshEvidence": {
                             "type": "boolean"
                           },
@@ -9322,6 +9325,9 @@
                             "comments"
                           ]
                         }
+                      },
+                      "refreshFramesOnly": {
+                        "type": "boolean"
                       },
                       "refreshEvidence": {
                         "type": "boolean"
