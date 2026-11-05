@@ -144,7 +144,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
   // when one call still remains for that capture.
   return executeGetVideo({ videoId: request.videoId }, { ...context,
     executeEvidenceTool: execution => context.executeEvidenceTool({ ...execution, frameReserveCalls: 1 }) },
-  `frame-metadata:${request.videoId}`)
+  `frame-metadata:${request.videoId}`, 'frame-duration')
     .catch(error => {
       if ((error as { code?: unknown })?.code !== 'AGENT_TOOL_BUDGET_EXCEEDED') throw error;
       throw new ApiError(422, 'AGENT_TOOL_BUDGET_EXCEEDED', 'Too few evidence tool calls remain to verify this video\'s duration and capture its frames. Finalize with the available evidence.');

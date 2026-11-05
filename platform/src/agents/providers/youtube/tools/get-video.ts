@@ -31,15 +31,16 @@ export function createGetVideoTool(context: AgentToolContext) {
   });
 }
 
-export async function executeGetVideo(input: GetVideoInput, context: AgentToolContext, toolCallId: string) {
+export async function executeGetVideo(input: GetVideoInput, context: AgentToolContext, toolCallId: string, purpose?: 'frame-duration') {
   const parsed = getVideoInputSchema.parse(input);
   const packet = await executeProviderEvidence({
     context,
     toolCallId,
     toolName: 'get_video',
     operation: 'video',
-    semanticInput: parsed,
-    load: () => context.provider.video(parsed.videoId),
+    // A previously completed metadata-only tool call may have no duration.
+    semanticInput: purpose ? { ...parsed, purpose } : parsed,
+    load: () => purpose ? context.provider.video(parsed.videoId, { requireFrameDuration: true }) : context.provider.video(parsed.videoId),
     credits: meteredCredits('video'),
     packet: (video) => singleVideoPacket(video, toolCallId),
   });
