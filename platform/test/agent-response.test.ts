@@ -268,3 +268,46 @@ it('returns sessionId in both response formats and nested legacy results without
   expect(legacyAgentRun(run).result?.agentMessageId).toBe(run.agentMessageId);
   expect(run).toEqual(before);
 });
+
+describe('cited frames in compact results', () => {
+  const hex = (digit: string) => digit.repeat(64);
+  const preview = (assetDigit: string, timestampMs: number) =>
+    ({ collectionId: hex('c'), assetId: hex(assetDigit), timestampMs, width: 640, height: 360 });
+  function frameRun(answer: string, citations: NonNullable<AgentRunView['result']>['citations'], artifacts: NonNullable<AgentRunView['result']>['artifacts']) {
+    const run = completedRun();
+    Object.assign(run.result!, { answer, citations, artifacts });
+    return compactAgentRun(run).result!;
+  }
+  const frame = (id: string, videoId: string, startMs: number, extra: Record<string, unknown> = { sourceKind: 'frames' }) =>
+    ({ id, sourceId: `youtube:${videoId}:frames`, provider: 'youtube' as const, videoId, title: videoId, excerpt: id, startMs, endMs: startMs, ...extra });
+
+  it('lists cited frames in citation order with their saved previews and moment links', () => {
+    const result = frameRun('Late [cite:f2]. Early [cite:f1] and spoken [cite:t1]. Again [cite:f1b]. Legacy [cite:f3]. Missing [cite:f4]. Sheet [cite:s1].', [
+      frame('f1', 'video000001', 5000), frame('f1b', 'video000001', 5000), frame('f2', 'video000001', 61000),
+      // A transcript passage and a storyboard sample at a previewed time are not frames.
+      { id: 't1', sourceId: 'youtube:video000001:transcript', provider: 'youtube', videoId: 'video000001', excerpt: 'said', startMs: 61000, endMs: 64000, sourceKind: 'transcript' },
+      { id: 's1', sourceId: 'youtube:video000001:storyboard', provider: 'youtube', videoId: 'video000001', excerpt: 'sheet', startMs: 5000, endMs: 5000, sourceKind: 'storyboard' },
+      // Stored before sourceKind existed; the frames source ID still identifies it.
+      frame('f3', 'video000002', 2000, {}),
+      frame('f4', 'video000001', 9000),
+    ], [
+      { type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('1', 5000), preview('2', 61000)] } },
+      { type: 'youtube_frame_analysis', data: { videoId: 'video000002', previews: [preview('3', 2000), { assetId: 'not-a-preview' }] } },
+    ]);
+    expect(result.sources.map(source => source.videoId)).toEqual(['video000001', 'video000002']);
+    expect(result.frames).toEqual([
+      { sourceId: '1', timestampMs: 61000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('2')}`, videoUrl: 'https://www.youtube.com/watch?v=video000001&t=61s' },
+      { sourceId: '1', timestampMs: 5000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('1')}`, videoUrl: 'https://www.youtube.com/watch?v=video000001&t=5s' },
+      { sourceId: '2', timestampMs: 2000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('3')}`, videoUrl: 'https://www.youtube.com/watch?v=video000002&t=2s' },
+    ]);
+  });
+
+  it('caps cited frames and omits the field when no cited frame has a preview', () => {
+    const times = [1, 2, 3, 4, 5, 6, 7].map(second => second * 1000);
+    const capped = frameRun(times.map((_, index) => `F${index} [cite:f${index}].`).join(' '),
+      times.map((time, index) => frame(`f${index}`, 'video000001', time)),
+      [{ type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: times.map((time, index) => preview(String(index + 1), time)) } }]);
+    expect(capped.frames?.map(item => item.timestampMs)).toEqual(times.slice(0, 6));
+    expect(frameRun('No previews [cite:f0].', [frame('f0', 'video000001', 1000)], [])).not.toHaveProperty('frames');
+  });
+});

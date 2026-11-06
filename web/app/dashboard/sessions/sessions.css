@@ -103,6 +103,12 @@
 .agent-markdown th { background: var(--color-dashboard-surface-muted); font-weight: 600; }
 .agent-markdown tr:last-child td { border-bottom: 0; }
 .agent-sources { margin-top: 24px; }
+.agent-cited-frames { margin-top: 20px; }
+.agent-cited-frames h3 { font-size: 11px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+.agent-cited-frames .agent-frame-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr)); }
+.agent-cited-frame { display: block; border: 1px solid var(--line); color: var(--ink); text-decoration: none; }
+.agent-cited-frame:hover { background: var(--color-dashboard-surface-muted); }
+.agent-cited-frame .agent-frame-caption > span + span { display: inline-flex; align-items: center; gap: 4px; }
 .agent-sources h3 { font-size: 11px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
 .agent-sources ul { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0; }
 .agent-sources li { min-width: 0; max-width: 100%; font-size: 11px; line-height: 1.6; }

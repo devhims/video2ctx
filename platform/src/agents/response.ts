@@ -32,6 +32,16 @@ export const compactAgentSourceSchema = z.object({
   title: z.string(),
   url: z.url().optional(),
 });
+export const MAX_CITED_FRAMES = 6;
+export const compactCitedFrameSchema = z.object({
+  sourceId: z.string().describe('Numbered source in this result that the frame belongs to.'),
+  timestampMs: z.number().int().nonnegative().describe('Moment of the cited frame in its video.'),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  imagePath: z.string().regex(/^\/v1\/agent\/frames\/[a-f0-9]{64}\/[a-f0-9]{64}$/)
+    .describe('Saved preview image, served by GET /v1/agent/frames/{collectionId}/{assetId} without authentication until the evidence or account is deleted.'),
+  videoUrl: z.url().describe('The video at the cited moment, to the second.'),
+});
 export const compactAgentResultSchema = z.object({
   coverage: researchCoverageSchema.optional(),
   outcome: z.enum(['answered', 'partial', 'insufficient_evidence', 'needs_clarification', 'rejected']).describe('Answer availability based on routing intent and persisted evidence warnings. Rejected means outside supported YouTube video research and synthesis. This is not a factual-confidence score.'),
@@ -40,6 +50,8 @@ export const compactAgentResultSchema = z.object({
   warnings: z.array(agentWarningSchema),
   artifacts: z.array(agentArtifactSchema).optional(),
   evidence: z.array(agentCitationSchema.omit({ sourceKind: true })).optional().describe('Requested excerpts with original citation ids and timestamps. sourceId refers to the numbered source in this result.'),
+  frames: z.array(compactCitedFrameSchema).max(MAX_CITED_FRAMES).optional()
+    .describe('Exact video frames cited in the answer, in citation order, when their saved previews are available. Storyboard samples are not included.'),
 });
 export const compactAgentRunSchema = agentRunReceiptSchema.pick({
   runId: true, agentMessageId: true, status: true, request: true,
@@ -131,7 +143,45 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
     ...(include.includes('artifacts') ? { artifacts: publicArtifacts(result.artifacts) } : {}),
     ...(include.includes('evidence') ? { evidence: result.citations.filter(citation => evidenceIds.has(citation.id))
       .map(citation => ({ ...publicCitation(citation), sourceId: evidenceIds.get(citation.id)! })) } : {}),
+    ...citedFrames(result, citations, evidenceIds),
   };
+}
+
+const savedFramePreviewSchema = z.object({
+  collectionId: z.string().regex(/^[a-f0-9]{64}$/), assetId: z.string().regex(/^[a-f0-9]{64}$/),
+  timestampMs: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive(),
+});
+
+/** Saved previews of the exact frames the answer cites, matched by video and frame time.
+ * Frame excerpts start at their frame's timestamp, which is also the preview's timestamp.
+ * Reads only stored artifacts, so earlier answers gain frames without being rewritten. */
+function citedFrames(result: AgentTurnResult, citations: ReadonlyMap<string, AgentCitation>, evidenceIds: ReadonlyMap<string, string>) {
+  const previews = new Map<string, z.infer<typeof savedFramePreviewSchema>>();
+  for (const artifact of result.artifacts) {
+    if (!['youtube_frame_retrieval', 'youtube_frame_analysis'].includes(artifact.type) || typeof artifact.data.videoId !== 'string'
+      || !Array.isArray(artifact.data.previews)) continue;
+    for (const item of artifact.data.previews) {
+      const preview = savedFramePreviewSchema.safeParse(item);
+      if (preview.success) previews.set(`${artifact.data.videoId}:${preview.data.timestampMs}`, preview.data);
+    }
+  }
+  const frames: z.infer<typeof compactCitedFrameSchema>[] = [];
+  const shown = new Set<string>();
+  // evidenceIds keeps first-citation order, so frames follow the answer.
+  for (const [citationId, sourceId] of evidenceIds) {
+    const citation = citations.get(citationId);
+    // Answers stored before sourceKind existed still name the frames source.
+    if (!citation?.videoId || !validTime(citation.startMs) || (citation.sourceKind
+      ? citation.sourceKind !== 'frames' : citation.sourceId !== `youtube:${citation.videoId}:frames`)) continue;
+    const preview = previews.get(`${citation.videoId}:${citation.startMs}`);
+    if (!preview || shown.has(preview.assetId)) continue;
+    shown.add(preview.assetId);
+    frames.push({ sourceId, timestampMs: citation.startMs, width: preview.width, height: preview.height,
+      imagePath: `/v1/agent/frames/${preview.collectionId}/${preview.assetId}`,
+      videoUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(citation.videoId)}&t=${Math.floor(citation.startMs / 1000)}s` });
+    if (frames.length === MAX_CITED_FRAMES) break;
+  }
+  return frames.length ? { frames } : {};
 }
 
 const validTime = (value: number | undefined): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;

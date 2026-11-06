@@ -134,6 +134,16 @@ finalization and validation, in the terminal snapshot. This endpoint does not
 stream unvalidated model tokens.
 
 
+## Cited frames
+
+When an answer cites exact video frames, the compact result includes `frames`: up to
+six cited frames in the order the answer cites them. Each entry has the numbered
+`sourceId`, the frame's `timestampMs` and size, an `imagePath` for its saved
+preview, and a `videoUrl` that opens the video at that second. Request the image
+with `GET {imagePath}`; it needs no authentication and remains available until the
+evidence or account is deleted. A frame whose preview was not saved, or has been
+deleted, is omitted. Storyboard samples are not included.
+
 ## Stored extraction diagnostics
 
 To inspect transcript, storyboard, and frame extraction attempts for a run you own, request:

@@ -13,6 +13,26 @@ const messageSchema = z.object({
   content: z.string(), createdAt: z.number(), updatedAt: z.number(),
 });
 export const agentSessionDetailSchema = summarySchema.extend({ messages: z.array(messageSchema), nextCursor: z.string().nullable(), readOnly: z.boolean().optional() });
+/** An exact frame the answer cites, with its saved preview and the video at that moment. */
+export const citedFrameSchema = z.object({
+  sourceId: z.string(), timestampMs: z.number().int().nonnegative(),
+  width: z.number().int().positive(), height: z.number().int().positive(),
+  imagePath: z.string().regex(/^\/v1\/agent\/frames\/[a-f0-9]{64}\/[a-f0-9]{64}$/), videoUrl: z.string(),
+});
+export type CitedFrame = z.infer<typeof citedFrameSchema>;
+
+/** Label matching the answer's own reference, as in [1 · 4:52]. */
+export function citedFrameLabel(frame: Pick<CitedFrame, 'sourceId' | 'timestampMs'>): string {
+  const seconds = Math.floor(frame.timestampMs / 1000);
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor((seconds % 3600) / 60), rest = String(seconds % 60).padStart(2, '0');
+  return `[${frame.sourceId} · ${hours ? `${hours}:${String(minutes).padStart(2, '0')}` : minutes}:${rest}]`;
+}
+
+/** Preview through the dashboard's platform proxy. Only the validated frames route is accepted. */
+export function citedFrameImageUrl(frame: Pick<CitedFrame, 'imagePath'>): string | undefined {
+  return /^\/v1\/agent\/frames\/[a-f0-9]{64}\/[a-f0-9]{64}$/.test(frame.imagePath) ? `/api/platform${frame.imagePath}` : undefined;
+}
+
 export const agentRunSchema = z.object({
   sessionId: z.string().uuid(), runId: z.string().uuid(), status: statusSchema,
   request: z.object({ message: z.string() }).optional(), error: z.string().optional(),
@@ -21,6 +41,7 @@ export const agentRunSchema = z.object({
     sources: z.array(z.object({ id: z.string(), title: z.string(), url: z.string().optional() })),
     warnings: z.array(z.object({ code: z.string(), message: z.string() })),
     coverage: z.object({ reviewedVideos: z.number(), targetVideos: z.number() }).optional(),
+    frames: z.array(citedFrameSchema).max(6).optional(),
   }).optional(),
   billing: z.object({ creditsCharged: z.number(), creditsRemaining: z.number() }).optional(),
 });
