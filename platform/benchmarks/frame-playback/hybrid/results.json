@@ -1,0 +1,824 @@
+{
+  "observations": [
+    {
+      "time": "2026-11-06T07:15:25.345Z",
+      "revision": "hybrid-1",
+      "error": "CONTAINER_START",
+      "elapsedMs": 90000,
+      "httpStatus": 502,
+      "clientMs": 90664
+    },
+    {
+      "time": "2026-11-06T07:17:37.235Z",
+      "revision": "hybrid-1",
+      "error": "CONTAINER_START",
+      "elapsedMs": 90000,
+      "httpStatus": 502,
+      "clientMs": 90521
+    },
+    {
+      "time": "2026-11-06T07:20:34.103Z",
+      "revision": "hybrid-2",
+      "ready": true,
+      "elapsedMs": 269,
+      "containerStartMs": 119,
+      "container": {
+        "ready": true,
+        "uptimeMs": 60335
+      },
+      "httpStatus": 200,
+      "clientMs": 733
+    },
+    {
+      "time": "2026-11-06T07:21:03.880Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "SESSION_FAILED",
+      "timings": {
+        "exitCheckMs": 673,
+        "containerStartMs": 125,
+        "totalMs": 5730
+      },
+      "diagnostics": {
+        "containerCode": "SESSION_FAILED",
+        "containerStage": "provider"
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 6566
+    },
+    {
+      "time": "2026-11-06T07:21:03.880Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "SESSION_FAILED",
+      "timings": {
+        "exitCheckMs": 667,
+        "containerStartMs": 120,
+        "totalMs": 5354
+      },
+      "diagnostics": {
+        "containerCode": "SESSION_FAILED",
+        "containerStage": "provider"
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 5957
+    },
+    {
+      "time": "2026-11-06T07:21:03.880Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "b-first",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 1264,
+        "containerStartMs": 112,
+        "providerMs": 12,
+        "playerMs": 11900,
+        "sessionMs": 12318,
+        "fetchMs": 1237,
+        "mediaMs": 1582,
+        "totalMs": 15137
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 2898692,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 300000,
+          "sampleTimestampMs": 300000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 1582,
+          "clipBytes": 2711464
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 16707
+    },
+    {
+      "time": "2026-11-06T07:21:03.880Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "b-seek",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 15555,
+        "mediaMs": 595,
+        "totalMs": 16150
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 4931225,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 305000,
+          "sampleTimestampMs": 305000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 595,
+          "clipBytes": 4445033
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 16692
+    },
+    {
+      "time": "2026-11-06T07:22:03.605Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 654,
+        "containerStartMs": 112,
+        "providerMs": 8,
+        "playerMs": 9583,
+        "sessionMs": 10185,
+        "fetchMs": 5443,
+        "mediaMs": 1465,
+        "totalMs": 17093
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 1922233,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 845000,
+          "sampleTimestampMs": 845000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 500,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 848000,
+          "sampleTimestampMs": 848000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 961,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 852000,
+          "sampleTimestampMs": 852000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 467,
+          "clipBytes": 464739
+        },
+        {
+          "timestampMs": 856000,
+          "sampleTimestampMs": 856000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 504,
+          "clipBytes": 510145
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 18678
+    },
+    {
+      "time": "2026-11-06T07:22:23.535Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 5175,
+        "mediaMs": 620,
+        "totalMs": 5795
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 619066,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 861000,
+          "sampleTimestampMs": 861000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 620,
+          "clipBytes": 574159
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 6559
+    },
+    {
+      "time": "2026-11-06T07:23:12.424Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 656,
+        "containerStartMs": 119,
+        "providerMs": 6,
+        "playerMs": 10345,
+        "sessionMs": 10883,
+        "fetchMs": 5342,
+        "mediaMs": 1307,
+        "totalMs": 17532
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 1922233,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 845000,
+          "sampleTimestampMs": 845000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 347,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 848000,
+          "sampleTimestampMs": 848000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 727,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 852000,
+          "sampleTimestampMs": 852000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 431,
+          "clipBytes": 464739
+        },
+        {
+          "timestampMs": 856000,
+          "sampleTimestampMs": 856000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 580,
+          "clipBytes": 510145
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 18563
+    },
+    {
+      "time": "2026-11-06T07:23:12.424Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 5256,
+        "mediaMs": 592,
+        "totalMs": 5848
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 619066,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 861000,
+          "sampleTimestampMs": 861000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 592,
+          "clipBytes": 574159
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 6067
+    },
+    {
+      "time": "2026-11-06T07:23:12.424Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "b-first",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 643,
+        "containerStartMs": 112,
+        "providerMs": 4,
+        "playerMs": 10112,
+        "sessionMs": 10413,
+        "fetchMs": 1526,
+        "mediaMs": 1547,
+        "totalMs": 13486
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 2898692,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 300000,
+          "sampleTimestampMs": 300000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 1547,
+          "clipBytes": 2711464
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 14225
+    },
+    {
+      "time": "2026-11-06T07:23:12.424Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "b-seek",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 1318,
+        "mediaMs": 779,
+        "totalMs": 2097
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 4931225,
+        "formatId": 299
+      },
+      "frames": [
+        {
+          "timestampMs": 305000,
+          "sampleTimestampMs": 305000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 779,
+          "clipBytes": 4445033
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 2629
+    },
+    {
+      "time": "2026-11-06T07:26:08.621Z",
+      "revision": "hybrid-3",
+      "ready": true,
+      "elapsedMs": 270,
+      "containerStartMs": 113,
+      "container": {
+        "ready": true,
+        "uptimeMs": 394875
+      },
+      "httpStatus": 200,
+      "clientMs": 780
+    },
+    {
+      "time": "2026-11-06T07:26:59.885Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "TIMEOUT",
+      "timings": {
+        "exitCheckMs": 639,
+        "totalMs": 115000
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 115530
+    },
+    {
+      "time": "2026-11-06T07:26:59.885Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "BENCH_FAILED",
+      "timings": {
+        "exitCheckMs": 664,
+        "totalMs": 4146
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 4653
+    },
+    {
+      "time": "2026-11-06T07:26:59.885Z",
+      "revision": "hybrid-2",
+      "path": "hosted-container-worker-media",
+      "key": "b-first",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "TIMEOUT",
+      "timings": {
+        "exitCheckMs": 627,
+        "totalMs": 115000
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 115488
+    },
+    {
+      "time": "2026-11-06T07:26:59.885Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "b-seek",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "BENCH_FAILED",
+      "timings": {
+        "exitCheckMs": 644,
+        "totalMs": 3929
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 4632
+    },
+    {
+      "time": "2026-11-06T07:31:58.023Z",
+      "revision": "hybrid-3",
+      "ready": true,
+      "elapsedMs": 1768,
+      "containerStartMs": 1518,
+      "container": {
+        "ready": true,
+        "uptimeMs": 866
+      },
+      "httpStatus": 200,
+      "clientMs": 2350
+    },
+    {
+      "time": "2026-11-06T07:32:26.929Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": false,
+      "reuse": false,
+      "stage": "session",
+      "errorCode": "SESSION_FAILED",
+      "timings": {
+        "exitCheckMs": 635,
+        "containerStartMs": 113,
+        "totalMs": 5307
+      },
+      "diagnostics": {
+        "containerCode": "SESSION_FAILED",
+        "containerStage": "provider"
+      },
+      "frames": [],
+      "httpStatus": 502,
+      "clientMs": 5901
+    },
+    {
+      "time": "2026-11-06T07:32:26.929Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 624,
+        "containerStartMs": 126,
+        "providerMs": 4308,
+        "providerAttempts": 1,
+        "playerMs": 14203,
+        "sessionMs": 19141,
+        "fetchMs": 5213,
+        "mediaMs": 897,
+        "totalMs": 25251
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 619066,
+        "formatId": 299,
+        "requests": [
+          {
+            "atMs": 0,
+            "headersMs": 533,
+            "lastByteMs": 533,
+            "status": 200,
+            "bytes": 105
+          },
+          {
+            "atMs": 4533,
+            "headersMs": 156,
+            "lastByteMs": 680,
+            "status": 200,
+            "bytes": 618961
+          }
+        ]
+      },
+      "frames": [
+        {
+          "timestampMs": 861000,
+          "sampleTimestampMs": 861000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 897,
+          "clipBytes": 574159
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 26202
+    },
+    {
+      "time": "2026-11-06T07:32:26.929Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "b-first",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 659,
+        "containerStartMs": 113,
+        "providerMs": 9,
+        "providerAttempts": 1,
+        "playerMs": 10157,
+        "sessionMs": 10453,
+        "fetchMs": 1208,
+        "mediaMs": 1379,
+        "totalMs": 13040
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 2898692,
+        "formatId": 299,
+        "requests": [
+          {
+            "atMs": 0,
+            "headersMs": 532,
+            "lastByteMs": 1208,
+            "status": 200,
+            "bytes": 2898692
+          }
+        ]
+      },
+      "frames": [
+        {
+          "timestampMs": 300000,
+          "sampleTimestampMs": 300000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 1379,
+          "clipBytes": 2711464
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 13798
+    },
+    {
+      "time": "2026-11-06T07:32:26.929Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "b-seek",
+      "videoId": "aqz-KE-bpKQ",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 1385,
+        "mediaMs": 731,
+        "totalMs": 2116
+      },
+      "diagnostics": {
+        "http": [200],
+        "protection": [1],
+        "calls": 1,
+        "sourceBytes": 4931225,
+        "formatId": 299,
+        "requests": [
+          {
+            "atMs": 0,
+            "headersMs": 535,
+            "lastByteMs": 1385,
+            "status": 200,
+            "bytes": 4931225
+          }
+        ]
+      },
+      "frames": [
+        {
+          "timestampMs": 305000,
+          "sampleTimestampMs": 305000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 731,
+          "clipBytes": 4445033
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 2545
+    },
+    {
+      "time": "2026-11-06T07:33:58.369Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "a-first",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": false,
+      "stage": "decode",
+      "timings": {
+        "exitCheckMs": 629,
+        "containerStartMs": 127,
+        "providerMs": 4,
+        "providerAttempts": 1,
+        "playerMs": 10050,
+        "sessionMs": 10445,
+        "fetchMs": 5379,
+        "mediaMs": 1286,
+        "totalMs": 17110
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 1922233,
+        "formatId": 299,
+        "requests": [
+          {
+            "atMs": 0,
+            "headersMs": 550,
+            "lastByteMs": 550,
+            "status": 200,
+            "bytes": 105
+          },
+          {
+            "atMs": 4550,
+            "headersMs": 134,
+            "lastByteMs": 829,
+            "status": 200,
+            "bytes": 1922128
+          }
+        ]
+      },
+      "frames": [
+        {
+          "timestampMs": 845000,
+          "sampleTimestampMs": 845000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 382,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 848000,
+          "sampleTimestampMs": 848000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 842,
+          "clipBytes": 698108
+        },
+        {
+          "timestampMs": 852000,
+          "sampleTimestampMs": 852000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 496,
+          "clipBytes": 464739
+        },
+        {
+          "timestampMs": 856000,
+          "sampleTimestampMs": 856000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 444,
+          "clipBytes": 510145
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 18555
+    },
+    {
+      "time": "2026-11-06T07:34:17.397Z",
+      "revision": "hybrid-3",
+      "path": "hosted-container-worker-media",
+      "key": "a-seek",
+      "videoId": "ZmLg3_Bv2vY",
+      "verified": true,
+      "reuse": true,
+      "stage": "decode",
+      "timings": {
+        "sessionMs": 0,
+        "fetchMs": 5241,
+        "mediaMs": 600,
+        "totalMs": 5841
+      },
+      "diagnostics": {
+        "http": [200, 200],
+        "protection": [1],
+        "calls": 2,
+        "sourceBytes": 619066,
+        "formatId": 299,
+        "requests": [
+          {
+            "atMs": 0,
+            "headersMs": 560,
+            "lastByteMs": 560,
+            "status": 200,
+            "bytes": 105
+          },
+          {
+            "atMs": 4560,
+            "headersMs": 137,
+            "lastByteMs": 681,
+            "status": 200,
+            "bytes": 618961
+          }
+        ]
+      },
+      "frames": [
+        {
+          "timestampMs": 861000,
+          "sampleTimestampMs": 861000,
+          "width": 1920,
+          "height": 1080,
+          "mediaMs": 600,
+          "clipBytes": 574159
+        }
+      ],
+      "httpStatus": 200,
+      "clientMs": 6581
+    }
+  ]
+}
