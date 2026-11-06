@@ -14,6 +14,7 @@ import type {
   Transcript,
   Video,
   CaptionTrackList,
+  StoryboardResolution,
   YouTubeClientOptions,
 } from './youtube-types';
 
@@ -34,7 +35,7 @@ export interface TranscriptRequest extends VideoRequest {
 }
 
 /** Used by consumers to reject releases that silently ignore selection options. */
-export const STORYBOARD_SELECTION_VERSION = 2;
+export const STORYBOARD_SELECTION_VERSION = 3;
 
 export interface StoryboardRequest extends VideoRequest {
   metadataOnly?: boolean;
@@ -43,6 +44,7 @@ export interface StoryboardRequest extends VideoRequest {
   maxSheets?: number;
   selection?: 'leading' | 'spread';
   timestampsMs?: number[];
+  resolution?: StoryboardResolution;
 }
 
 export interface CommentsRequest extends VideoRequest {
@@ -171,8 +173,8 @@ export function getTranscript(options: TranscriptRequest): Promise<Transcript> {
 
 /** Download normalized YouTube storyboard contact sheets and timestamp mappings. */
 export function getStoryboard(options: StoryboardRequest) {
-  const { videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes } = options;
-  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes });
+  const { videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes, resolution } = options;
+  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes, resolution });
 }
 
 export function getComments(options: AllCommentsRequest): Promise<CommentsCollection>;

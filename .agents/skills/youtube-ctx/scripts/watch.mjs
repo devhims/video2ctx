@@ -19188,6 +19188,7 @@ import { join, resolve } from "node:path";
 var DEFAULT_MAX_SHEETS = 12;
 var MAX_SHEETS = 20;
 var MAX_SHEET_BYTES = 4 * 1024 * 1024;
+var STANDARD_MAX_LEVEL = 2;
 function object(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
@@ -19336,6 +19337,9 @@ function validateStoryboardOptions(options) {
   if (options.timestampsMs !== void 0 && (!Array.isArray(options.timestampsMs) || options.timestampsMs.length === 0 || options.timestampsMs.length > MAX_SHEETS || options.timestampsMs.some((time) => !Number.isSafeInteger(time) || time < 0))) {
     throw new YouTubeClientError("INVALID_INPUT", "timestampsMs must contain 1 to 20 nonnegative integer timestamps.");
   }
+  if (options.resolution !== void 0 && !["standard", "high"].includes(options.resolution)) {
+    throw new YouTubeClientError("INVALID_INPUT", "resolution must be standard or high.");
+  }
   if (options.metadataOnly !== void 0 && typeof options.metadataOnly !== "boolean") {
     throw new YouTubeClientError("INVALID_INPUT", "metadataOnly must be a boolean.");
   }
@@ -19379,22 +19383,37 @@ function metadata(warnings) {
     warnings
   };
 }
+var highResolutionUnavailable = /* @__PURE__ */ new WeakSet();
+function isHighResolutionUnavailable(error) {
+  return error instanceof Error && highResolutionUnavailable.has(error);
+}
 var STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
-async function downloadStoryboard(raw, options, fetchImpl) {
+async function downloadStoryboard(raw, options, fetchImpl, allowHigh = false) {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError("NOT_FOUND", "No storyboard is available for this video.");
   }
-  const level = [...spec.levels].sort(
+  const level = spec.levels.filter((level2) => allowHigh || level2.index <= STANDARD_MAX_LEVEL).sort(
     (a, b) => b.tileWidth * b.tileHeight - a.tileWidth * a.tileHeight
   )[0];
   if (!level) {
     throw new YouTubeClientError("NOT_FOUND", "No usable storyboard level is available for this video.");
   }
+  const resolution = level.index > STANDARD_MAX_LEVEL ? "high" : "standard";
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
-  const selectedSheets = selectSheets(level, options, maxSheets);
+  let selectedSheets;
+  try {
+    selectedSheets = selectSheets(level, options, maxSheets);
+  } catch (error) {
+    if (options.resolution === "high" && resolution !== "high" && options.sheetIndexes && options.sheetIndexes.every((index) => index < level.frameCount) && new Set(options.sheetIndexes).size <= maxSheets) {
+      const unavailable = new YouTubeClientError("UNAVAILABLE", "High-resolution storyboards are temporarily unavailable.", { retryable: true });
+      highResolutionUnavailable.add(unavailable);
+      throw unavailable;
+    }
+    throw error;
+  }
   const directory = resolve(options.outputDir, "storyboards");
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets = [];
@@ -19421,10 +19440,14 @@ async function downloadStoryboard(raw, options, fetchImpl) {
       sheets.push(result.value);
     }
   }
-  const warnings = !options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : [];
+  const warnings = [
+    ...options.resolution === "high" && resolution !== "high" ? ["Storyboard: high resolution unavailable; returned standard sheets"] : [],
+    ...!options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : []
+  ];
   return {
     videoId: options.videoId,
     level: level.index,
+    resolution,
     frameCount: level.frameCount,
     intervalMs: level.intervalMs,
     manifest: {
@@ -19603,7 +19626,8 @@ async function getStoryboardWithFallback(options) {
   let malformed = false;
   let downloadError;
   try {
-    for (const profile of [...PLAYER_PROFILES, WEB_PROFILE]) {
+    const profiles = options.resolution === "high" ? [WEB_PROFILE, ...PLAYER_PROFILES] : [...PLAYER_PROFILES, WEB_PROFILE];
+    for (const profile of profiles) {
       signal.throwIfAborted();
       const startedAt = Date.now();
       const desktop = profile === WEB_PROFILE;
@@ -19692,13 +19716,22 @@ async function getStoryboardWithFallback(options) {
       }
       const downloadStartedAt = Date.now();
       try {
-        const result = await downloadStoryboard(raw, options, boundedFetch);
+        const result = await downloadStoryboard(raw, options, boundedFetch, desktop && options.resolution === "high");
         signal.throwIfAborted();
-        emit({ stage: "complete", profile: profile.name, outcome: "success", sheetCount: result.sheets.length, elapsedMs: Date.now() - startedAt });
+        emit({
+          stage: "complete",
+          profile: profile.name,
+          outcome: "success",
+          sheetCount: result.sheets.length,
+          level: result.level,
+          resolution: result.resolution,
+          elapsedMs: Date.now() - startedAt
+        });
         return result;
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof YouTubeClientError && error.code === "INVALID_INPUT") throw error;
+        if (isHighResolutionUnavailable(error)) throw error;
         downloadError = error instanceof YouTubeClientError ? error : new YouTubeClientError("UPSTREAM_ERROR", "Storyboard download failed.", { retryable: true });
         emit({
           stage: "download",
@@ -21399,8 +21432,8 @@ function getTranscript(options) {
   });
 }
 function getStoryboard(options) {
-  const { videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes } = options;
-  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes });
+  const { videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes, resolution } = options;
+  return createYouTubeClient(optionsFrom(options)).getStoryboard({ videoId, outputDir, maxSheets, selection, timestampsMs, metadataOnly, sheetIndexes, resolution });
 }
 function getDetails(options) {
   return createYouTubeClient(optionsFrom(options)).getVideo(options.videoId);

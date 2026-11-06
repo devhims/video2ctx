@@ -9,6 +9,7 @@ import {
   saveVideoResource,
   loadVideoResource,
   videoResourceKey,
+  sheetKey,
 } from '../src/lib/video-resources';
 import { YouTubeCacheCoordinatorCore } from '../src/lib/youtube-cache-coordinator';
 import { getTranscriptWithCache, getVideoResource } from '../src/lib/youtube';
@@ -457,6 +458,98 @@ test('storyboard loader reuses old sheets and only fetches missing sheets', asyn
   expect(await readVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [0] })).toMatchObject({
     fetchedAt: old,
   });
+});
+
+// L3 sheets hold 3x3 tiles, so the same timeline has different sheet indexes than L2.
+function highStoryboard(indexes: number[] = []): Storyboard {
+  const board = storyboard();
+  return { ...board, resolution: 'high', manifest: { ...board.manifest!, totalSheets: 6, framesPerSheet: 1, tileWidth: 240, tileHeight: 180, columns: 1 },
+    selection: indexes.length ? { mode: 'indexes', requestedSheetIndexes: indexes } : { mode: 'metadata' },
+    sheets: indexes.map(index => ({ tileWidth: 240, tileHeight: 180, columns: 1, rows: 1, firstFrameIndex: index, frameCount: 1, intervalMs: 10_000, imageBase64: jpeg })) };
+}
+
+test('high-resolution storyboards keep their own manifest and never plan with the standard one', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, storyboard(), Date.now(), 60_000);
+  vi.mocked(runYouTubeOperation).mockResolvedValue({ ...highStoryboard([3]),
+    selection: { mode: 'timestamps', requestedTimestampsMs: [30_000] } } as never);
+  const high = { kind: 'storyboard' as const, id, timestampsMs: [30_000], resolution: 'high' as const };
+  expect(videoResourceKey(high)!.variant).not.toBe(videoResourceKey({ ...high, resolution: undefined })!.variant);
+  expect(await loadVideoResource(f.env, high)).toMatchObject({ resolution: 'high', sheets: [{ firstFrameIndex: 3 }] });
+  // A cold high selection asks the processor directly instead of reusing standard sheet 1.
+  expect(runYouTubeOperation).toHaveBeenCalledExactlyOnceWith(f.env, expect.objectContaining({ timestampsMs: [30_000], resolution: 'high' }), undefined);
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true, resolution: 'high' }))
+    .toMatchObject({ value: { resolution: 'high', manifest: { framesPerSheet: 1 } } });
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }))
+    .toMatchObject({ value: { manifest: { framesPerSheet: 2 } } });
+  expect(await readVideoResource(f.env, high)).toMatchObject({ value: { resolution: 'high', sheets: [{ firstFrameIndex: 3 }] } });
+});
+
+test('a high request served at standard resolution is filed under the standard manifest', async () => {
+  const f = fixture();
+  const fallback = { ...storyboard([1]), resolution: 'standard' as const,
+    meta: { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } };
+  vi.mocked(runYouTubeOperation).mockResolvedValue(fallback as never);
+  const result = await loadVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [1], resolution: 'high' });
+  // Standard carries no label, so the board matches standard assets saved before resolutions existed.
+  expect(result).toMatchObject({ resolution: undefined, meta: { warnings: fallback.meta.warnings } });
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true, resolution: 'high' })).toBeNull();
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [1] }))
+    .toMatchObject({ value: { sheets: storyboard([1]).sheets } });
+});
+
+test('a cached high manifest rejects missing sheets that fell back to standard', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true, resolution: 'high' }, highStoryboard(), Date.now(), 60_000);
+  vi.mocked(runYouTubeOperation).mockResolvedValue({ ...storyboard([0]), resolution: 'standard' } as never);
+  await expect(loadVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [4], resolution: 'high' }))
+    .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+  expect(runYouTubeOperation).toHaveBeenCalledWith(f.env, expect.objectContaining({ sheetIndexes: [4], resolution: 'high' }), undefined);
+});
+
+// Before resolutions, a standard request that reached the web fallback saved L3 with no label.
+function legacyL3Storyboard(indexes: number[] = []): Storyboard {
+  const { resolution: _resolution, ...board } = highStoryboard(indexes);
+  return { ...board, manifest: { ...board.manifest!, tileWidth: 320, tileHeight: 180 },
+    sheets: board.sheets.map(sheet => ({ ...sheet, tileWidth: 320, tileHeight: 180 })) };
+}
+
+test('a legacy unlabelled L3 standard manifest is rediscovered instead of planning standard sheets', async () => {
+  const f = fixture();
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, legacyL3Storyboard(), 1, 60_000);
+  await saveVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [0] }, legacyL3Storyboard([0]), 1, 60_000);
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true })).toBeNull();
+  const op = { kind: 'storyboard' as const, id, timestampsMs: [30_000] };
+  vi.mocked(runYouTubeOperation).mockResolvedValue({ ...storyboard([1]), selection: { mode: 'timestamps', requestedTimestampsMs: [30_000] } } as never);
+  expect(await loadVideoResource(f.env, op)).toMatchObject({ manifest: { framesPerSheet: 2 }, sheets: [{ firstFrameIndex: 2 }] });
+  expect(runYouTubeOperation).toHaveBeenCalledExactlyOnceWith(f.env, op, undefined);
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }))
+    .toMatchObject({ value: { manifest: { framesPerSheet: 2, tileWidth: 120 } } });
+});
+
+test('a standard manifest whose missing sheets come back with other geometry is rediscovered', async () => {
+  const f = fixture();
+  // Stale geometry that the tile-size check cannot recognize.
+  const stale = (indexes: number[] = []) => { const board = highStoryboard(indexes); delete board.resolution;
+    return { ...board, manifest: { ...board.manifest!, tileWidth: 100, tileHeight: 90 } }; };
+  await saveVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }, stale(), 1, 60_000);
+  const op = { kind: 'storyboard' as const, id, timestampsMs: [30_000] };
+  vi.mocked(runYouTubeOperation)
+    .mockResolvedValueOnce(storyboard([1]) as never)
+    .mockResolvedValueOnce({ ...storyboard([1]), selection: { mode: 'timestamps', requestedTimestampsMs: [30_000] } } as never);
+  expect(await loadVideoResource(f.env, op)).toMatchObject({ manifest: { framesPerSheet: 2 }, sheets: [{ firstFrameIndex: 2 }] });
+  expect(vi.mocked(runYouTubeOperation).mock.calls.map(call => call[1])).toEqual([
+    expect.objectContaining({ sheetIndexes: [3] }), op]);
+  expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true }))
+    .toMatchObject({ value: { manifest: { framesPerSheet: 2 } } });
+});
+
+test('high sheets never share a key with legacy unlabelled L3 sheets of the same geometry', async () => {
+  const legacy = legacyL3Storyboard([0]);
+  const high = { ...legacy, resolution: 'high' as const };
+  const standardKey = await sheetKey(legacy, 0);
+  expect((await sheetKey(high, 0)).variant).toBe(`high:${standardKey.variant}`);
+  expect((await sheetKey(storyboard([0]), 0)).variant).not.toMatch(/^high:/);
 });
 
 test('successful frames from a partial extraction can be reused in another batch', async () => {

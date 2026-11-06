@@ -38,6 +38,16 @@ test('rejects an old library that silently ignores selection and removes its fil
   }), /selection support/);
   await assert.rejects(access(directory));
 });
+test('forwards a high-resolution request and rejects an extractor that ignores it', async () => {
+  const result = await loadStoryboard('Ct-mtWqV3Ro', async options => {
+    assert.equal(options.resolution, 'high');
+    return { resolution: 'high', level: 3, manifest: { totalSheets: 4, framesPerSheet: 9 }, selection: { mode: 'metadata' }, sheets: [] };
+  }, { metadataOnly: true, resolution: 'high' });
+  assert.equal(result.resolution, 'high');
+  await assert.rejects(loadStoryboard('Ct-mtWqV3Ro', async () => ({ manifest: {}, selection: { mode: 'metadata' }, sheets: [] }),
+    { metadataOnly: true, resolution: 'high' }), /selection support/);
+  await assert.rejects(loadStoryboard('Ct-mtWqV3Ro', () => assert.fail('must not run'), { resolution: 'max' }), /resolution/);
+});
 test('rejects malformed timestamp requests before extraction', async () => {
   for (const timestampsMs of [[], [-1], [1.1], [Infinity], Array.from({ length: 21 }, (_, i) => i), '100']) {
     await assert.rejects(loadStoryboard('Ct-mtWqV3Ro', () => assert.fail('must not run'), { timestampsMs }), /timestampsMs/);

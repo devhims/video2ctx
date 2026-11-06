@@ -6,7 +6,7 @@ import { VerifiedTextSource } from '../../lib/verified-text-source';
 import { VerifiedFrame } from '../../lib/verified-frame';
 import { videoCatalog, type VideoAssetKey, type VideoAssetReference } from '../../lib/video-catalog';
 import { frameKey, metadataKey, sheetKey, videoResourceKey } from '../../lib/video-resources';
-import type { Storyboard } from '../providers/youtube/storyboard';
+import { servedResolution, type Storyboard } from '../providers/youtube/storyboard';
 import type { SessionAssetKind } from './session-evidence';
 
 export interface SessionCatalogReference {
@@ -137,7 +137,7 @@ async function sourceKey(
     if (rest.startsWith('false:'))
       return videoResourceKey({ kind: 'comments', id: videoId, continuation: rest.slice(6) || undefined })!;
   }
-  if (kind === 'storyboard_manifest') return metadataKey(videoId);
+  if (kind === 'storyboard_manifest') return metadataKey(videoId, servedResolution(value as Storyboard));
   if (kind === 'storyboard_sheet') {
     const board = value as Storyboard;
     if (board.videoId === videoId && board.manifest && board.sheets.length === 1)
@@ -183,6 +183,7 @@ const sourceFields: Record<SessionAssetKind, Set<string>> = {
     'frameCount',
     'intervalMs',
     'manifest',
+    'resolution',
     'selection',
     'sheets',
     'meta',
@@ -192,6 +193,7 @@ const sourceFields: Record<SessionAssetKind, Set<string>> = {
     'frameCount',
     'intervalMs',
     'manifest',
+    'resolution',
     'selection',
     'sheets',
     'meta',

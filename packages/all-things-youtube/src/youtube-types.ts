@@ -197,12 +197,20 @@ export interface StoryboardIndex {
   manifest?: StoryboardManifest;
   videoId: string;
   level: number;
+  /** Resolution actually served: high only when a level above L2 was delivered. */
+  resolution: StoryboardResolution;
   frameCount: number;
   intervalMs: number;
   selection?: { mode: 'leading' | 'spread' | 'timestamps' | 'indexes' | 'metadata'; requestedTimestampsMs?: number[]; requestedSheetIndexes?: number[] };
   sheets: StoryboardContactSheet[];
   meta: SourceMetadata;
 }
+
+/**
+ * Standard uses the sharpest level the mobile players list (L2, typically 160x90 tiles, 25 per sheet).
+ * High reads the web watch page, which also lists L3 (typically 320x180 tiles, 9 per sheet) when the video has one.
+ */
+export type StoryboardResolution = 'standard' | 'high';
 
 export interface StoryboardOptions {
   /** Inspect available coverage without downloading images. */
@@ -216,6 +224,8 @@ export interface StoryboardOptions {
   selection?: 'leading' | 'spread';
   /** Select sheets containing these sampled moments, overriding selection. */
   timestampsMs?: number[];
+  /** Defaults to standard. Manifests and sheet indexes are specific to the served resolution. */
+  resolution?: StoryboardResolution;
 }
 
 export interface TranscriptOptions {

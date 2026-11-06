@@ -669,6 +669,61 @@ test.each([false, true])('combined cold storyboard pins exact shared versions an
   });
 });
 
+test('a high request for a video without L3 reuses the standard shared sheets', async () => {
+  const id = videoId();
+  const { storyboardSchema } = await import('../src/agents/providers/youtube/storyboard');
+  // Shared assets saved before resolutions existed carry no resolution label.
+  const board = { videoId:id, frameCount:16, intervalMs:10000,
+    manifest:{totalSheets:8,framesPerSheet:2,tileWidth:160,tileHeight:90,columns:2,rows:1,lastSampleMs:150000},
+    selection:{mode:'spread' as const}, meta:{partial:false,warnings:[]},
+    sheets:Array.from({length:8}, (_,index) => ({firstFrameIndex:index*2,frameCount:2,
+      intervalMs:10000,tileWidth:160,tileHeight:90,columns:2,rows:1,imageBase64:'/9j/AA=='}))};
+  const manifestRefs = await saveVideoResource(env, {kind:'storyboard',id,metadataOnly:true}, storyboardMetadata(board), Date.now(), 60000);
+  const sheetRefs = await saveVideoResource(env, {kind:'storyboard',id,maxSheets:8}, board, Date.now(), 60000);
+  // The library labels the watch page's L2 as standard, and the provider's parse drops that label.
+  const fallback = storyboardSchema.parse({ ...board, resolution: 'standard', selection: { mode: 'timestamps', requestedTimestampsMs: [30000] },
+    sheets: [board.sheets[1]], meta: { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
+  expect('resolution' in fallback && fallback.resolution !== undefined).toBe(false);
+  const op = { kind: 'storyboard' as const, id, timestampsMs: [30000], resolution: 'high' as const };
+  const fallbackRefs = [...await saveVideoResource(env, { ...op, timestampsMs: undefined, metadataOnly: true }, storyboardMetadata(fallback), Date.now(), 60000),
+    ...await saveVideoResource(env, op, fallback, Date.now(), 60000)];
+  expect(fallbackRefs.find(ref => ref.kind === 'storyboard_manifest')).toEqual(manifestRefs[0]);
+  await within('high-without-l3', async ({store}) => {
+    const upstream = vi.fn()
+      .mockResolvedValueOnce({value:board,cacheStatus:'hit',catalogVersions:[...manifestRefs,...sheetRefs]})
+      .mockResolvedValueOnce({value:fallback,cacheStatus:'miss',catalogVersions:fallbackRefs});
+    const p = {storyboard:upstream} as unknown as YouTubeAgentProvider;
+    await sessionProvider(p,store).storyboard!(id, undefined, {maxSheets:8});
+    const high = await sessionProvider(p,store).storyboard!(id, [30000], {maxSheets:20, resolution:'high'});
+    expect(high.value).toMatchObject({ resolution: undefined, sheets: [{ firstFrameIndex: 2 }] });
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest')).toHaveLength(1);
+  });
+});
+
+test('high sheets attach to a session even when legacy unlabelled L3 sheets share their geometry', async () => {
+  const id = videoId();
+  const board = { videoId:id, frameCount:6, intervalMs:10000,
+    manifest:{totalSheets:2,framesPerSheet:3,tileWidth:320,tileHeight:180,columns:3,rows:1,lastSampleMs:50000},
+    selection:{mode:'spread' as const}, meta:{partial:false,warnings:[]},
+    sheets:[0,1].map(index => ({firstFrameIndex:index*3,frameCount:3,intervalMs:10000,tileWidth:320,tileHeight:180,columns:3,rows:1,imageBase64:'/9j/AA=='}))};
+  // Saved before resolutions existed: L3 under the standard keys, with no label.
+  await saveVideoResource(env, {kind:'storyboard',id,metadataOnly:true}, storyboardMetadata(board), Date.now(), 60000);
+  await saveVideoResource(env, {kind:'storyboard',id,maxSheets:2}, board, Date.now(), 60000);
+  const high = { ...board, resolution: 'high' as const, selection: { mode: 'timestamps' as const, requestedTimestampsMs: [40000] }, sheets: [board.sheets[1]!],
+    meta: { partial: false, warnings: ['Storyboard: limited to 1 sheets'] } };
+  const op = { kind: 'storyboard' as const, id, timestampsMs: [40000], resolution: 'high' as const };
+  const refs = [...await saveVideoResource(env, { kind: 'storyboard', id, metadataOnly: true, resolution: 'high' }, storyboardMetadata(high), Date.now(), 60000),
+    ...await saveVideoResource(env, op, high, Date.now(), 60000)];
+  expect(refs.find(ref => ref.kind === 'storyboard_sheet')?.variant).toMatch(/^high:/);
+  await within('high-beside-legacy-l3', async ({store}) => {
+    const upstream = vi.fn(async () => ({value:high,cacheStatus:'miss' as const,catalogVersions:refs}));
+    const p = {storyboard:upstream} as unknown as YouTubeAgentProvider;
+    const result = await sessionProvider(p,store).storyboard!(id, [40000], {maxSheets:20, resolution:'high'});
+    expect(result.value).toMatchObject({ resolution: 'high', sheets: [{ firstFrameIndex: 3 }] });
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toHaveLength(1);
+  });
+});
+
 test.each(['delete','cancel'])('%s during combined extraction cannot attach a late manifest or images', async mode => {
   const id = videoId();
   await within(`combined-fetch-${mode}`, async ({store,sql}) => {

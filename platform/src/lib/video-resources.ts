@@ -1,7 +1,7 @@
 import { countVisualWork, visualSpan } from './visual-diagnostics';
 import { timeStoryboardStage } from './storyboard-timing';
 import { mapInBatches } from './map-in-batches';
-import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS, type Storyboard } from '../agents/providers/youtube/storyboard';
+import { servedResolution, storyboardMetadata, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS, type Storyboard, type StoryboardResolution } from '../agents/providers/youtube/storyboard';
 import { frameRequestSchema, framesSchema, type VideoFrames } from './youtube-frames-contract';
 import { getVideoFrames } from './youtube-frames';
 import { runYouTubeOperation, YouTubeProcessorError, type YouTubeOperation } from './youtube-processor-client';
@@ -55,6 +55,8 @@ export function videoResourceKey(op: VideoResourceOperation): VideoAssetKey | un
         maxSheets: op.maxSheets ?? MAX_STORYBOARD_SHEETS,
         indexes: op.sheetIndexes ? [...op.sheetIndexes].sort((a, b) => a - b) : null,
         timestamps: op.timestampsMs ? [...new Set(op.timestampsMs)].sort((a, b) => a - b) : null,
+        // Appended only for high, so standard keys saved before resolutions existed still match.
+        ...(op.resolution === 'high' ? { resolution: 'high' } : {}),
       };
       break;
     case 'frames':
@@ -87,14 +89,31 @@ export function reusableVideoResource(op: VideoResourceOperation,
     : saved.freshUntil > now;
 }
 
-export function metadataKey(id: string): VideoAssetKey {
-  return { videoId: id, kind: 'storyboard_manifest', variant: 'v1' };
+/**
+ * Before resolutions existed, a standard request that reached the web fallback saved unlabelled L3.
+ * Standard L2 tiles hold at most 160x90 pixels in either orientation.
+ */
+export function legacyHighManifest(board: Pick<Storyboard, 'resolution' | 'manifest'>): boolean {
+  return servedResolution(board) === 'standard' && !!board.manifest && board.manifest.tileWidth * board.manifest.tileHeight > 160 * 90;
+}
+
+/** Missing sheets for a cached high manifest came back at standard resolution. */
+export function storyboardResolutionUnavailable() {
+  return new YouTubeProcessorError('UNAVAILABLE', 'High-resolution storyboards are temporarily unavailable. Retry the request.', undefined, true);
+}
+
+/** Sheet indexes are level-specific, so each resolution keeps its own manifest. */
+export function metadataKey(id: string, resolution: StoryboardResolution = 'standard'): VideoAssetKey {
+  return { videoId: id, kind: 'storyboard_manifest', variant: resolution === 'high' ? 'high-v1' : 'v1' };
 }
 export async function sheetKey(board: Storyboard, index: number): Promise<VideoAssetKey> {
   const manifest = await sha256(
     JSON.stringify({ frameCount: board.frameCount, intervalMs: board.intervalMs, manifest: board.manifest }),
   );
-  return { videoId: board.videoId, kind: 'storyboard_sheet', variant: `${manifest}:${index}` };
+  // Boards saved before resolutions existed could hold unlabelled L3 sheets with the same geometry.
+  // High sheets get their own identity so those are never attached as high; standard keys are unchanged.
+  const prefix = servedResolution(board) === 'high' ? 'high:' : '';
+  return { videoId: board.videoId, kind: 'storyboard_sheet', variant: `${prefix}${manifest}:${index}` };
 }
 export function frameKey(op: FrameOperation, time: number): VideoAssetKey {
   return { videoId: op.id, kind: 'frame', variant: `v1:${op.maxWidth}:${time}` };
@@ -148,8 +167,8 @@ export async function readStoryboardSelection(
   return timeStoryboardStage(op.id, 'catalog_lookup', async () => {
     countVisualWork('catalogLookupPasses');
     const store = videoCatalog(env);
-    const metadata = store ? await store.readSaved<Storyboard>(metadataKey(op.id)) : null;
-    if (!metadata?.complete) {
+    const metadata = store ? await store.readSaved<Storyboard>(metadataKey(op.id, op.resolution)) : null;
+    if (!metadata?.complete || legacyHighManifest(metadata.value)) {
       return { kind: 'storyboard', metadata: null, hits: [], missing: [], stored: null };
     }
     const indexes = storyboardSheetIndexes(metadata.value, op);
@@ -203,7 +222,10 @@ export async function readVideoResource(
   const key = videoResourceKey(op);
   if (!store || !key) return null;
   if (op.kind === 'storyboard') {
-    if (op.metadataOnly) return store.readSaved<Storyboard>(metadataKey(op.id));
+    if (op.metadataOnly) {
+      const saved = await store.readSaved<Storyboard>(metadataKey(op.id, op.resolution));
+      return saved && legacyHighManifest(saved.value) ? null : saved;
+    }
     return (await readStoryboardSelection(env, op)).stored;
   }
   if (op.kind === 'frames') return (await readFrameSelection(env, op)).stored;
@@ -264,7 +286,9 @@ export async function saveVideoResource(
         const sheetReferences = await timeStoryboardStage(op.id, 'catalog_write', () => store.saveMany(writes));
         references.push(...sheetReferences);
       } else
-        await save(metadataKey(op.id), board, fetchedAt, maxAgeMs, resourceComplete(op, board), {
+        // File under the served resolution: a high request that fell back to standard
+        // returned a standard manifest, and high sheet indexes must never be planned with it.
+        await save(metadataKey(op.id, servedResolution(board)), board, fetchedAt, maxAgeMs, resourceComplete(op, board), {
           ...board.manifest,
           intervalMs: board.intervalMs,
         });
@@ -411,9 +435,9 @@ export async function loadVideoResource(
   if (!store || op.metadataOnly) return storyboardSchema.parse(await runYouTubeOperation(env, op, diagnostic));
   const lookup = refresh ? undefined : visualLookup?.kind === 'storyboard' ? visualLookup : await readStoryboardSelection(env, op);
   const metadata = lookup?.metadata;
-  if (!metadata) {
-    // A cold or refreshed selection discovers the manifest and downloads images in
-    // one container invocation. No second startup or repeated YouTube discovery.
+  // A cold or refreshed selection discovers the manifest and downloads images in
+  // one container invocation. No second startup or repeated YouTube discovery.
+  const cold = async () => {
     const fetchedAt = Date.now();
     let fetched: Storyboard;
     try {
@@ -426,7 +450,7 @@ export async function loadVideoResource(
         let metadata: Storyboard | undefined;
         try {
           metadata = storyboardSchema.parse(await runYouTubeOperation(env,
-            { kind: 'storyboard', id: op.id, metadataOnly: true, deadlineAt: op.deadlineAt }, diagnostic));
+            { kind: 'storyboard', id: op.id, metadataOnly: true, resolution: op.resolution, deadlineAt: op.deadlineAt }, diagnostic));
         } catch { /* Preserve the original rejection if guidance cannot be retrieved. */ }
         if (metadata?.videoId === op.id) storyboardSheetIndexes(metadata, op);
       }
@@ -435,7 +459,7 @@ export async function loadVideoResource(
     if (fetched.videoId !== op.id) throw new Error('Storyboard video mismatch.');
     countVisualWork('catalogMisses', storyboardSheetIndexes(fetched, op).length);
     onReady?.(fetched);
-    const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true } as const;
+    const metadataOp = { kind: 'storyboard', id: op.id, metadataOnly: true, resolution: servedResolution(fetched) } as const;
     // Independent assets share no publication dependency. Drain both on failure.
     const versions = await mapInBatches([
       { operation: metadataOp, value: storyboardMetadata(fetched) },
@@ -443,7 +467,8 @@ export async function loadVideoResource(
     ], item => saveVideoResource(env, item.operation, item.value, fetchedAt, VIDEO_MAX_AGE.storyboard));
     onVersions?.(versions.flat());
     return fetched;
-  }
+  };
+  if (!metadata) return cold();
   const hits = lookup!.hits;
   const missing = lookup!.missing;
   const versions = [...(metadata.catalogVersions ?? []), ...hits.flatMap((hit) => hit.catalogVersions ?? [])];
@@ -461,12 +486,15 @@ export async function loadVideoResource(
     { ...op, timestampsMs: undefined, sheetIndexes: missing, maxSheets: missing.length },
     diagnostic,
   );
+  if (servedResolution(fetched) !== servedResolution(metadata.value)) throw storyboardResolutionUnavailable();
+  // The saved manifest is stale, such as unlabelled L3 saved as standard before resolutions
+  // existed. Rediscover it, which replaces the current pointer; older versions stay readable.
   if (
     JSON.stringify(fetched.manifest) !== JSON.stringify(metadata.value.manifest) ||
     fetched.intervalMs !== metadata.value.intervalMs ||
     fetched.frameCount !== metadata.value.frameCount
   )
-    throw new Error('Storyboard changed during retrieval. Refresh its manifest.');
+    return cold();
   onReady?.(boardWithSheets(metadata.value, op, [...hits.map(asset => asset.value), fetched]));
   onVersions?.([
     ...versions,
