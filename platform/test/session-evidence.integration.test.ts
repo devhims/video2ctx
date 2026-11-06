@@ -1309,6 +1309,35 @@ test('long transcript matches cannot crowd short-video matches out of a search',
     expect(videos(found.packets)).not.toContain(longId);
   }));
 
+test('storyboard manifests are pinned per served resolution', async () =>
+  within('storyboard-resolutions', async (store) => {
+    const board = (resolution: 'standard' | 'high', framesPerSheet: number, indexes: number[]) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000, resolution,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, tileWidth: 100, tileHeight: 100, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, tileWidth: 100, tileHeight: 100,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: resolution === 'standard' ? { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] }
+        : { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn()
+      // The watch page was blocked, so the high request came back at standard resolution.
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('standard', 2, [2]) })
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('high', 1, [5]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    const fallback = await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    expect(fallback.value).toMatchObject({ resolution: 'standard', meta: { warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
+    // The fallback is reusable as standard without another provider call.
+    await sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [2], maxSheets: 1 });
+    expect(storyboard).toHaveBeenCalledTimes(1);
+    // High is still missing, so the next high request asks the provider again and pins its own manifest.
+    const high = await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    expect(high.value).toMatchObject({ resolution: 'high', manifest: { framesPerSheet: 1 }, sheets: [{ firstFrameIndex: 5 }] });
+    expect(storyboard).toHaveBeenCalledTimes(2);
+    const manifests = store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest');
+    expect(manifests.map(asset => asset.details.resolution).sort()).toEqual(['high', 'standard']);
+  }));
+
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
   within('storyboard-single-middle', async (store, reopen) => {
     const value = { videoId: id, frameCount: 6, intervalMs: 5000,

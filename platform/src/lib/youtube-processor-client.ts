@@ -2,7 +2,7 @@ import { visualSpan, countVisualWork, linkVisualExtraction } from './visual-diag
 import { abortableContainerFetch, boundedContainerJson } from './bounded-container-json';
 import { normalizedProxyUrls, planProxyOrder, reportProxyOutcomes, type ProxyOutcome } from './proxy-health';
 import { extractionCapture, extractionFailureKind, emitExtractionDiagnostic, type ExtractionAttempt, type ExtractionDiagnosticSink } from './extraction-diagnostics';
-import type { Storyboard } from '../agents/providers/youtube/storyboard';
+import type { Storyboard, StoryboardResolution } from '../agents/providers/youtube/storyboard';
 import { getContainer } from '@cloudflare/containers';
 import type {
   BrowseOptions,
@@ -40,7 +40,8 @@ export type YouTubeOperation = { deadlineAt?: number } & (
   | { kind: 'all-comments'; id: string; maxPages: number }
   | { kind: 'caption-tracks'; id: string }
   | { kind: 'transcript'; id: string; lang?: string; granularity: 'segment' | 'word' }
-  | { kind: 'storyboard'; id: string; timestampsMs?: number[]; maxSheets?: number; sheetIndexes?: number[]; metadataOnly?: boolean }
+  | { kind: 'storyboard'; id: string; timestampsMs?: number[]; maxSheets?: number; sheetIndexes?: number[]; metadataOnly?: boolean;
+      resolution?: StoryboardResolution }
   | { kind: 'endscreen'; id: string });
 
 export type YouTubeOperationResult<T extends YouTubeOperation> =

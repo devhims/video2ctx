@@ -41,7 +41,7 @@ sequenceDiagram
 | Transcript | Language and granularity |
 | Comment page | Continuation token |
 | Collected comments | Page limit |
-| Storyboard manifest | Video ID |
+| Storyboard manifest | Video ID and served resolution (standard `v1`, high `high-v1`) |
 | Storyboard sheet | Manifest geometry hash and sheet index |
 | Extracted frame | Requested timestamp and maximum width |
 | Endscreen elements | Video ID |

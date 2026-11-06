@@ -62,6 +62,23 @@ describe('storyboard agent tool', () => {
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
   });
+  it('plans sheet indexes only with a standard manifest and requests timestamps at high resolution', async () => {
+    const ctx = context();
+    const standard = ctx.getEvidence!()[0]!;
+    // A later high-resolution manifest has more, smaller sheets. Its indexes must not validate standard requests.
+    const high = { ...standard, packetId: 'high', artifacts: standard.artifacts.map(artifact => ({ ...artifact, data: { ...artifact.data, resolution: 'high',
+      manifest: { totalSheets: 12, framesPerSheet: 1, tileWidth: 320, tileHeight: 180, columns: 1, rows: 1, lastSampleMs: 55000 } } })) };
+    ctx.getEvidence = () => [standard, high];
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, sheetIndexes: [8] }, ctx, 'standard-only'))
+      .rejects.toThrow('Available sheet indexes are 0 through 5');
+    ctx.getEvidence = () => [high];
+    const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>().mockResolvedValue({ value: { ...storyboard, resolution: 'high',
+      manifest: high.artifacts[0]!.data.manifest as Storyboard['manifest'], sheets: [{ ...storyboard.sheets[0]!, columns: 1, frameCount: 1, firstFrameIndex: 11 }] }, cacheStatus: 'miss' });
+    ctx.provider.storyboard = provider;
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [55000] }, ctx, 'high');
+    expect(provider).toHaveBeenCalledWith(storyboard.videoId, [55000], expect.objectContaining({ resolution: 'high' }), expect.any(Function));
+    expect(packet.artifacts[0]!.data).toMatchObject({ resolution: 'high', manifest: { framesPerSheet: 1 } });
+  });
   it.each([false, true])('retrieves missing metadata with images in one call (unrelated metadata: %s)', async unrelated => {
     const ctx = context();
     const packets = ctx.getEvidence!();
@@ -151,7 +168,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execute;
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'overview');
     expect(ctx.provider.storyboard).toHaveBeenCalledExactlyOnceWith(storyboard.videoId, undefined,
-      { metadataOnly: false, maxSheets: 3, sheetIndexes: undefined, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+      { metadataOnly: false, maxSheets: 3, sheetIndexes: undefined, resolution: 'standard', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(execute.mock.calls[0]![0].input).toEqual({ videoId: storyboard.videoId, maxSheets: 3 });
     expect(execute.mock.calls[0]![0].semanticKey).not.toBe(`storyboard:${JSON.stringify({ videoId: storyboard.videoId })}`);
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
@@ -210,7 +227,7 @@ describe('storyboard agent tool', () => {
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Charts',
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, resolution: 'standard', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
@@ -229,7 +246,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [50000] }, ctx, 'first');
     const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [55000] }, ctx, 'second');
-    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, resolution: 'high', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(keys[0]).not.toBe(keys[1]);
     expect(result.artifacts[0]!.data).toMatchObject({ sampledRanges: [{ startMs: 50000, endMs: 55000 }] });
   });

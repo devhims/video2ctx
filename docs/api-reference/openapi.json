@@ -6992,6 +6992,18 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
+                          },
                           "width": {
                             "type": "integer",
                             "minimum": 0,
@@ -8433,6 +8445,18 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "resolution": {
+                                "type": "string",
+                                "enum": [
+                                  "standard",
+                                  "high"
+                                ]
                               },
                               "width": {
                                 "type": "integer",
@@ -10163,6 +10187,18 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
+                          },
                           "width": {
                             "type": "integer",
                             "minimum": 0,
@@ -11192,6 +11228,18 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
                           },
                           "width": {
                             "type": "integer",

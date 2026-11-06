@@ -7,11 +7,15 @@ import {
   type StoryboardContactSheet,
   type StoryboardIndex,
   type StoryboardOptions,
+  type StoryboardResolution,
 } from './youtube-types';
 
 const DEFAULT_MAX_SHEETS = 12;
 const MAX_SHEETS = 20;
 const MAX_SHEET_BYTES = 4 * 1024 * 1024;
+// Mobile players list L0-L2. Only the web watch page adds L3, so standard stops at L2
+// even when a web response serves it. That keeps standard manifests stable across clients.
+const STANDARD_MAX_LEVEL = 2;
 
 type JsonObject = Record<string, unknown>;
 
@@ -185,6 +189,9 @@ export function validateStoryboardOptions(options: StoryboardOptions): number {
     || options.timestampsMs.some(time => !Number.isSafeInteger(time) || time < 0))) {
     throw new YouTubeClientError('INVALID_INPUT', 'timestampsMs must contain 1 to 20 nonnegative integer timestamps.');
   }
+  if (options.resolution !== undefined && !['standard', 'high'].includes(options.resolution)) {
+    throw new YouTubeClientError('INVALID_INPUT', 'resolution must be standard or high.');
+  }
   if (options.metadataOnly !== undefined && typeof options.metadataOnly !== 'boolean') {
     throw new YouTubeClientError('INVALID_INPUT', 'metadataOnly must be a boolean.');
   }
@@ -239,17 +246,22 @@ function metadata(warnings: string[]): SourceMetadata {
 // Keep proxy fan-out separate from the platform's storage concurrency.
 const STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
 
+/**
+ * `resolution` is what this response can serve: high only for a web watch response, which
+ * lists every level. A high request served from a mobile response returns standard with a warning.
+ */
 export async function downloadStoryboard(
   raw: JsonObject,
   options: StoryboardOptions,
   fetchImpl: typeof fetch,
+  resolution: StoryboardResolution = 'standard',
 ): Promise<StoryboardIndex> {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError('NOT_FOUND', 'No storyboard is available for this video.');
   }
-  const level = [...spec.levels].sort((a, b) =>
+  const level = spec.levels.filter(level => resolution === 'high' || level.index <= STANDARD_MAX_LEVEL).sort((a, b) =>
     (b.tileWidth * b.tileHeight) - (a.tileWidth * a.tileHeight)
   )[0];
   if (!level) {
@@ -285,12 +297,14 @@ export async function downloadStoryboard(
       sheets.push(result.value);
     }
   }
-  const warnings = !options.metadataOnly && selectedSheets.length < availableSheets
-    ? [`Storyboard: limited to ${selectedSheets.length} sheets`]
-    : [];
+  const warnings = [
+    ...(options.resolution === 'high' && resolution !== 'high' ? ['Storyboard: high resolution unavailable; returned standard sheets'] : []),
+    ...(!options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : []),
+  ];
   return {
     videoId: options.videoId,
     level: level.index,
+    resolution,
     frameCount: level.frameCount,
     intervalMs: level.intervalMs,
     manifest: { totalSheets: availableSheets, framesPerSheet: capacity, tileWidth: level.tileWidth, tileHeight: level.tileHeight,

@@ -23,6 +23,9 @@ export async function loadStoryboard(videoId, getStoryboard, options = {}) {
     || options.sheetIndexes.length > 20 || options.sheetIndexes.some(index => !Number.isSafeInteger(index) || index < 0))) {
     throw Object.assign(new Error('sheetIndexes must contain 1 to 20 nonnegative integers.'), { code: 'INVALID_INPUT', retryable: false });
   }
+  if (options.resolution !== undefined && !['standard', 'high'].includes(options.resolution)) {
+    throw Object.assign(new Error('resolution must be standard or high.'), { code: 'INVALID_INPUT', retryable: false });
+  }
   if ((timestampsMs && options.sheetIndexes) || (options.metadataOnly && (timestampsMs || options.sheetIndexes))) {
     throw Object.assign(new Error('Choose metadata, sheet indexes, or timestamps separately.'), { code: 'INVALID_INPUT', retryable: false });
   }
@@ -32,7 +35,8 @@ export async function loadStoryboard(videoId, getStoryboard, options = {}) {
     // Older published extractors silently ignore the new selection options.
     if (index.selection?.mode !== (options.metadataOnly ? 'metadata' : options.sheetIndexes ? 'indexes' : timestampsMs ? 'timestamps' : 'spread')
       || (timestampsMs && JSON.stringify(index.selection.requestedTimestampsMs) !== JSON.stringify(timestampsMs))
-      || (options.sheetIndexes && JSON.stringify(index.selection.requestedSheetIndexes) !== JSON.stringify(options.sheetIndexes))) {
+      || (options.sheetIndexes && JSON.stringify(index.selection.requestedSheetIndexes) !== JSON.stringify(options.sheetIndexes))
+      || (options.resolution === 'high' && !['standard', 'high'].includes(index.resolution))) {
       throw Object.assign(new Error('The processor requires an extraction library with storyboard selection support.'),
         { code: 'UNAVAILABLE', retryable: false });
     }

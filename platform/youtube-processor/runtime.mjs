@@ -159,7 +159,7 @@ function createConnectionRuntime(proxyUrl, singleAttempt = false) {
                 fetch: storyboardImageFetch(fetchImpl, onDiagnostic), onDiagnostic,
                 ...(singleAttempt ? { timeBudgetMs: Math.max(1, diagnostics.deadlineAt - Date.now()) } : {}),
                 timestampsMs: operation.timestampsMs, maxSheets: operation.maxSheets,
-                sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly });
+                sheetIndexes: operation.sheetIndexes, metadataOnly: operation.metadataOnly, resolution: operation.resolution });
             } catch (error) {
               const code = ['INVALID_INPUT', 'INVALID_RESPONSE', 'NOT_FOUND', 'UNAVAILABLE', 'UPSTREAM_ERROR'].includes(error?.code)
                 ? error.code : 'UNKNOWN';

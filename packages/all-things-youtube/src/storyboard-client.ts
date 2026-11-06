@@ -13,6 +13,8 @@ export interface StoryboardDiagnostic {
   code?: string;
   elapsedMs: number;
   sheetCount?: number;
+  level?: number;
+  resolution?: 'standard' | 'high';
 }
 export type StoryboardRequest = StoryboardOptions & YouTubeClientOptions & {
   signal?: AbortSignal;
@@ -24,6 +26,7 @@ const object = (value: unknown): Record<string, unknown> =>
 const statuses = new Set(['OK', 'LOGIN_REQUIRED', 'UNPLAYABLE', 'ERROR', 'LIVE_STREAM_OFFLINE', 'CONTENT_CHECK_REQUIRED', 'AGE_CHECK_REQUIRED']);
 
 // A playable response alone does not guarantee that this client exposes storyboards.
+// High resolution tries the web watch page first: only its player response lists L3.
 export async function getStoryboardWithFallback(options: StoryboardRequest) {
   validateStoryboardOptions(options);
   const timeBudgetMs = options.timeBudgetMs ?? 30_000;
@@ -68,7 +71,8 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
   let malformed = false;
   let downloadError: YouTubeClientError | undefined;
   try {
-    for (const profile of [...PLAYER_PROFILES, WEB_PROFILE]) {
+    const profiles = options.resolution === 'high' ? [WEB_PROFILE, ...PLAYER_PROFILES] : [...PLAYER_PROFILES, WEB_PROFILE];
+    for (const profile of profiles) {
       signal.throwIfAborted();
       const startedAt = Date.now();
       const desktop = profile === WEB_PROFILE;
@@ -118,9 +122,11 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
       if (!spec) { malformed ||= specState === 'malformed'; continue; }
       const downloadStartedAt = Date.now();
       try {
-        const result = await downloadStoryboard(raw, options, boundedFetch);
+        const result = await downloadStoryboard(raw, options, boundedFetch,
+          desktop && options.resolution === 'high' ? 'high' : 'standard');
         signal.throwIfAborted();
-        emit({ stage: 'complete', profile: profile.name, outcome: 'success', sheetCount: result.sheets.length, elapsedMs: Date.now() - startedAt });
+        emit({ stage: 'complete', profile: profile.name, outcome: 'success', sheetCount: result.sheets.length,
+          level: result.level, resolution: result.resolution, elapsedMs: Date.now() - startedAt });
         return result;
       } catch (error) {
         signal.throwIfAborted();

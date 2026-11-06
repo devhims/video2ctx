@@ -5,7 +5,7 @@ import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
-import { storyboardMetadata, storyboardSchema, storyboardSheetIndexes, type Storyboard } from '../providers/youtube/storyboard';
+import { servedResolution, storyboardMetadata, storyboardSchema, storyboardSheetIndexes, type Storyboard, type StoryboardResolution } from '../providers/youtube/storyboard';
 import { SessionEvidenceStore } from './session-evidence';
 import { assertTranscriptWithinLimit } from './video-duration-limit';
 import { VisualRetrievalQueue } from './visual-retrieval-queue';
@@ -150,33 +150,43 @@ export function sessionProvider(
           visual('storyboard', id, options.signal, async () => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
-            const manifestKey = `storyboard:${id}:manifest`;
-            const fresh = (refresh && !refreshed.has(manifestKey)) || !!options.refresh;
+            // Sheet indexes are level-specific, so each served resolution has its own manifest.
+            const requested = options.resolution ?? 'standard';
+            const manifestKey = (resolution: StoryboardResolution) => `storyboard:${id}:manifest${resolution === 'high' ? ':high' : ''}`;
+            const fresh = (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
             let prefetched: CachedResult<Storyboard> | undefined;
-            const metadata = await store.retrieve(
-              `storyboard:${id}:manifest`,
+            const retrieveManifest = (resolution: StoryboardResolution, reload: boolean, load: () => Promise<CachedResult<Storyboard>>) => store.retrieve(
+              manifestKey(resolution),
               'storyboard_manifest',
               id,
-              fresh,
-              async () => {
-                if (options.metadataOnly) return provider.storyboard!(id, undefined,
-                  { metadataOnly: true, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
-                prefetched = await provider.storyboard!(id, timestamps,
-                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic, ...(onReady ? [onReady] : []));
-                onReady?.(prefetched.value);
-                return { ...prefetched, value: storyboardMetadata(prefetched.value),
-                  catalogVersions: prefetched.catalogVersions?.filter(asset => asset.kind === 'storyboard_manifest') };
-              },
+              reload,
+              load,
               (value) => ({
                 totalSheets: value.manifest?.totalSheets,
                 totalFrames: value.frameCount,
                 intervalMs: value.intervalMs,
                 lastSampleMs: value.manifest?.lastSampleMs,
+                resolution: servedResolution(value),
               }),
-              (value) => !!value.manifest,
+              (value) => !!value.manifest && servedResolution(value) === resolution,
               options.signal,
             );
-            if (metadata.assetVersions?.length) refreshed.add(manifestKey);
+            let metadata = await retrieveManifest(requested, fresh, async () => {
+                if (options.metadataOnly) return provider.storyboard!(id, undefined,
+                  { metadataOnly: true, ...(options.resolution ? { resolution: options.resolution } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
+                prefetched = await provider.storyboard!(id, timestamps,
+                  { ...options, ...(fresh ? {refresh:true} : {}) }, diagnostic, ...(onReady ? [onReady] : []));
+                onReady?.(prefetched.value);
+                return { ...prefetched, value: storyboardMetadata(prefetched.value),
+                  catalogVersions: prefetched.catalogVersions?.filter(asset => asset.kind === 'storyboard_manifest') };
+              });
+            const served = servedResolution(metadata.value);
+            if (metadata.value.manifest && served !== requested) {
+              // A high request fell back to standard. Pin that manifest as standard, never as high.
+              const fallback = metadata;
+              metadata = await retrieveManifest(served, true, async () => fallback);
+            }
+            if (metadata.assetVersions?.length) refreshed.add(manifestKey(served));
             options.signal?.throwIfAborted();
             if (options.metadataOnly) return metadata;
             const manifest = metadata.value.manifest;
@@ -203,7 +213,7 @@ export function sessionProvider(
               const fetched = prefetched ?? await provider.storyboard!(
                 id,
                 undefined,
-                { sheetIndexes: missing, maxSheets: missing.length, ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
+                { sheetIndexes: missing, maxSheets: missing.length, ...(served === 'high' ? { resolution: served } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
                 onReady ? value => onReady(storyboardSchema.parse({ ...value,
                   sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),

@@ -2,7 +2,7 @@ import { canAnalyzeStoryboard } from '../../../runtime/storyboard-budget';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema } from '../../../contracts';
-import { storyboardSchema } from '../storyboard';
+import { servedResolution, storyboardSchema } from '../storyboard';
 import { analyzeStoryboardBatches } from '../storyboard-analysis-batches';
 import type { AgentToolContext } from '../tool-context';
 import { readAnalysisAssets, storedVisualInputSchema } from './stored-analysis';
@@ -127,6 +127,7 @@ export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof story
           sessionReused: false,
           selection: storyboard.selection,
           manifest: storyboard.manifest,
+          resolution: servedResolution(storyboard),
           analysisBatchCount: analysis.batchCount,
           requestedSheetCount: storyboard.sheets.length,
           analyzedSheetCount: analysis.analyzedSheets.length,
