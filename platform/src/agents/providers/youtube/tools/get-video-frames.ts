@@ -14,6 +14,7 @@ import { frameRequestSchema, validateFrameResponse } from '../../../../lib/youtu
 import { evidencePacketSchema } from '../../../contracts';
 import { framePreviewSchema } from '../../../runtime/frame-previews';
 import { frameExtractionBudget, FRAME_EXTRACTION_MIN_MS } from '../../../runtime/frame-budget';
+import { clockTime } from '../../../runtime/clock-time';
 import type { AgentToolContext } from '../tool-context';
 import { meteredCredits, safeIdPart, youtubeVideoUrl } from './provider-evidence';
 
@@ -69,6 +70,13 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         const duration = eligibleDuration(metadata?.durationSeconds);
         if (duration === undefined) throw new Error('Verified video duration is unavailable. Frame capture requires a completed video with a known duration.');
         if (duration > context.maxVideoSeconds) throw new VideoTooLongError(request.videoId, duration, context.maxVideoSeconds);
+        // Extraction rejects these too, but only after ~12 s in the Media path and the FFmpeg
+        // fallback; failing here keeps the model from retrying them until the deadline.
+        const durationMs = duration * 1_000;
+        const pastEnd = request.timestampsMs.filter(timestamp => timestamp >= durationMs);
+        if (pastEnd.length) throw new ApiError(422, 'FRAME_TIMESTAMP_PAST_END',
+          `${pastEnd.map(timestamp => `${clockTime(timestamp)} (${timestamp} ms)`).join(', ')} ${pastEnd.length === 1 ? 'is' : 'are'} at or past the end of this video, which lasts ${clockTime(durationMs)} (${durationMs} ms). `
+          + 'Do not repeat this request. Request only timestamps before the end, or finalize with the available evidence.');
       }
       if (!context.provider.frames) throw new Error('Frame retrieval is unavailable.');
       const extractionTimeoutMs = frameExtractionBudget(context.researchDeadlineAt);
