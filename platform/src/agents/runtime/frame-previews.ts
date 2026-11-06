@@ -36,6 +36,25 @@ export function packetFramePreviews(packet: EvidencePacket): FramePreview[] {
   return parsed.success ? parsed.data : [];
 }
 
+/** Previews saved when these frame versions were retrieved, for the analyzed timestamps only.
+ * Analysis of saved frames reuses those images rather than saving copies. Deleting a version
+ * removes every packet that uses it, so a carried reference cannot outlive its image. */
+export function recordedFramePreviews(packets: readonly EvidencePacket[], versions: readonly string[], timestamps: readonly number[]) {
+  const found = new Map<number, FramePreview>();
+  for (const packet of [...packets].reverse()) {
+    if (packet.kind !== 'youtube_frames' || !versions.some(version => packet.assetVersions?.includes(version))) continue;
+    for (const artifact of packet.artifacts) {
+      if (!['youtube_frame_retrieval', 'youtube_frame_analysis'].includes(artifact.type) || !Array.isArray(artifact.data.previews)) continue;
+      for (const item of artifact.data.previews) {
+        const preview = framePreviewSchema.safeParse(item);
+        if (preview.success && timestamps.includes(preview.data.timestampMs) && !found.has(preview.data.timestampMs))
+          found.set(preview.data.timestampMs, preview.data);
+      }
+    }
+  }
+  return found.size ? [...found.values()].sort((a, b) => a.timestampMs - b.timestampMs) : undefined;
+}
+
 export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal, sharedBucket?: R2Bucket, verifiedImages?: VerifiedImage[]): Promise<FramePreview[]> {
   signal.throwIfAborted();
   const frames = framesSchema.parse(value).frames;

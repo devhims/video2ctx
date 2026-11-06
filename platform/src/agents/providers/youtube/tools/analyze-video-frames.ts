@@ -1,4 +1,5 @@
 import { recordedFrameSelections } from '../../../runtime/frame-selection';
+import { recordedFramePreviews } from '../../../runtime/frame-previews';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { framesSchema } from '../../../../lib/youtube-frames-contract';
@@ -62,6 +63,9 @@ export function executeAnalyzeVideoFrames(
       // Carry the recorded selections for the analyzed positions from the request that retrieved them.
       const selections = recordedFrameSelections(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs));
       if (selections) packet.artifacts[0]!.data.selections = selections;
+      // Carry the previews saved at retrieval, so answers citing this analysis can show its frames.
+      const previews = recordedFramePreviews(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs));
+      if (previews) packet.artifacts[0]!.data.previews = previews;
       if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
         code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored frame version.',
       });
@@ -115,6 +119,7 @@ export async function analyzeFrameEvidence(frames: z.infer<typeof framesSchema>,
           failures: frames.failures,
           provenanceVersion: VISUAL_PROVENANCE_VERSION,
           sharedObservations: visual.sharedObservations,
+          combinedObservations: visual.combinedObservations,
         },
       },
     ],

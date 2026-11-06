@@ -138,6 +138,7 @@ export async function analyzeStoryboardEvidence(storyboard: z.infer<typeof story
           totalFrames: storyboard.frameCount,
           provenanceVersion: VISUAL_PROVENANCE_VERSION,
           sharedObservations: visual.sharedObservations,
+          combinedObservations: visual.combinedObservations,
           sampledFrames: analysis.analyzedSheets.reduce((sum, sheet) => sum + sheet.frameCount, 0),
           intervalMs: storyboard.intervalMs,
         },

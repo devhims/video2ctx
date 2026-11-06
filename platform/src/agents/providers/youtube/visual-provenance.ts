@@ -52,10 +52,12 @@ export function visualAnalysisExcerpts<F>(options: {
   const key = (frame: F) => options.idOf?.(frame) ?? options.timeOf(frame);
   const excerpts: Array<{ id: string; sourceId: string; text: string; startMs: number; endMs: number }> = [];
   const sharedObservations: Array<z.infer<typeof sharedObservationSchema>> = [];
+  // Combined findings stay attributed to no single frame, but record which frames support them together.
+  const combinedObservations: Array<z.infer<typeof sharedObservationSchema>> = [];
   const span = (id: string, frames: readonly F[], text: (times: number[]) => string, shared: boolean) => {
     const times = frames.map(options.timeOf).sort((a, b) => a - b);
     excerpts.push({ id, sourceId: options.sourceId, text: text(times), startMs: times[0]!, endMs: times.at(-1)! });
-    if (shared) sharedObservations.push({ excerptId: id, framesMs: times });
+    (shared ? sharedObservations : combinedObservations).push({ excerptId: id, framesMs: times });
   };
   // Ordinary multi-frame findings are combined and attributed to no frame; shared findings
   // are visible in each listed frame and recorded as such. Single frames read the same in both.
@@ -73,5 +75,5 @@ export function visualAnalysisExcerpts<F>(options: {
   };
   options.findings.forEach((finding, index) => add(finding, `${options.idPrefix}:${index}`, false));
   options.sharedFindings.forEach((finding, index) => add(finding, `${options.idPrefix}:shared:${index}`, true));
-  return { excerpts, sharedObservations };
+  return { excerpts, sharedObservations, combinedObservations };
 }

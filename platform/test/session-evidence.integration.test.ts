@@ -1527,17 +1527,20 @@ test('versioned shared observations keep resolvable references, and search keeps
   within('visual-provenance-versions', async (store) => {
     const { visualAnalysisExcerpts } = await import('../src/agents/providers/youtube/visual-provenance');
     const visual = visualAnalysisExcerpts({ kind: 'requested', idPrefix: `frames:${id}:tool`, sourceId: 'f',
-      findings: [{ observation: 'White is ahead.', frames: [1000] }],
+      findings: [{ observation: 'White is ahead.', frames: [1000] }, { observation: 'White leads, then black.', frames: [1000, 5000] }],
       sharedFindings: [{ observation: 'The scoreboard reads 2-1.', frames: [1000, 5000] }],
       timeOf: time => time, assertAvailable: () => {} });
     const versioned = await versionEvidencePacket({ packetId: 'packet:run:frames', kind: 'youtube_frames',
       sources: [{ id: 'f', provider: 'youtube', kind: 'frames', videoId: id }], excerpts: visual.excerpts,
-      artifacts: [{ type: 'youtube_frame_analysis', data: { provenanceVersion: 2, sharedObservations: visual.sharedObservations } }],
+      artifacts: [{ type: 'youtube_frame_analysis', data: { provenanceVersion: 2, sharedObservations: visual.sharedObservations,
+        combinedObservations: visual.combinedObservations } }],
       warnings: [], usage: [] });
     const ids = new Set(versioned.excerpts.map(excerpt => excerpt.id));
     const shared = versioned.artifacts[0]!.data.sharedObservations as Array<{ excerptId: string }>;
+    const combined = versioned.artifacts[0]!.data.combinedObservations as Array<{ excerptId: string }>;
     expect(shared).toHaveLength(1);
-    for (const reference of shared) expect(ids.has(reference.excerptId)).toBe(true);
+    expect(combined).toHaveLength(1);
+    for (const reference of [...shared, ...combined]) expect(ids.has(reference.excerptId)).toBe(true);
 
     // A legacy packet repeated one observation at two frames; a single search hit must still say so.
     const raw = await store.retrieve('frame:abcdefghijk:640:1000', 'frame', id, false,

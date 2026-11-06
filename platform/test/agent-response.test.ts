@@ -302,6 +302,19 @@ describe('cited frames in compact results', () => {
     ]);
   });
 
+  it('shows every frame that supports a shared or combined finding', () => {
+    const span = (id: string, startMs: number, endMs: number) => ({ ...frame(id, 'video000001', startMs), endMs });
+    const result = frameRun('Shared [cite:sh]. Combined [cite:cb]. Older combined [cite:lc].',
+      [span('sh', 5000, 10000), span('cb', 20000, 30000), span('lc', 50000, 70000)],
+      [{ type: 'youtube_frame_analysis', data: { videoId: 'video000001',
+        sharedObservations: [{ excerptId: 'sh', framesMs: [5000, 10000] }],
+        combinedObservations: [{ excerptId: 'cb', framesMs: [20000, 30000] }],
+        previews: [5000, 10000, 20000, 30000, 50000, 60000, 70000].map((time, index) => preview(String(index + 1), time)) } }]);
+    // The older combined finding has no record, so only the frames it names appear, never 60000.
+    expect(result.frames?.map(item => item.timestampMs)).toEqual([5000, 10000, 20000, 30000, 50000, 70000]);
+    expect(result.frames?.every(item => item.sourceId === '1')).toBe(true);
+  });
+
   it('caps cited frames and omits the field when no cited frame has a preview', () => {
     const times = [1, 2, 3, 4, 5, 6, 7].map(second => second * 1000);
     const capped = frameRun(times.map((_, index) => `F${index} [cite:f${index}].`).join(' '),

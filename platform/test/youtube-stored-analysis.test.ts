@@ -131,6 +131,26 @@ function analyst(context: AgentToolContext, kind: (typeof kinds)[number]) {
       ? context.analyzeFrames!
       : context.analyzeStoryboard!;
 }
+describe('saved-frame analysis previews', () => {
+  it('carries the retrieval previews for analyzed frames into the follow-up analysis', async () => {
+    const { context, versions, packets } = setup();
+    const preview = (digit: string, timestampMs: number) => ({ collectionId: 'c'.repeat(64), assetId: digit.repeat(64), timestampMs, width: 640, height: 360 });
+    const earlier = (assetVersions: string[], previews: unknown[]) => ({ packetId: `packet:${assetVersions[0]}`, kind: 'youtube_frames',
+      sources: [], excerpts: [], warnings: [], usage: [], assetVersions,
+      artifacts: [{ type: 'youtube_frame_retrieval', title: 'Frames', data: { videoId, previews } }] }) as unknown as EvidencePacket;
+    // An unrelated packet's preview at the same time must not be borrowed.
+    packets.push(earlier(['other-version'], [preview('9', 0)]), earlier([versions.frame], [preview('1', 0), preview('2', 5000)]));
+    const packet = await executeAnalyzeVideoFrames({ assetVersions: [versions.frame], focus: 'Describe the chart.' }, context, 'follow-up');
+    expect(packet.artifacts[0]!.data.previews).toEqual([preview('1', 0)]);
+  });
+
+  it('leaves previews absent when no earlier retrieval recorded them', async () => {
+    const { context, versions } = setup();
+    const packet = await executeAnalyzeVideoFrames({ assetVersions: [versions.frame], focus: 'Describe the chart.' }, context, 'no-previews');
+    expect(packet.artifacts[0]!.data).not.toHaveProperty('previews');
+  });
+});
+
 describe('retrieval and saved-asset analysis boundary', () => {
   it('retrieves all three asset types without invoking an analyst, and keeps raw research captions out of the model', async () => {
     const { context, packets, storyboard } = setup();

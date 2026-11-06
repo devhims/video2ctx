@@ -7407,7 +7407,7 @@
                     }
                   },
                   "frames": {
-                    "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. Storyboard samples are not included.",
+                    "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. A citation supported by several frames contributes each of them. Storyboard samples are not included.",
                     "maxItems": 6,
                     "type": "array",
                     "items": {
@@ -9199,7 +9199,7 @@
                 }
               },
               "frames": {
-                "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. Storyboard samples are not included.",
+                "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. A citation supported by several frames contributes each of them. Storyboard samples are not included.",
                 "maxItems": 6,
                 "type": "array",
                 "items": {
