@@ -312,7 +312,7 @@ function RunAnswer({ sessionId, message, onProgress }: {
           <div key={warning.code} role='alert' className='alert error'><p><strong>{warning.code === 'YOUTUBE_UNAVAILABLE' ? 'Source unavailable.' : 'Answer incomplete.'}</strong> {warning.message}</p></div>)}
         <AgentMarkdown sources={result.sources}>{result.answer}</AgentMarkdown>
         {result.answer && <AnswerActions answer={result.answer} />}
-        {!!result.frames?.length && <CitedFrames frames={result.frames} />}
+        {!!result.frames?.length && <CitedFrames frames={result.frames} sources={result.sources} />}
         {!!result.sources.length && <section className='agent-sources'><h3>Sources</h3><ul>{result.sources.map(source => {
           const href = safeSourceUrl(source.url);
           return <li key={source.id}>{href ? <a href={href} target='_blank' rel='noreferrer'><span className='agent-source-number'>[{source.id}]</span><span>{source.title}</span><ArrowUpRightIcon size={13} aria-hidden='true' /></a> : <span>[{source.id}] {source.title}</span>}</li>;

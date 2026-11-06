@@ -67,6 +67,41 @@ describe('agent frame tool', () => {
     await expect(executeGetVideoFrames(input, ctx, 'late')).rejects.toThrow('Insufficient time');
     expect(ctx.provider.frames).not.toHaveBeenCalled();
   });
+  describe('timestamps past the verified duration', () => {
+    // Production run cc697707: a 1:08:40 video asked for 1:12:45 spent ~12 s per call in the
+    // Media path and the FFmpeg fallback before failing, three times, until no time remained.
+    function withDuration(durationSeconds: number) {
+      const ctx = context();
+      ctx.maxVideoSeconds = 7_200;
+      ctx.getEvidence = () => [{ packetId: 'metadata', kind: 'youtube_video',
+        sources: [{ id: 'video', provider: 'youtube', kind: 'video', videoId: frames.videoId }],
+        excerpts: [], warnings: [], usage: [],
+        artifacts: [{ type: 'youtube_video_metadata', data: { id: frames.videoId, durationSeconds } }] }];
+      return ctx;
+    }
+    test('rejects before extraction and names the end of the video', async () => {
+      const ctx = withDuration(4120);
+      const request = executeGetVideoFrames({ ...input, timestampsMs: [1234, 4_365_000] }, ctx, 'past-end');
+      await expect(request).rejects.toMatchObject({ status: 422, code: 'FRAME_TIMESTAMP_PAST_END' });
+      await expect(request).rejects.toThrow(/1:12:45 \(4365000 ms\).*1:08:40 \(4120000 ms\)/);
+      await expect(request).rejects.not.toThrow(/1234 ms/);
+      expect(ctx.provider.frames).not.toHaveBeenCalled();
+    });
+    test('rejects the end itself and reports it ahead of the time budget', async () => {
+      const ctx = withDuration(4120);
+      ctx.researchDeadlineAt = Date.now() + 20_000;
+      await expect(executeGetVideoFrames({ ...input, timestampsMs: [4_120_000] }, ctx, 'at-end'))
+        .rejects.toMatchObject({ code: 'FRAME_TIMESTAMP_PAST_END' });
+      expect(ctx.provider.frames).not.toHaveBeenCalled();
+    });
+    test('still extracts the last moment before the end', async () => {
+      const ctx = withDuration(4120);
+      ctx.analyzeFrames = vi.fn(async () => ({ findings: [], warnings: [] }));
+      await executeGetVideoFrames({ ...input, timestampsMs: [4_119_000] }, ctx, 'last-second').catch(() => undefined);
+      expect(ctx.provider.frames).toHaveBeenCalledWith(expect.objectContaining({ timestampsMs: [4_119_000] }),
+        expect.anything(), expect.anything(), expect.anything());
+    });
+  });
   test('saves the original analyzed frames and exposes only descriptors', async () => {
     const ctx = context();
     const previews = [{ assetId: 'a'.repeat(64), collectionId: 'b'.repeat(64), timestampMs: 1234, width: 1920, height: 1080 }];
