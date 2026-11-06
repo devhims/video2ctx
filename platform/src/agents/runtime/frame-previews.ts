@@ -36,24 +36,69 @@ export function packetFramePreviews(packet: EvidencePacket): FramePreview[] {
   return parsed.success ? parsed.data : [];
 }
 
-/** Previews saved when these frame versions were retrieved, for the analyzed timestamps only.
- * Analysis of saved frames reuses those images rather than saving copies. Deleting a version
- * removes every packet that uses it, so a carried reference cannot outlive its image. */
-export function recordedFramePreviews(packets: readonly EvidencePacket[], versions: readonly string[], timestamps: readonly number[]) {
+/** One saved frame: its asset version and the moment it shows. */
+export type SavedFrame = { version: string; timestampMs: number };
+
+/** Previews saved when these exact frame versions were retrieved. A packet's preview at a frame's
+ * time is taken only when that packet holds the frame's own version: a packet has one frame per
+ * time, so sharing another version proves nothing about it. Deleting a version removes every
+ * packet that uses it, so a carried reference cannot outlive its image. */
+export function recordedFramePreviews(packets: readonly EvidencePacket[], frames: readonly SavedFrame[]) {
   const found = new Map<number, FramePreview>();
   for (const packet of [...packets].reverse()) {
-    if (packet.kind !== 'youtube_frames' || !versions.some(version => packet.assetVersions?.includes(version))) continue;
+    if (packet.kind !== 'youtube_frames') continue;
+    const times = new Set(frames.filter(frame => packet.assetVersions?.includes(frame.version)).map(frame => frame.timestampMs));
+    if (!times.size) continue;
     for (const artifact of packet.artifacts) {
       if (!['youtube_frame_retrieval', 'youtube_frame_analysis'].includes(artifact.type) || !Array.isArray(artifact.data.previews)) continue;
       for (const item of artifact.data.previews) {
         const preview = framePreviewSchema.safeParse(item);
-        if (preview.success && timestamps.includes(preview.data.timestampMs) && !found.has(preview.data.timestampMs))
+        if (preview.success && times.has(preview.data.timestampMs) && !found.has(preview.data.timestampMs))
           found.set(preview.data.timestampMs, preview.data);
       }
     }
   }
   return found.size ? [...found.values()].sort((a, b) => a.timestampMs - b.timestampMs) : undefined;
 }
+
+const observationFramesSchema = z.object({ excerptId: z.string(), framesMs: z.array(z.number().int().nonnegative()).min(2).max(6) });
+const FRAME_ARTIFACTS = ['youtube_frame_retrieval', 'youtube_frame_analysis'];
+
+/** Frame times a cited excerpt covers. Shared and combined findings record every supporting
+ * frame; a combined finding stored before that record names only its first and last frames. */
+export function citedFrameTimes(artifacts: EvidencePacket['artifacts'], excerpt: { id: string; startMs?: number; endMs?: number }): number[] {
+  if (excerpt.startMs === undefined) return [];
+  for (const artifact of artifacts) {
+    if (!FRAME_ARTIFACTS.includes(artifact.type)) continue;
+    for (const field of ['sharedObservations', 'combinedObservations'] as const)
+      for (const item of Array.isArray(artifact.data[field]) ? artifact.data[field] : []) {
+        const observation = observationFramesSchema.safeParse(item);
+        if (observation.success && observation.data.excerptId === excerpt.id) return [...observation.data.framesMs].sort((a, b) => a - b);
+      }
+  }
+  return excerpt.endMs !== undefined && excerpt.endMs > excerpt.startMs ? [excerpt.startMs, excerpt.endMs] : [excerpt.startMs];
+}
+
+/** Previews for one cited excerpt, taken only from the packet that holds the excerpt: within
+ * one packet each time has one capture, so these are the pixels the answer used. */
+export function citedPacketFramePreviews(packet: EvidencePacket, excerpt: { id: string; startMs?: number; endMs?: number }): FramePreview[] {
+  if (packet.kind !== 'youtube_frames') return [];
+  const previews = new Map<number, FramePreview>();
+  for (const artifact of packet.artifacts) {
+    if (!FRAME_ARTIFACTS.includes(artifact.type) || !Array.isArray(artifact.data.previews)) continue;
+    for (const item of artifact.data.previews) {
+      const preview = framePreviewSchema.safeParse(item);
+      if (preview.success && !previews.has(preview.data.timestampMs)) previews.set(preview.data.timestampMs, preview.data);
+    }
+  }
+  return citedFrameTimes(packet.artifacts, excerpt).flatMap(time => previews.get(time) ?? []);
+}
+
+/** Answer artifact recording which saved previews each cited frame excerpt used. */
+export const CITED_FRAME_PREVIEWS = 'cited_frame_previews';
+export const citedFramePreviewsSchema = z.object({
+  citations: z.array(z.object({ citationId: z.string(), frames: z.array(framePreviewSchema).min(1).max(6) })),
+});
 
 export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal, sharedBucket?: R2Bucket, verifiedImages?: VerifiedImage[]): Promise<FramePreview[]> {
   signal.throwIfAborted();

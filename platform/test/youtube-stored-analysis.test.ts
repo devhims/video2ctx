@@ -150,12 +150,25 @@ describe('saved-frame analysis previews', () => {
     // This run's evidence has no retrieval packet; the earlier turn's packet is only in storage.
     context.savedFramePreviews = vi.fn(() => [saved]);
     const packet = await executeAnalyzeVideoFrames({ assetVersions: [versions.frame], focus: 'Describe the chart.' }, context, 'next-turn');
-    expect(context.savedFramePreviews).toHaveBeenCalledWith([versions.frame], [0]);
+    expect(context.savedFramePreviews).toHaveBeenCalledWith([{ version: versions.frame, timestampMs: 0 }]);
     expect(packet.artifacts[0]!.data.previews).toEqual([saved]);
     const output = JSON.stringify(await createAnalyzeVideoFramesTool(context).toModelOutput!({ toolCallId: 'next-turn',
       input: { assetVersions: [versions.frame], focus: 'Describe the chart.' }, output: packet }));
     expect(output).not.toContain(saved.assetId);
     expect(output).toContain(versions.frame);
+  });
+
+  it('pins each carried preview to its own frame version across overlapping batches', async () => {
+    const { recordedFramePreviews } = await import('../src/agents/runtime/frame-previews');
+    const preview = (digit: string, timestampMs: number) => ({ collectionId: 'c'.repeat(64), assetId: digit.repeat(64), timestampMs, width: 640, height: 360 });
+    const batch = (assetVersions: string[], previews: unknown[]) => ({ packetId: `packet:${assetVersions.join('+')}`, kind: 'youtube_frames',
+      sources: [], excerpts: [], warnings: [], usage: [], assetVersions,
+      artifacts: [{ type: 'youtube_frame_retrieval', title: 'Frames', data: { videoId, previews } }] }) as unknown as EvidencePacket;
+    // A@0 + B@5, then a later batch A@0 + C@5. Sharing A says nothing about the 5s capture.
+    const packets = [batch(['A', 'B'], [preview('1', 0), preview('2', 5000)]), batch(['A', 'C'], [preview('3', 0), preview('4', 5000)])];
+    expect(recordedFramePreviews(packets, [{ version: 'A', timestampMs: 0 }, { version: 'B', timestampMs: 5000 }]))
+      .toEqual([preview('3', 0), preview('2', 5000)]);
+    expect(recordedFramePreviews(packets, [{ version: 'D', timestampMs: 5000 }])).toBeUndefined();
   });
 
   it('leaves previews absent when no earlier retrieval recorded them', async () => {

@@ -72,10 +72,10 @@ export function executeAnalyzeVideoFrames(
       if (selections) packet.artifacts[0]!.data.selections = selections;
       // Carry the previews saved at retrieval, so answers citing this analysis can show its frames.
       // This run's evidence comes first; an earlier turn's retrieval is read from session storage.
-      const times = frames.frames.map(frame => frame.timestampMs);
-      const previews = new Map((recordedFramePreviews(context.getEvidence?.() ?? [], versions, times) ?? []).map(preview => [preview.timestampMs, preview]));
-      if (previews.size < times.length)
-        for (const preview of context.savedFramePreviews?.(versions, times) ?? []) if (!previews.has(preview.timestampMs)) previews.set(preview.timestampMs, preview);
+      const saved = assets.map(({ asset }, index) => ({ version: asset.version, timestampMs: values[index]!.frames[0]!.timestampMs }));
+      const previews = new Map((recordedFramePreviews(context.getEvidence?.() ?? [], saved) ?? []).map(preview => [preview.timestampMs, preview]));
+      if (previews.size < saved.length)
+        for (const preview of context.savedFramePreviews?.(saved) ?? []) if (!previews.has(preview.timestampMs)) previews.set(preview.timestampMs, preview);
       if (previews.size) packet.artifacts[0]!.data.previews = [...previews.values()].sort((a, b) => a.timestampMs - b.timestampMs);
       if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
         code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored frame version.',

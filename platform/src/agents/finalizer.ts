@@ -10,6 +10,7 @@ import {
   type FinalizeAnswerInput,
 } from './contracts';
 import { appendNotices, playlistCoverageDisclosures } from './playlist-coverage';
+import { CITED_FRAME_PREVIEWS, citedPacketFramePreviews } from './runtime/frame-previews';
 
 const CITATION_MARKER = /\[cite:([A-Za-z0-9:_-]+)\]/g;
 
@@ -31,12 +32,15 @@ export function buildAgentTurnResult(
   const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
   const unresolved = new Set<string>();
+  // Which saved previews each cited frame excerpt used, from its own packet. A later answer can
+  // hold other captures of the same moment, so time alone never identifies the pixels.
+  const citedFrames: Array<{ citationId: string; frames: ReturnType<typeof citedPacketFramePreviews> }> = [];
   for (const marker of markers) {
     const matches = packets.flatMap((packet) => packet.excerpts
       .filter((excerpt) => excerpt.id === marker)
       .flatMap((excerpt) => {
         const source = packet.sources.find((candidate) => candidate.id === excerpt.sourceId);
-        return source ? [{ source, excerpt }] : [];
+        return source ? [{ source, excerpt, packet }] : [];
       }));
     const match = matches[0];
     // A reference that matches no saved excerpt, or several different ones, is marked
@@ -47,7 +51,11 @@ export function buildAgentTurnResult(
       unresolved.add(marker);
       continue;
     }
-    const { source, excerpt } = match;
+    const { source, excerpt, packet } = match;
+    // Identical excerpt IDs in several packets only resolve if they agree; take frames only when one packet holds it.
+    const frames = source.kind === 'frames' && new Set(matches.map(candidate => candidate.packet.packetId)).size === 1
+      ? citedPacketFramePreviews(packet, excerpt).slice(0, 6) : [];
+    if (frames.length) citedFrames.push({ citationId: excerpt.id, frames });
     citations.push({
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
@@ -79,7 +87,8 @@ export function buildAgentTurnResult(
     intent: input.intent,
     confidence: input.confidence,
     citations,
-    artifacts: [...packets.flatMap((packet) => packet.artifacts), ...input.artifacts, ...playlistCoverage.artifacts],
+    artifacts: [...packets.flatMap((packet) => packet.artifacts), ...input.artifacts, ...playlistCoverage.artifacts,
+      ...(citedFrames.length ? [{ type: CITED_FRAME_PREVIEWS, data: { citations: citedFrames } }] : [])],
     warnings,
     billing: {
       creditsCharged,

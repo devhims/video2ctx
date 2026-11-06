@@ -13,7 +13,7 @@ import { sessionCatalog } from './runtime/session-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
-import { framePreviewKey, recordedFramePreviews, saveFramePreviews } from './runtime/frame-previews';
+import { framePreviewKey, recordedFramePreviews, saveFramePreviews, type SavedFrame } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -694,7 +694,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
         deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
         evidenceRunRecords: packetIds => this.evidenceRunRecords(runId, packetIds),
-        savedFramePreviews: (versions, timestamps) => this.savedFramePreviews(runId, versions, timestamps),
+        savedFramePreviews: frames => this.savedFramePreviews(runId, frames),
         registerRetrievedAsset: (claim, version) => {
           this.assertRunActive(runId);
           this.evidenceLedger.registerAssetClaim(runId, claim, version);
@@ -1740,10 +1740,10 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
   /** Frame previews saved for these asset versions in any turn of this run's conversation.
    * Earlier turns' packets stay in storage but are not part of a new run's evidence. Deleting
    * a version removes its packets, so a deleted frame never resolves a preview. */
-  private savedFramePreviews(runId: string, versions: readonly string[], timestamps: readonly number[]) {
+  private savedFramePreviews(runId: string, frames: readonly SavedFrame[]) {
     const run = this.readRun(runId);
-    if (!run || !versions.length || !timestamps.length) return undefined;
-    const wanted = JSON.stringify([...new Set(versions)]);
+    if (!run || !frames.length) return undefined;
+    const wanted = JSON.stringify([...new Set(frames.map(frame => frame.version))]);
     const packets = this.sql<{ packet_json: string }>`
       SELECT p.packet_json FROM agent_evidence_packets p
       JOIN agent_runs owner ON owner.id = p.run_id
@@ -1753,7 +1753,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
           WHERE saved.value IN (SELECT value FROM json_each(${wanted})))
       ORDER BY p.created_at ASC
     `.map(row => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
-    return recordedFramePreviews(packets, versions, timestamps);
+    // The query only narrows candidates; each preview is pinned to its own frame version below.
+    return recordedFramePreviews(packets, frames);
   }
 
   private readRun(runId: string): RunRow | undefined {

@@ -1,4 +1,5 @@
 import { mapCitationProse } from './markdown-citations';
+import { CITED_FRAME_PREVIEWS, citedFramePreviewsSchema, citedFrameTimes, framePreviewSchema, type FramePreview } from './runtime/frame-previews';
 import { clockTime } from './runtime/clock-time';
 import { publicExtractionAttemptSchema, publicExtractionDiagnosticSchema } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema } from './runtime/transcript-diagnostics';
@@ -95,7 +96,11 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
   // Restore only citations already validated for this stored answer.
   const displayAnswer = mapCitationProse(result.answer, prose => prose.replace(/\(source marker:([^\]]+)\]/g,
     (_marker, id: string) => citations.has(id) ? `[cite:${id}]` : '[source unavailable]'));
+  // Where each citation is first displayed: its group, then its source's position in that group.
+  const displayOrder = new Map<string, [number, number]>();
+  let groupIndex = -1;
   const answer = mapCitationProse(displayAnswer, prose => prose.replace(/\[cite:[A-Za-z0-9:_-]+\](?:[ \t]*\[cite:[A-Za-z0-9:_-]+\])*/g, group => {
+    groupIndex++;
     // Citations in one group are listed by public source number. Each source shows one
     // reference per distinct cited passage; the stored citations keep every excerpt.
     const refs = new Map<string, AgentCitation[]>();
@@ -119,6 +124,7 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
       }
       evidenceIds.set(citation.id, id);
       refs.set(id, [...refs.get(id) ?? [], citation]);
+      if (!displayOrder.has(citation.id)) displayOrder.set(citation.id, [groupIndex, [...refs.keys()].indexOf(id)]);
     }
     const labels = [...refs].flatMap(([id, cited]) => passageStarts(cited)
       .map(startMs => startMs === undefined ? `[${id}]` : `[${id} · ${clockTime(startMs)}]`));
@@ -143,59 +149,53 @@ export function compactAgentResult(result: AgentTurnResult, include: AgentRespon
     ...(include.includes('artifacts') ? { artifacts: publicArtifacts(result.artifacts) } : {}),
     ...(include.includes('evidence') ? { evidence: result.citations.filter(citation => evidenceIds.has(citation.id))
       .map(citation => ({ ...publicCitation(citation), sourceId: evidenceIds.get(citation.id)! })) } : {}),
-    ...citedFrames(result, citations, evidenceIds),
+    ...citedFrames(result, citations, evidenceIds, displayOrder),
   };
 }
 
-const savedFramePreviewSchema = z.object({
-  collectionId: z.string().regex(/^[a-f0-9]{64}$/), assetId: z.string().regex(/^[a-f0-9]{64}$/),
-  timestampMs: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive(),
-});
 
-const observationFramesSchema = z.object({ excerptId: z.string(), framesMs: z.array(z.number().int().nonnegative()).min(2).max(6) });
-
-/** Saved previews of the exact frames the answer cites, matched by video and frame time.
- * A single-frame excerpt starts at its frame's timestamp, which is also the preview's
- * timestamp. Shared and combined findings record every frame that supports them; a combined
- * finding stored before that record existed shows its first and last frames, which it names.
+/** Saved previews of the exact frames the answer cites, in displayed reference order.
+ * Answers record, at finalization, which previews each cited excerpt's own packet holds; that
+ * record is used as is. Older answers only match a video and time, so a time with more than one
+ * saved capture is ambiguous and shows nothing rather than possibly different pixels.
  * Reads only stored artifacts, so earlier answers gain frames without being rewritten. */
-function citedFrames(result: AgentTurnResult, citations: ReadonlyMap<string, AgentCitation>, evidenceIds: ReadonlyMap<string, string>) {
-  const previews = new Map<string, z.infer<typeof savedFramePreviewSchema>>();
-  const recordedFrames = new Map<string, number[]>();
-  for (const artifact of result.artifacts) {
-    if (!['youtube_frame_retrieval', 'youtube_frame_analysis'].includes(artifact.type)) continue;
-    for (const field of ['sharedObservations', 'combinedObservations'] as const) {
-      for (const item of Array.isArray(artifact.data[field]) ? artifact.data[field] : []) {
-        const observation = observationFramesSchema.safeParse(item);
-        if (observation.success) recordedFrames.set(observation.data.excerptId, observation.data.framesMs);
-      }
-    }
-    if (typeof artifact.data.videoId !== 'string' || !Array.isArray(artifact.data.previews)) continue;
+function citedFrames(result: AgentTurnResult, citations: ReadonlyMap<string, AgentCitation>,
+  evidenceIds: ReadonlyMap<string, string>, displayOrder: ReadonlyMap<string, [number, number]>) {
+  const recorded = result.artifacts.find(artifact => artifact.type === CITED_FRAME_PREVIEWS);
+  const parsed = recorded && citedFramePreviewsSchema.safeParse(recorded.data);
+  const recordedPreviews = parsed?.success ? new Map(parsed.data.citations.map(entry => [entry.citationId, entry.frames])) : undefined;
+  const byMoment = new Map<string, Map<string, FramePreview>>();
+  if (!recordedPreviews) for (const artifact of result.artifacts) {
+    if (!['youtube_frame_retrieval', 'youtube_frame_analysis'].includes(artifact.type) || typeof artifact.data.videoId !== 'string'
+      || !Array.isArray(artifact.data.previews)) continue;
     for (const item of artifact.data.previews) {
-      const preview = savedFramePreviewSchema.safeParse(item);
-      if (preview.success) previews.set(`${artifact.data.videoId}:${preview.data.timestampMs}`, preview.data);
+      const preview = framePreviewSchema.safeParse(item);
+      if (!preview.success) continue;
+      const key = `${artifact.data.videoId}:${preview.data.timestampMs}`;
+      byMoment.set(key, (byMoment.get(key) ?? new Map()).set(preview.data.assetId, preview.data));
     }
   }
-  const frames: z.infer<typeof compactCitedFrameSchema>[] = [];
-  const shown = new Set<string>();
-  // evidenceIds keeps first-citation order, so frames follow the answer.
+  const candidates: Array<{ order: [number, number]; frame: z.infer<typeof compactCitedFrameSchema>; assetId: string }> = [];
   for (const [citationId, sourceId] of evidenceIds) {
     const citation = citations.get(citationId);
     // Answers stored before sourceKind existed still name the frames source.
     if (!citation?.videoId || !validTime(citation.startMs) || (citation.sourceKind
       ? citation.sourceKind !== 'frames' : citation.sourceId !== `youtube:${citation.videoId}:frames`)) continue;
-    const times = recordedFrames.get(citation.id)
-      ?? (validTime(citation.endMs) && citation.endMs > citation.startMs ? [citation.startMs, citation.endMs] : [citation.startMs]);
-    for (const timestampMs of [...times].sort((a, b) => a - b)) {
-      const preview = previews.get(`${citation.videoId}:${timestampMs}`);
-      if (!preview || shown.has(preview.assetId)) continue;
-      shown.add(preview.assetId);
-      frames.push({ sourceId, timestampMs, width: preview.width, height: preview.height,
-        imagePath: `/v1/agent/frames/${preview.collectionId}/${preview.assetId}`,
-        videoUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(citation.videoId)}&t=${Math.floor(timestampMs / 1000)}s` });
-      if (frames.length === MAX_CITED_FRAMES) return { frames };
-    }
+    const previews = recordedPreviews ? recordedPreviews.get(citation.id) ?? []
+      : citedFrameTimes(result.artifacts, citation).flatMap(time => {
+        const captures = byMoment.get(`${citation.videoId}:${time}`);
+        return captures?.size === 1 ? [...captures.values()] : [];
+      });
+    for (const preview of previews) candidates.push({ order: displayOrder.get(citation.id) ?? [Infinity, 0], assetId: preview.assetId, frame: {
+      sourceId, timestampMs: preview.timestampMs, width: preview.width, height: preview.height,
+      imagePath: `/v1/agent/frames/${preview.collectionId}/${preview.assetId}`,
+      videoUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(citation.videoId)}&t=${Math.floor(preview.timestampMs / 1000)}s` } });
   }
+  // Within a group, references are shown by source and then by time.
+  candidates.sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.frame.timestampMs - b.frame.timestampMs);
+  const shown = new Set<string>();
+  const frames = candidates.filter(candidate => !shown.has(candidate.assetId) && shown.add(candidate.assetId))
+    .slice(0, MAX_CITED_FRAMES).map(candidate => candidate.frame);
   return frames.length ? { frames } : {};
 }
 

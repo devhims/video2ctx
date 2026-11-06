@@ -2711,11 +2711,16 @@ test('resolves saved frame previews from earlier turns of the same conversation 
     insert('not-frames', earlierRun, packet('not-frames', 'youtube_storyboard', ['v1'], [preview('8', 0)]), 3);
     // The same version in another conversation is never borrowed.
     insert('elsewhere', otherRun, packet('elsewhere', 'youtube_frames', ['v1'], [preview('7', 0)]), 4);
-    const reader = instance as unknown as { savedFramePreviews(runId: string, versions: readonly string[], timestamps: readonly number[]): unknown };
-    expect(reader.savedFramePreviews(laterRun, ['v1'], [0])).toEqual([preview('1', 0)]);
-    expect(reader.savedFramePreviews(otherRun, ['v1'], [0])).toEqual([preview('7', 0)]);
-    expect(reader.savedFramePreviews(laterRun, ['v1'], [1234])).toBeUndefined();
+    const reader = instance as unknown as { savedFramePreviews(runId: string, frames: ReadonlyArray<{ version: string; timestampMs: number }>): unknown };
+    const v1 = [{ version: 'v1', timestampMs: 0 }];
+    expect(reader.savedFramePreviews(laterRun, v1)).toEqual([preview('1', 0)]);
+    expect(reader.savedFramePreviews(otherRun, v1)).toEqual([preview('7', 0)]);
+    expect(reader.savedFramePreviews(laterRun, [{ version: 'v1', timestampMs: 1234 }])).toBeUndefined();
+    // An overlapping later batch (v1 + v3) never lends its 5s capture to v2.
+    insert('overlap', earlierRun, packet('overlap', 'youtube_frames', ['v1', 'v3'], [preview('5', 0), preview('6', 5000)]), 5);
+    expect(reader.savedFramePreviews(laterRun, [{ version: 'v2', timestampMs: 5000 }])).toEqual([preview('2', 5000)]);
     instance.sql`DELETE FROM agent_evidence_packets WHERE packet_id = 'earlier'`;
-    expect(reader.savedFramePreviews(laterRun, ['v1'], [0])).toBeUndefined();
+    instance.sql`DELETE FROM agent_evidence_packets WHERE packet_id = 'overlap'`;
+    expect(reader.savedFramePreviews(laterRun, v1)).toBeUndefined();
   });
 });
