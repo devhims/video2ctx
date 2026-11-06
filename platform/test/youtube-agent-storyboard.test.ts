@@ -480,6 +480,25 @@ it('keeps timings in the stored result but excludes them from immediate model ou
   expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
 });
 
+it('keeps dashboard preview IDs out of model output while retaining analysis versions', async () => {
+  const ctx = context();
+  const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1 }, ctx, 'previews');
+  const previewId = 'f'.repeat(64);
+  const previews = [{ collectionId: 'c'.repeat(32), assetId: previewId, width: 960, height: 540 }];
+  // Inline analysis copies the retrieval data, previews included, into the analysis artifact.
+  const withPreviews = { ...packet, artifacts: [
+    { ...packet.artifacts[0]!, data: { ...packet.artifacts[0]!.data, previews, analysisAssetVersions: ['a'.repeat(64)] } },
+    { type: 'youtube_storyboard_analysis', title: 'Analysis', data: { previews } },
+  ] };
+  const output = JSON.stringify(await createGetVideoStoryboardTool(ctx).toModelOutput!({ toolCallId: 'previews',
+    input: { videoId: storyboard.videoId, maxSheets: 1 }, output: withPreviews }));
+  expect(output).not.toContain(previewId);
+  const shown = JSON.parse(JSON.parse(output).value) as { artifacts: { data: Record<string, unknown> }[] };
+  expect(shown.artifacts.every(artifact => !('previews' in artifact.data))).toBe(true);
+  expect(output).toContain('analysisAssetVersions');
+  expect(withPreviews.artifacts[0]!.data.previews).toEqual(previews);
+});
+
 it('splits a twelve-sheet tool selection and reports only successfully analyzed coverage', async () => {
   const ctx = context();
   ctx.provider.storyboard = async () => ({ cacheStatus: 'hit', value: {

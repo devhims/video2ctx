@@ -29,7 +29,7 @@ const retrievalInput = z.object({
   sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(MAX_STORYBOARD_SHEETS).refine(indexes => new Set(indexes).size === indexes.length, 'Select distinct sheet indexes.').optional()
     .describe('Select zero-based source sheet indexes using a standard-resolution manifest from an overview or index selection. Timestamp selections return a separate high-resolution manifest whose indexes do not apply here. Choose these or timestampsMs, not both.'),
   timestampsMs: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).min(1).max(MAX_STORYBOARD_SHEETS).optional()
-    .describe('Select sheets containing these sampled timestamps in milliseconds. Timestamp selections return the sharpest storyboard YouTube offers, usually 320x180 tiles in 3x3 sheets, so nearby targets share a sheet only within nine samples. These are not exact video frames.'),
+    .describe('Select sheets containing these sampled timestamps in milliseconds (10:00 = 600000, 1:02:03 = 3723000). Timestamp selections return the sharpest storyboard YouTube offers, usually 320x180 tiles in 3x3 sheets, so nearby targets share a sheet only within nine samples. These are not exact video frames.'),
 });
 function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementCtx) {
   if (input.sheetIndexes && input.sheetIndexes.length > (input.maxSheets ?? MAX_STORYBOARD_SHEETS)) ctx.addIssue({ code: 'custom', message: 'Selected sheet indexes exceed maxSheets.' });
@@ -41,9 +41,11 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
     description: 'Retrieve storyboard images and metadata. Supply analysis with a visual question to analyze immediately while saving; omit it for retrieval only. With videoId alone, retrieve up to 3 sheets spread across the video. Use maxSheets, sheetIndexes or timestampsMs to select other coverage. No preliminary metadata call is needed. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Use analyze_video_storyboard for questions about versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
     inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
+    // Previews are dashboard images with random IDs. Hidden from the model, which otherwise
+    // mistakes their per-sheet assetId for the analysisAssetVersions analysis needs.
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
+        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, previews: _previews, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),

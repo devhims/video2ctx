@@ -143,6 +143,25 @@ test('stores frame timings and diagnostics without sending them to the model', a
   expect(packet.artifacts[0]!.data.extractionDiagnostics).toHaveLength(1);
 });
 
+test('keeps dashboard preview IDs out of frame model output while retaining retrieval data', async () => {
+  const ctx = context();
+  const packet = await executeGetVideoFrames(input, ctx, 'previews');
+  const previewId = 'f'.repeat(64);
+  const previews = [{ collectionId: 'c'.repeat(32), assetId: previewId, timestampMs: input.timestampsMs[0], width: 640, height: 360 }];
+  // Inline analysis copies the retrieval data, previews included, into the analysis artifact.
+  const withPreviews = { ...packet, artifacts: [
+    { ...packet.artifacts[0]!, data: { ...packet.artifacts[0]!.data, previews } },
+    { type: 'youtube_frame_analysis', title: 'Analysis', data: { previews } },
+  ] };
+  const output = JSON.stringify(await createGetVideoFramesTool(ctx).toModelOutput!({ toolCallId: 'previews',
+    input: { ...input, maxWidth: 1920 }, output: withPreviews }));
+  expect(output).not.toContain(previewId);
+  const shown = JSON.parse(JSON.parse(output).value) as { artifacts: { data: Record<string, unknown> }[] };
+  expect(shown.artifacts.every(artifact => !('previews' in artifact.data))).toBe(true);
+  expect(output).toContain('requestedTimestampsMs');
+  expect(withPreviews.artifacts[0]!.data.previews).toEqual(previews);
+});
+
 test('frame tool forwards request-local image verification to previews without persisting it', async()=>{
   const {VerifiedImage}=await import('../src/lib/verified-image');
   const ctx=context();

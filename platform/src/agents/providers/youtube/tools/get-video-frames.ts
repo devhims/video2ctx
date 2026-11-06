@@ -25,12 +25,13 @@ export const getVideoFramesInputSchema = frameRequestSchema.extend({
 
 export function createGetVideoFramesTool(context: AgentToolContext) {
   return tool({
-    description: 'Retrieve or reuse up to six video frames at millisecond timestamps. Supply analysis with your question to analyze immediately while images are saved. Omit analysis for retrieval only. Returns saved assetVersions, dimensions, previews and failures, without image bytes. Use analyze_video_frames for questions about versions already saved. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
+    description: 'Retrieve or reuse up to six video frames at millisecond timestamps. Supply analysis with your question to analyze immediately while images are saved. Omit analysis for retrieval only. Returns saved assetVersions, dimensions and failures, without image bytes. Use analyze_video_frames for questions about versions already saved. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
     inputSchema: getVideoFramesInputSchema.omit({ focus: true }),
     outputSchema: evidencePacketSchema,
+    // Previews are dashboard images with random IDs; the model analyzes assetVersions instead.
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, extractionDiagnostics: _diagnostics, ...data } = artifact.data;
+        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, extractionDiagnostics: _diagnostics, previews: _previews, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
