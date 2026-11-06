@@ -194,6 +194,9 @@ export function sessionProvider(
             const served = servedResolution(metadata.value);
             if (metadata.value.manifest && served !== requested) {
               // A high request fell back to standard. Pin that manifest as standard, never as high.
+              // The rejected high retrieval returned without checking the generation, and the
+              // retrieval below takes a new snapshot, so check for a deletion during the fetch here.
+              if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const fallback = metadata;
               metadata = await retrieveManifest(served, true, async () => fallback);
             }

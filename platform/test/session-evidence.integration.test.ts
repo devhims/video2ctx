@@ -1422,6 +1422,31 @@ test('deleting session assets during a missing-sheet fetch stops stale-manifest 
     expect(reopen().brief().assets).toHaveLength(0);
   }));
 
+test.each([['metadata-only', true], ['image', false]] as const)(
+  'deleting session assets during a high request that falls back to standard keeps the session empty (%s)', async (name, metadataOnly) =>
+    within(`storyboard-fallback-deletion-${name}`, async (store, reopen) => {
+      // An unlabelled board is standard: the web page was unavailable, so the high request fell back.
+      const standard = {
+        videoId: id, frameCount: 6, intervalMs: 5000,
+        manifest: { totalSheets: 1, framesPerSheet: 6, tileWidth: 160, tileHeight: 90, columns: 6, rows: 1, lastSampleMs: 25000 },
+        selection: metadataOnly ? { mode: 'metadata' as const } : { mode: 'timestamps' as const, requestedTimestampsMs: [0] },
+        sheets: metadataOnly ? [] : [{ firstFrameIndex: 0, frameCount: 6, tileWidth: 160, tileHeight: 90,
+          columns: 6, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' }],
+        meta: { partial: false, warnings: [] },
+      };
+      const started = visualGate(), held = visualGate();
+      const storyboard = vi.fn(async () => { started.release(); await held.promise; return { cacheStatus: 'miss', value: standard }; });
+      const p = { storyboard } as unknown as YouTubeAgentProvider;
+      const pending = sessionProvider(p, store).storyboard!(id, metadataOnly ? undefined : [0],
+        { maxSheets: 20, resolution: 'high', ...(metadataOnly ? { metadataOnly: true } : {}) });
+      const rejected = expect(pending).rejects.toThrow('Session assets changed');
+      await started.promise;
+      try { await store.delete(); } finally { held.release(); }
+      await rejected;
+      expect(storyboard).toHaveBeenCalledTimes(1);
+      expect(reopen().brief().assets).toHaveLength(0);
+    }));
+
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
   within('storyboard-single-middle', async (store, reopen) => {
     const value = { videoId: id, frameCount: 6, intervalMs: 5000,
