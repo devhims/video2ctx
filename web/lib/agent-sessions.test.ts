@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mergeAgentMessages, safeSourceUrl, isActiveAgentRun, agentRunSchema, agentProgressSchema, type AgentMessage } from './agent-sessions.ts';
+import { mergeAgentMessages, safeSourceUrl, isActiveAgentRun, agentRunSchema, agentProgressSchema, citedFrameLabel, citedFrameImageUrl, type AgentMessage } from './agent-sessions.ts';
 
 test('merges older pages chronologically and replaces updated messages without duplicates', () => {
   const message = (id: string, turn: number, role: AgentMessage['role'], status: AgentMessage['status'] = 'completed'): AgentMessage => ({ messageId: id, runId: id, conversationTurn: turn, role, status, content: '', parentMessageId: null, createdAt: 1, updatedAt: 1 });
@@ -118,4 +118,19 @@ test('progress preserves tool activity and analysis outcomes, tolerating future 
   const parsed = agentProgressSchema.parse(snapshot);
   assert.equal(parsed.tools[0].activity, undefined);
   assert.equal(parsed.tools[0].analysis, undefined);
+});
+
+test('cited frames label like answer references and only load validated preview paths', () => {
+  const hex = (digit: string) => digit.repeat(64);
+  assert.equal(citedFrameLabel({ sourceId: '2', timestampMs: 61_999 }), '[2 · 1:01]');
+  assert.equal(citedFrameLabel({ sourceId: '1', timestampMs: 3_723_000 }), '[1 · 1:02:03]');
+  assert.equal(citedFrameImageUrl({ imagePath: `/v1/agent/frames/${hex('c')}/${hex('a')}` }), `/api/platform/v1/agent/frames/${hex('c')}/${hex('a')}`);
+  for (const imagePath of ['https://evil.example/x.jpg', '/v1/agent/frames/../../admin', `/v1/agent/frames/${hex('c')}`])
+    assert.equal(citedFrameImageUrl({ imagePath }), undefined);
+  const run = { sessionId: '5a04cf06-ea91-4b07-b892-ce87f63954de', runId: '102992fd-7e50-47be-bc96-3508a2a5c9e0', status: 'completed',
+    result: { outcome: 'answered', answer: 'A [1 · 0:05]', sources: [{ id: '1', title: 'Video' }], warnings: [],
+      frames: [{ sourceId: '1', timestampMs: 5000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('a')}`, videoUrl: 'https://www.youtube.com/watch?v=video000001&t=5s' }] } };
+  assert.equal(agentRunSchema.parse(run).result?.frames?.[0]?.timestampMs, 5000);
+  assert.equal(agentRunSchema.safeParse({ ...run, result: { ...run.result, frames: [{ ...run.result.frames[0], imagePath: '/elsewhere' }] } }).success, false);
+  assert.equal(agentRunSchema.parse({ ...run, result: { ...run.result, frames: undefined } }).result?.frames, undefined);
 });

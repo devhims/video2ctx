@@ -81,6 +81,8 @@ export interface AgentToolContext {
    * delivery ledger sources. Durable, so a resumed run reports what it did before the restart.
    */
   evidenceRunRecords?(packetIds: readonly string[]): ReadonlyMap<string, import('../../runtime/model-evidence').EvidenceRunRecord>;
+  /** Previews saved when these exact frame versions were retrieved in any turn of this conversation. */
+  savedFramePreviews?(frames: readonly import('../../runtime/frame-previews').SavedFrame[]): import('../../runtime/frame-previews').FramePreview[] | undefined;
   analyzeTranscript?: TranscriptAnalyst;
   analyzeStoryboard?: VisualAnalyst;
   analyzeFrames?: FrameAnalyst;
