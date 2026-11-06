@@ -2690,3 +2690,32 @@ test.each(['ordinary', 'pending', 'other-run', 'deleted', 'another-original', 'c
       expect(instance.sql<{ result_json: string | null }>`SELECT result_json FROM agent_runs WHERE id=${runId}`[0]!.result_json).toBeNull();
     });
   });
+
+test('resolves saved frame previews from earlier turns of the same conversation only', async () => {
+  const { runtime, userId, runId: earlierRun, conversationId } = await seed('saved-frame-previews', 'completed');
+  const videoId = 'abcdefghijk', laterRun = crypto.randomUUID(), otherRun = crypto.randomUUID();
+  const preview = (digit: string, timestampMs: number) => ({ collectionId: 'c'.repeat(64), assetId: digit.repeat(64), timestampMs, width: 640, height: 360 });
+  const packet = (id: string, kind: string, assetVersions: string[], previews: unknown[]) => JSON.stringify({ packetId: id, kind,
+    sources: [{ id: `youtube:${videoId}:frames`, provider: 'youtube', kind: 'frames', videoId }], excerpts: [], warnings: [], usage: [], assetVersions,
+    artifacts: [{ type: 'youtube_frame_retrieval', title: 'Frames', data: { videoId, previews } }] });
+  await runInDurableObject(runtime, async instance => {
+    const run = (id: string, conversation: string, turn: number) => instance.sql`INSERT INTO agent_runs (id,user_id,conversation_id,
+      user_message_id,agent_message_id,turn_ordinal,message,status,phase,credits_remaining_at_admission,created_at,updated_at,research_deadline_at)
+      VALUES (${id},${userId},${conversation},${crypto.randomUUID()},${crypto.randomUUID()},${turn},'Prompt','running','executing',5000,0,0,0)`;
+    run(laterRun, conversationId, 2);
+    run(otherRun, crypto.randomUUID(), 1);
+    const insert = (id: string, owner: string, json: string, at: number) => instance.sql`INSERT INTO agent_evidence_packets
+      (packet_id, run_id, tool_call_id, packet_json, created_at) VALUES (${id}, ${owner}, 'tool', ${json}, ${at})`;
+    insert('earlier', earlierRun, packet('earlier', 'youtube_frames', ['v1', 'v2'], [preview('1', 0), preview('2', 5000)]), 1);
+    insert('other-version', earlierRun, packet('other-version', 'youtube_frames', ['v9'], [preview('9', 0)]), 2);
+    insert('not-frames', earlierRun, packet('not-frames', 'youtube_storyboard', ['v1'], [preview('8', 0)]), 3);
+    // The same version in another conversation is never borrowed.
+    insert('elsewhere', otherRun, packet('elsewhere', 'youtube_frames', ['v1'], [preview('7', 0)]), 4);
+    const reader = instance as unknown as { savedFramePreviews(runId: string, versions: readonly string[], timestamps: readonly number[]): unknown };
+    expect(reader.savedFramePreviews(laterRun, ['v1'], [0])).toEqual([preview('1', 0)]);
+    expect(reader.savedFramePreviews(otherRun, ['v1'], [0])).toEqual([preview('7', 0)]);
+    expect(reader.savedFramePreviews(laterRun, ['v1'], [1234])).toBeUndefined();
+    instance.sql`DELETE FROM agent_evidence_packets WHERE packet_id = 'earlier'`;
+    expect(reader.savedFramePreviews(laterRun, ['v1'], [0])).toBeUndefined();
+  });
+});

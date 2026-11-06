@@ -13,7 +13,7 @@ import { sessionCatalog } from './runtime/session-catalog';
 import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } from '../lib/extraction-diagnostics';
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
-import { framePreviewKey, saveFramePreviews } from './runtime/frame-previews';
+import { framePreviewKey, recordedFramePreviews, saveFramePreviews } from './runtime/frame-previews';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -694,6 +694,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         deliverEvidence: (packets, source) => this.deliverEvidence(runId, source, packets),
         deliverSavedAssets: versions => this.deliverSavedAssets(runId, versions),
         evidenceRunRecords: packetIds => this.evidenceRunRecords(runId, packetIds),
+        savedFramePreviews: (versions, timestamps) => this.savedFramePreviews(runId, versions, timestamps),
         registerRetrievedAsset: (claim, version) => {
           this.assertRunActive(runId);
           this.evidenceLedger.registerAssetClaim(runId, claim, version);
@@ -1734,6 +1735,25 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     for (const [packetId, sources] of this.evidenceLedger.packetOperations(runId, JSON.parse(ids)))
       entry(packetId).deliveredSources.push(...sources);
     return records;
+  }
+
+  /** Frame previews saved for these asset versions in any turn of this run's conversation.
+   * Earlier turns' packets stay in storage but are not part of a new run's evidence. Deleting
+   * a version removes its packets, so a deleted frame never resolves a preview. */
+  private savedFramePreviews(runId: string, versions: readonly string[], timestamps: readonly number[]) {
+    const run = this.readRun(runId);
+    if (!run || !versions.length || !timestamps.length) return undefined;
+    const wanted = JSON.stringify([...new Set(versions)]);
+    const packets = this.sql<{ packet_json: string }>`
+      SELECT p.packet_json FROM agent_evidence_packets p
+      JOIN agent_runs owner ON owner.id = p.run_id
+      WHERE owner.conversation_id = ${run.conversation_id} AND owner.user_id = ${run.user_id}
+        AND json_extract(p.packet_json, '$.kind') = 'youtube_frames'
+        AND EXISTS (SELECT 1 FROM json_each(p.packet_json, '$.assetVersions') saved
+          WHERE saved.value IN (SELECT value FROM json_each(${wanted})))
+      ORDER BY p.created_at ASC
+    `.map(row => evidencePacketSchema.parse(JSON.parse(row.packet_json)));
+    return recordedFramePreviews(packets, versions, timestamps);
   }
 
   private readRun(runId: string): RunRow | undefined {

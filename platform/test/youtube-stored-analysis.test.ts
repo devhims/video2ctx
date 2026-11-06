@@ -7,7 +7,7 @@ import { executeGetVideoTranscriptForModel } from '../src/agents/providers/youtu
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
 import { executeGetVideoStoryboard } from '../src/agents/providers/youtube/tools/get-video-storyboard';
 import { executeAnalyzeVideoTranscript } from '../src/agents/providers/youtube/tools/analyze-video-transcripts';
-import { executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
+import { createAnalyzeVideoFramesTool, executeAnalyzeVideoFrames } from '../src/agents/providers/youtube/tools/analyze-video-frames';
 import { executeAnalyzeVideoStoryboard } from '../src/agents/providers/youtube/tools/analyze-video-storyboard';
 import { attachTestAssetStore } from './fixtures/analysis-session';
 import { evidencePacketForModel } from '../src/agents/runtime/model-evidence';
@@ -142,6 +142,20 @@ describe('saved-frame analysis previews', () => {
     packets.push(earlier(['other-version'], [preview('9', 0)]), earlier([versions.frame], [preview('1', 0), preview('2', 5000)]));
     const packet = await executeAnalyzeVideoFrames({ assetVersions: [versions.frame], focus: 'Describe the chart.' }, context, 'follow-up');
     expect(packet.artifacts[0]!.data.previews).toEqual([preview('1', 0)]);
+  });
+
+  it('reads an earlier turn\'s previews from session storage and keeps them out of model input', async () => {
+    const { context, versions } = setup();
+    const saved = { collectionId: 'c'.repeat(64), assetId: '7'.repeat(64), timestampMs: 0, width: 640, height: 360 };
+    // This run's evidence has no retrieval packet; the earlier turn's packet is only in storage.
+    context.savedFramePreviews = vi.fn(() => [saved]);
+    const packet = await executeAnalyzeVideoFrames({ assetVersions: [versions.frame], focus: 'Describe the chart.' }, context, 'next-turn');
+    expect(context.savedFramePreviews).toHaveBeenCalledWith([versions.frame], [0]);
+    expect(packet.artifacts[0]!.data.previews).toEqual([saved]);
+    const output = JSON.stringify(await createAnalyzeVideoFramesTool(context).toModelOutput!({ toolCallId: 'next-turn',
+      input: { assetVersions: [versions.frame], focus: 'Describe the chart.' }, output: packet }));
+    expect(output).not.toContain(saved.assetId);
+    expect(output).toContain(versions.frame);
   });
 
   it('leaves previews absent when no earlier retrieval recorded them', async () => {

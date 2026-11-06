@@ -153,6 +153,7 @@ async function executeResearchRunWithAssets(options: {
   deliverEvidence?: DeliverEvidence;
   deliverSavedAssets?: AgentToolContext['deliverSavedAssets'];
   evidenceRunRecords?: AgentToolContext['evidenceRunRecords'];
+  savedFramePreviews?: AgentToolContext['savedFramePreviews'];
   registerRetrievedAsset?: (claim: string, version: string) => void;
   /** Packets this run already received, restored without another charge after a restart. */
   deliveredPacketIds?: ReadonlySet<string>;
@@ -293,6 +294,7 @@ async function executeResearchRunWithAssets(options: {
     deliverEvidence: options.deliverEvidence,
     deliverSavedAssets: options.deliverSavedAssets,
     evidenceRunRecords: options.evidenceRunRecords,
+    savedFramePreviews: options.savedFramePreviews,
     runId: options.runId,
     userMessageId: options.userMessageId,
     currentDate: options.currentDate,
