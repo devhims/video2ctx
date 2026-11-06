@@ -332,6 +332,26 @@ describe('cited frames in compact results', () => {
       expect(compactAgentResult(result).frames?.map(item => item.imagePath)).toEqual([`/v1/agent/frames/${hex('c')}/${hex('2')}`]);
     });
 
+  it('never substitutes another capture when the cited capture has no saved preview', async () => {
+    const { visualAnalysisExcerpts } = await import('../src/agents/providers/youtube/visual-provenance');
+    const capture = (toolCallId: string, observation: string, previews: unknown[]): EvidencePacket => {
+      const visual = visualAnalysisExcerpts({ kind: 'requested', idPrefix: `frames:video000001:${toolCallId}`, sourceId: 'youtube:video000001:frames',
+        findings: [{ observation, frames: [5000] }], sharedFindings: [], timeOf: time => time, assertAvailable: () => {} });
+      return { packetId: toolCallId, kind: 'youtube_frames', excerpts: visual.excerpts, warnings: [], usage: [], assetVersions: [toolCallId],
+        sources: [{ id: 'youtube:video000001:frames', provider: 'youtube', kind: 'frames', videoId: 'video000001' }],
+        artifacts: [{ type: 'youtube_frame_analysis', title: 'Frames', data: { videoId: 'video000001', previews } }] };
+    };
+    // The cited red-sign capture saved no preview; an uncited blue-sign capture of the same moment did.
+    const red = capture('red', 'A red sign.', []), blue = capture('blue', 'A blue sign.', [preview('2', 5000)]);
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
+      agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 10 } as never,
+    { answer: `The sign is red [cite:${red.excerpts[0]!.id}].`, intent: 'inspect_video', confidence: 'high', warnings: [], artifacts: [] } as unknown as FinalizeAnswerInput,
+    [blue, red], 1);
+    expect(result.artifacts.find(artifact => artifact.type === 'cited_frame_previews')?.data)
+      .toEqual({ citations: [{ citationId: red.excerpts[0]!.id, frames: [] }] });
+    expect(compactAgentResult(result)).not.toHaveProperty('frames');
+  });
+
   it('shows nothing for an older answer whose moment has more than one saved capture', () => {
     const result = frameRun('Score [cite:f0].', [frame('f0', 'video000001', 5000)], [
       { type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('1', 5000)] } },

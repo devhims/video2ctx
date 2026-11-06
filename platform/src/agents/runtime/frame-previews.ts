@@ -94,10 +94,12 @@ export function citedPacketFramePreviews(packet: EvidencePacket, excerpt: { id: 
   return citedFrameTimes(packet.artifacts, excerpt).flatMap(time => previews.get(time) ?? []);
 }
 
-/** Answer artifact recording which saved previews each cited frame excerpt used. */
+/** Answer artifact recording which saved previews each cited frame excerpt used. Every frame
+ * citation of a new answer has an entry; an empty list records that its packet saved no preview,
+ * so no other capture of the same moment may stand in. Only answers without it are older. */
 export const CITED_FRAME_PREVIEWS = 'cited_frame_previews';
 export const citedFramePreviewsSchema = z.object({
-  citations: z.array(z.object({ citationId: z.string(), frames: z.array(framePreviewSchema).min(1).max(6) })),
+  citations: z.array(z.object({ citationId: z.string(), frames: z.array(framePreviewSchema).max(6) })),
 });
 
 export async function saveFramePreviews(bucket: R2Bucket, userId: string, value: VideoFrames, signal: AbortSignal, sharedBucket?: R2Bucket, verifiedImages?: VerifiedImage[]): Promise<FramePreview[]> {

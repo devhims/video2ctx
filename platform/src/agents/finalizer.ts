@@ -55,7 +55,8 @@ export function buildAgentTurnResult(
     // Identical excerpt IDs in several packets only resolve if they agree; take frames only when one packet holds it.
     const frames = source.kind === 'frames' && new Set(matches.map(candidate => candidate.packet.packetId)).size === 1
       ? citedPacketFramePreviews(packet, excerpt).slice(0, 6) : [];
-    if (frames.length) citedFrames.push({ citationId: excerpt.id, frames });
+    // Record a frame citation even without a preview, so it never falls back to matching by time.
+    if (source.kind === 'frames') citedFrames.push({ citationId: excerpt.id, frames });
     citations.push({
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
