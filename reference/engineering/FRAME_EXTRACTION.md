@@ -148,10 +148,14 @@ presentation interval exactly once, starting with the keyframe. Out-of-budget
 seeks and unsupported layouts retain the existing recovery paths. The 2 MiB movie-index ceiling applies before either path.
 Fragment indexes allow up to 4,096 entries and 64 KiB; each selected fragment is
 bounded to 1,000 samples, 30 seconds, and 4 MiB. Hierarchical indexes and absolute
-fragment data offsets use FFmpeg. The sharpest supported source is preferred. If it later rejects a frame range,
-the Media path prioritizes a progressive source before other adaptive formats,
-then tries another client or proxy for only the missing frames.
-This can select progressive 360p after adaptive 720p fails. Below-720p output keeps
+fragment data offsets use FFmpeg. The progressive source (usually format 18, 360p) is
+tried first. On November 6, 2026, YouTube refused adaptive range reads past the start of
+the file with HTTP 403 on 19 of 24 sampled videos, and production runs decoded 78 of 85
+frames from format 18. Adaptive formats remain fallbacks, sharpest first, for example for
+live replays that offer no progressive file. If a source rejects a frame range, the Media
+path tries the next source, then another client or proxy for only the missing frames.
+Media extraction uses only the iOS and Android clients: on all 25 sampled videos,
+ANDROID_VR required sign-in and MWEB could not play. Below-720p output keeps
 an explicit quality warning. A request tries at most three prepared sources across
 at most four configured proxy routes, within the same 20-second Media deadline
 and aggregate byte limit. Completed frames are never extracted again. Source
