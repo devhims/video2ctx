@@ -1326,7 +1326,8 @@ test('storyboard manifests are pinned per served resolution', async () =>
       .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('high', 1, [5]) });
     const p = { storyboard } as unknown as YouTubeAgentProvider;
     const fallback = await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
-    expect(fallback.value).toMatchObject({ resolution: 'standard', meta: { warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
+    // Standard boards carry no resolution label, matching shared assets saved before resolutions existed.
+    expect(fallback.value).toMatchObject({ resolution: undefined, meta: { warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
     // The fallback is reusable as standard without another provider call.
     await sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [2], maxSheets: 1 });
     expect(storyboard).toHaveBeenCalledTimes(1);
@@ -1336,6 +1337,34 @@ test('storyboard manifests are pinned per served resolution', async () =>
     expect(storyboard).toHaveBeenCalledTimes(2);
     const manifests = store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest');
     expect(manifests.map(asset => asset.details.resolution).sort()).toEqual(['high', 'standard']);
+  }));
+
+test('missing sheets for a high manifest that come back at standard resolution are neither shown nor pinned', async () =>
+  within('storyboard-mixed-levels', async (store) => {
+    const board = (resolution: 'standard' | 'high', framesPerSheet: number, indexes: number[]) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000, resolution,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, tileWidth: 100, tileHeight: 100, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, tileWidth: 100, tileHeight: 100,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn()
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('high', 1, [5]) })
+      // Standard sheet 0 starts at frame 0, so an index check alone would accept it as high sheet 0.
+      .mockImplementationOnce(async (_id: string, _times: unknown, _options: unknown, _diagnostic: unknown, onReady?: (value: unknown) => void) => {
+        const value = board('standard', 2, [0]);
+        onReady?.(value);
+        return { cacheStatus: 'miss', value };
+      });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    const onReady = vi.fn();
+    await expect(sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20, resolution: 'high' }, undefined, onReady))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+    expect(storyboard).toHaveBeenLastCalledWith(id, undefined, expect.objectContaining({ sheetIndexes: [0], resolution: 'high' }), undefined, expect.any(Function));
+    expect(onReady).not.toHaveBeenCalled();
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toHaveLength(1);
   }));
 
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>

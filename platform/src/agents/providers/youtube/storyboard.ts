@@ -23,8 +23,11 @@ export interface StoryboardSelectionOptions {
 export const storyboardSchema = z.object({
   manifest: storyboardManifestSchema.optional(),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
-  /** Served resolution. Boards saved before resolutions existed are standard. */
-  resolution: z.enum(['standard', 'high']).optional(),
+  /**
+   * Present only for high (L3) boards. Standard is dropped so new standard payloads stay
+   * byte-identical to shared assets saved before resolutions existed.
+   */
+  resolution: z.preprocess(value => value === 'standard' ? undefined : value, z.literal('high').optional()),
   frameCount: positive,
   intervalMs: positive,
   selection: z.object({ mode: z.enum(['leading', 'spread', 'timestamps', 'indexes', 'metadata']),

@@ -9,15 +9,16 @@ Adaptive streams are refused after the first minute without YouTube's app attest
 `getStoryboard` takes `resolution: 'standard' | 'high'`:
 
 - **Standard** (the default) checks mobile clients first and selects the sharpest level up to L2. If only the watch page responds, it still caps at L2. Before this change, that fallback could return L3 under the same manifest as standard results.
-- **High** checks the watch page first and selects its sharpest level: L3, or L2 when the video has no L3. If the watch page is blocked, unplayable or unparsable, it falls back to the mobile clients and returns standard sheets with the warning `Storyboard: high resolution unavailable; returned standard sheets`.
+- **High** checks the watch page first and selects its sharpest level. If the watch page is blocked, unplayable or unparsable, it falls back to the mobile clients. A result is labelled high only when a level above L2 is served. A video without L3, or a fallback, returns standard sheets with the warning `Storyboard: high resolution unavailable; returned standard sheets`. A high manifest therefore always has different geometry from the standard one.
 
-Every result reports the served `resolution` and `level`. Manifests and sheet indexes are level-specific: sheet 7 at L2 covers samples 175-199, while sheet 7 at L3 covers samples 63-71.
+Every library result reports the served `resolution` and `level`. Manifests and sheet indexes are level-specific: sheet 7 at L2 covers samples 175-199, while sheet 7 at L3 covers samples 63-71.
 
 ## Platform
 
-- The agent's `get_video_storyboard` requests high only for `timestampsMs` selections. Overviews and `sheetIndexes` stay standard, because 20 L3 sheets cover only 30 minutes at a 10 second interval, against 83 minutes at L2. Index validation uses only standard manifests from evidence. Timestamp validation accepts either resolution, because the range is the same and a standard grid never needs more sheets than a sharper one.
-- The video catalog keeps one manifest per served resolution (`storyboard_manifest` variants `v1` and `high-v1`). A high request that falls back is filed under the standard manifest. Sheet keys already hash the manifest geometry, so a video without L3 shares sheets between the two resolutions.
-- If a cached high manifest needs missing sheets and that fetch falls back to standard, the request fails with retryable `UNAVAILABLE` instead of mixing levels.
+- The platform storyboard schema keeps `resolution` only when it is high. Standard payloads stay byte-identical to shared assets saved before resolutions existed, so session pins still match those versions.
+- The agent's `get_video_storyboard` requests high only for `timestampsMs` selections. Overviews and `sheetIndexes` stay standard, because 20 L3 sheets cover only 30 minutes at a 10 second interval, against 83 minutes at L2. Sheet counts are validated only against a saved manifest of the requested resolution. A manifest of the other resolution can only check that timestamps fall in the sampled range, because sheet boundaries differ: at 10 second samples, 240 s and 250 s fall on two standard sheets but one high sheet.
+- The video catalog keeps one manifest per served resolution (`storyboard_manifest` variants `v1` and `high-v1`). A high request served at standard is filed under the standard manifest. Sheet keys hash the manifest geometry, so high and standard sheets never share a key.
+- If a cached high manifest needs missing sheets and that fetch comes back at another resolution or geometry, the request fails with retryable `UNAVAILABLE` instead of mixing levels. This applies to both the video catalog and the session store, before any sheet is shown or pinned.
 - Session manifests are pinned per served resolution (`storyboard:<id>:manifest` and `storyboard:<id>:manifest:high`). Pre-catalog KV entries and legacy session keys are standard. The no-catalog KV key includes `high` for high requests.
 - Storyboard diagnostics carry the served `level` and `resolution` on the `complete` event.
 
@@ -55,6 +56,6 @@ Library results, measured directly (decoded bytes):
 | UzxYlbK2c7E | 3 timestamps | high | L3 240x180, 3x3 | 4 | 1428 | 58 | 27 |
 | UzxYlbK2c7E | overview, 20 sheets | standard | L2 | 18 | 240 | 559 | 413 of 413 |
 | UzxYlbK2c7E | overview, 20 sheets | high | L3 | 21 | 1437 | 413 | 179 of 413 |
-| BDqvzFY72mg | 3 timestamps | high | L2 (no L3) | 4 | 1443 | 80 | 75 |
+| BDqvzFY72mg | 3 timestamps | high (served standard, with warning) | L2 (no L3) | 4 | 1443 | 80 | 75 |
 
 A targeted request costs the same number of requests at either resolution. Overviews stay standard: at L3 a 69-minute video needs 46 sheets for full coverage, and 20 sheets cover only 43% of it. L3 sheets also hand a model 518k pixels per sheet against 360k at L2, about 4x the image tokens per sample.

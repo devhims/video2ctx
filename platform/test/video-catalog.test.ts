@@ -490,7 +490,8 @@ test('a high request served at standard resolution is filed under the standard m
     meta: { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } };
   vi.mocked(runYouTubeOperation).mockResolvedValue(fallback as never);
   const result = await loadVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [1], resolution: 'high' });
-  expect(result).toMatchObject({ resolution: 'standard', meta: { warnings: fallback.meta.warnings } });
+  // Standard carries no label, so the board matches standard assets saved before resolutions existed.
+  expect(result).toMatchObject({ resolution: undefined, meta: { warnings: fallback.meta.warnings } });
   expect(await readVideoResource(f.env, { kind: 'storyboard', id, metadataOnly: true, resolution: 'high' })).toBeNull();
   expect(await readVideoResource(f.env, { kind: 'storyboard', id, sheetIndexes: [1] }))
     .toMatchObject({ value: { sheets: storyboard([1]).sheets } });

@@ -19384,18 +19384,19 @@ function metadata(warnings) {
   };
 }
 var STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
-async function downloadStoryboard(raw, options, fetchImpl, resolution = "standard") {
+async function downloadStoryboard(raw, options, fetchImpl, allowHigh = false) {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError("NOT_FOUND", "No storyboard is available for this video.");
   }
-  const level = spec.levels.filter((level2) => resolution === "high" || level2.index <= STANDARD_MAX_LEVEL).sort(
+  const level = spec.levels.filter((level2) => allowHigh || level2.index <= STANDARD_MAX_LEVEL).sort(
     (a, b) => b.tileWidth * b.tileHeight - a.tileWidth * a.tileHeight
   )[0];
   if (!level) {
     throw new YouTubeClientError("NOT_FOUND", "No usable storyboard level is available for this video.");
   }
+  const resolution = level.index > STANDARD_MAX_LEVEL ? "high" : "standard";
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
   const selectedSheets = selectSheets(level, options, maxSheets);
@@ -19701,12 +19702,7 @@ async function getStoryboardWithFallback(options) {
       }
       const downloadStartedAt = Date.now();
       try {
-        const result = await downloadStoryboard(
-          raw,
-          options,
-          boundedFetch,
-          desktop && options.resolution === "high" ? "high" : "standard"
-        );
+        const result = await downloadStoryboard(raw, options, boundedFetch, desktop && options.resolution === "high");
         signal.throwIfAborted();
         emit({
           stage: "complete",

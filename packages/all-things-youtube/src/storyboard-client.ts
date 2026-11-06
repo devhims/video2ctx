@@ -122,8 +122,7 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
       if (!spec) { malformed ||= specState === 'malformed'; continue; }
       const downloadStartedAt = Date.now();
       try {
-        const result = await downloadStoryboard(raw, options, boundedFetch,
-          desktop && options.resolution === 'high' ? 'high' : 'standard');
+        const result = await downloadStoryboard(raw, options, boundedFetch, desktop && options.resolution === 'high');
         signal.throwIfAborted();
         emit({ stage: 'complete', profile: profile.name, outcome: 'success', sheetCount: result.sheets.length,
           level: result.level, resolution: result.resolution, elapsedMs: Date.now() - startedAt });

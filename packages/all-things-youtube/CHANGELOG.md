@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add `resolution: 'standard' | 'high'` to `getStoryboard`. Standard, the default, is unchanged: the sharpest level the mobile players list, typically L2 with 160x90 tiles and 25 per sheet. High reads the web watch page first, because only its player response lists L3, typically 320x180 tiles and 9 per sheet (240x180 for 4:3 video). That is 4x the pixels per sample at the same interval. Videos without L3 return their best web level. When the watch page is blocked or unusable, high falls back to standard sheets and adds a warning.
+- Add `resolution: 'standard' | 'high'` to `getStoryboard`. Standard, the default, is unchanged: the sharpest level the mobile players list, typically L2 with 160x90 tiles and 25 per sheet. High reads the web watch page first, because only its player response lists L3, typically 320x180 tiles and 9 per sheet (240x180 for 4:3 video). That is 4x the pixels per sample at the same interval. High is reported only when a level above L2 is served. When a video has no L3, or the watch page is blocked or unusable, high returns standard sheets with a warning.
 - Report the served `resolution` on every storyboard result. Manifests and sheet indexes belong to that resolution, so plan `sheetIndexes` with the same `resolution` you will request them with.
 - Cap standard results at L2 even when only the web watch page responds. Before this, a standard request that reached the web fallback could return L3 and a different manifest.
 - Raise `STORYBOARD_SELECTION_VERSION` to 3.

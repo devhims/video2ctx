@@ -2,6 +2,7 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
 import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
+import { storyboardResolutionUnavailable } from '../../lib/video-resources';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
@@ -210,15 +211,20 @@ export function sessionProvider(
             options.signal?.throwIfAborted();
             const storyboardClaim = missing.length ? crypto.randomUUID() : undefined;
             if (missing.length) {
+              // Missing sheets may fall back to another level. Never show or pin them under this manifest.
+              const sameManifest = (value: Storyboard) => servedResolution(value) === served
+                && JSON.stringify(value.manifest) === JSON.stringify(manifest)
+                && value.intervalMs === metadata.value.intervalMs && value.frameCount === metadata.value.frameCount;
               const fetched = prefetched ?? await provider.storyboard!(
                 id,
                 undefined,
                 { sheetIndexes: missing, maxSheets: missing.length, ...(served === 'high' ? { resolution: served } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
-                onReady ? value => onReady(storyboardSchema.parse({ ...value,
+                onReady ? value => { if (sameManifest(value)) onReady(storyboardSchema.parse({ ...value,
                   sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
-                })) : undefined,
+                })); } : undefined,
               );
+              if (!sameManifest(fetched.value)) throw storyboardResolutionUnavailable();
               onReady?.(storyboardSchema.parse({ ...fetched.value,
                 sheets: [...results.flatMap(result => result.value.sheets), ...fetched.value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
               }));

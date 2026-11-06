@@ -53,7 +53,7 @@ async function retrieveAndAnalyze(input: Parameters<typeof executeGetVideoStoryb
 describe('storyboard agent tool', () => {
   it.each([
     { sheetIndexes: [6] }, { sheetIndexes: [5, 6, 7] },
-    { timestampsMs: [60000] }, { timestampsMs: [0, 50000], maxSheets: 1 },
+    { timestampsMs: [60000] },
   ])('rejects unavailable selections before provider and vision calls: %j', async selection => {
     const ctx = context();
     ctx.analyzeStoryboard = vi.fn();
@@ -61,6 +61,27 @@ describe('storyboard agent tool', () => {
       .rejects.toThrow('Available sheet indexes are 0 through 5');
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+  });
+  it('counts timestamp sheets only against a manifest of the requested resolution', async () => {
+    const ctx = context();
+    const packet = (resolution: 'standard' | 'high', framesPerSheet: number) => ({ packetId: resolution, kind: 'youtube_storyboard' as const,
+      sources: [], excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_storyboard_retrieval', data: { videoId: storyboard.videoId,
+        intervalMs: 10_000, resolution, manifest: { totalSheets: Math.ceil(100 / framesPerSheet), framesPerSheet, tileWidth: 160, tileHeight: 90,
+          columns: framesPerSheet === 25 ? 5 : 3, rows: framesPerSheet === 25 ? 5 : 3, lastSampleMs: 990_000 } } }] });
+    // 240 s and 250 s straddle standard sheets 0 and 1 (250 s each), but share high sheet 2 (180-269 s).
+    ctx.getEvidence = () => [packet('standard', 25)];
+    const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>().mockResolvedValue({ value: storyboard, cacheStatus: 'miss' });
+    ctx.provider.storyboard = provider;
+    await executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [240_000, 250_000], maxSheets: 1 }, ctx, 'boundary');
+    expect(provider).toHaveBeenCalledWith(storyboard.videoId, [240_000, 250_000], expect.objectContaining({ resolution: 'high', maxSheets: 1 }), expect.any(Function));
+    // Another resolution still bounds the sampled range.
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [1_000_000] }, ctx, 'range'))
+      .rejects.toThrow('timestamps must be below 1000000 ms');
+    // A high manifest counts high sheets.
+    ctx.getEvidence = () => [packet('standard', 25), packet('high', 9)];
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [0, 250_000], maxSheets: 1 }, ctx, 'high-count'))
+      .rejects.toThrow('within maxSheets=1');
+    expect(provider).toHaveBeenCalledTimes(1);
   });
   it('plans sheet indexes only with a standard manifest and requests timestamps at high resolution', async () => {
     const ctx = context();

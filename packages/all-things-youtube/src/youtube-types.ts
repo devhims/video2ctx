@@ -197,7 +197,7 @@ export interface StoryboardIndex {
   manifest?: StoryboardManifest;
   videoId: string;
   level: number;
-  /** Resolution actually served. High falls back to standard when the watch page is unusable. */
+  /** Resolution actually served: high only when a level above L2 was delivered. */
   resolution: StoryboardResolution;
   frameCount: number;
   intervalMs: number;

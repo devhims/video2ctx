@@ -247,26 +247,28 @@ function metadata(warnings: string[]): SourceMetadata {
 const STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
 
 /**
- * `resolution` is what this response can serve: high only for a web watch response, which
- * lists every level. A high request served from a mobile response returns standard with a warning.
+ * `allowHigh` permits levels above L2, which only a web watch response lists. The result is labelled
+ * high only when such a level is served, so a video without L3 returns the same standard manifest
+ * and sheets whichever client served it. A high request served at L2 gets a warning.
  */
 export async function downloadStoryboard(
   raw: JsonObject,
   options: StoryboardOptions,
   fetchImpl: typeof fetch,
-  resolution: StoryboardResolution = 'standard',
+  allowHigh = false,
 ): Promise<StoryboardIndex> {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError('NOT_FOUND', 'No storyboard is available for this video.');
   }
-  const level = spec.levels.filter(level => resolution === 'high' || level.index <= STANDARD_MAX_LEVEL).sort((a, b) =>
+  const level = spec.levels.filter(level => allowHigh || level.index <= STANDARD_MAX_LEVEL).sort((a, b) =>
     (b.tileWidth * b.tileHeight) - (a.tileWidth * a.tileHeight)
   )[0];
   if (!level) {
     throw new YouTubeClientError('NOT_FOUND', 'No usable storyboard level is available for this video.');
   }
+  const resolution: StoryboardResolution = level.index > STANDARD_MAX_LEVEL ? 'high' : 'standard';
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
   const selectedSheets = selectSheets(level, options, maxSheets);

@@ -192,11 +192,15 @@ test('high resolution falls back to standard sheets with a warning when the watc
     meta: { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
 });
 
-test('high resolution serves the best web level when a video has no L3', async () => {
+test('high resolution labels an L2-only video as standard so both resolutions share one manifest', async () => {
   const fetch = players({ watch: mobileSpec });
   const result = await createYouTubeClient({ fetch }).getStoryboard({ videoId: 'abcdefghijk', outputDir: await storyboardDir(),
     metadataOnly: true, resolution: 'high' });
-  expect(result).toMatchObject({ level: 2, resolution: 'high', meta: { partial: false } });
+  const standard = await createYouTubeClient({ fetch: players({ mobile: [mobileSpec] }) }).getStoryboard({ videoId: 'abcdefghijk',
+    outputDir: await storyboardDir(), metadataOnly: true });
+  expect(result).toMatchObject({ level: 2, resolution: 'standard',
+    meta: { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
+  expect(result.manifest).toEqual(standard.manifest);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 

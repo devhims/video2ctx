@@ -83,7 +83,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   context.signal.throwIfAborted();
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   const evidence = context.getEvidence?.() ?? [];
-  if (findStoryboardMetadata(parsed.videoId, evidence, requestedResolution(parsed))) validateStoryboardSelection(parsed, evidence);
+  prevalidateStoryboardSelection(parsed, evidence);
   let previews: z.infer<typeof storyboardPreviewsSchema> | undefined;
   let previewFailed = false, previewMs = 0;
   const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
@@ -150,21 +150,23 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   return finish(packet);
 }
 
-/** Validate against persisted metadata before waking the image provider or vision model. */
-function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePacket[], resolution: StoryboardResolution) {
+/** The latest saved manifest, of one resolution when given. Manifests saved before resolutions existed are standard. */
+function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePacket[], resolution?: StoryboardResolution) {
   const artifacts = evidence.flatMap(packet => packet.artifacts);
-  // Indexes need a standard manifest; manifests saved before resolutions existed are standard.
-  // Any manifest validates timestamps: ranges match, and a standard grid never needs more sheets than a sharper one.
   const artifact = artifacts.reverse().find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type)
-    && artifact.data.videoId === videoId && artifact.data.manifest && (resolution === 'high' || (artifact.data.resolution ?? 'standard') === 'standard'));
+    && artifact.data.videoId === videoId && artifact.data.manifest
+    && (resolution === undefined || (artifact.data.resolution ?? 'standard') === resolution));
   const result = storyboardManifestSchema.safeParse(artifact?.data.manifest);
   const intervalMs = artifact?.data.intervalMs;
   if (!result.success || typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) return;
   return { manifest: result.data, intervalMs };
 }
 
-function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
-  const metadata = findStoryboardMetadata(input.videoId, evidence, requestedResolution(input));
-  if (!metadata) throw new Error('Storyboard metadata is unavailable.');
-  storyboardSheetIndexes(metadata, input);
+/** Validate against persisted metadata before waking the image provider or vision model. */
+function prevalidateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
+  const exact = findStoryboardMetadata(input.videoId, evidence, requestedResolution(input));
+  if (exact) { storyboardSheetIndexes(exact, input); return; }
+  // Another resolution has different sheet boundaries, so it can only check the sampled range.
+  const other = input.timestampsMs && findStoryboardMetadata(input.videoId, evidence);
+  if (other) storyboardSheetIndexes(other, { timestampsMs: input.timestampsMs });
 }

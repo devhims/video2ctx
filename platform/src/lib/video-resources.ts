@@ -89,6 +89,11 @@ export function reusableVideoResource(op: VideoResourceOperation,
     : saved.freshUntil > now;
 }
 
+/** Missing sheets for a cached high manifest came back at standard resolution. */
+export function storyboardResolutionUnavailable() {
+  return new YouTubeProcessorError('UNAVAILABLE', 'High-resolution storyboards are temporarily unavailable. Retry the request.', undefined, true);
+}
+
 /** Sheet indexes are level-specific, so each resolution keeps its own manifest. */
 export function metadataKey(id: string, resolution: StoryboardResolution = 'standard'): VideoAssetKey {
   return { videoId: id, kind: 'storyboard_manifest', variant: resolution === 'high' ? 'high-v1' : 'v1' };
@@ -466,8 +471,7 @@ export async function loadVideoResource(
     { ...op, timestampsMs: undefined, sheetIndexes: missing, maxSheets: missing.length },
     diagnostic,
   );
-  if (servedResolution(fetched) !== servedResolution(metadata.value))
-    throw new YouTubeProcessorError('UNAVAILABLE', 'High-resolution storyboards are temporarily unavailable. Retry the request.', undefined, true);
+  if (servedResolution(fetched) !== servedResolution(metadata.value)) throw storyboardResolutionUnavailable();
   if (
     JSON.stringify(fetched.manifest) !== JSON.stringify(metadata.value.manifest) ||
     fetched.intervalMs !== metadata.value.intervalMs ||
