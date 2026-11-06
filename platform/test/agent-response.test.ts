@@ -1,7 +1,9 @@
 import { storedExtractionDiagnosticSchema } from '../src/lib/extraction-diagnostics';
 import { renderStructuredAnswer } from '../src/agents/structured-answer';
 import { extractionFixture } from './fixtures/extraction-diagnostic';
-import { compactAgentRun, compactAgentRunSchema, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
+import { compactAgentRun, compactAgentRunSchema, compactAgentResult, agentResponseOptionsSchema, legacyAgentRun } from '../src/agents/response';
+import { buildAgentTurnResult } from '../src/agents/finalizer';
+import type { EvidencePacket, FinalizeAnswerInput } from '../src/agents/contracts';
 import type { AgentRunView } from '../src/agents/agent-runtime-do';
 
 function completedRun(): AgentRunView {
@@ -267,4 +269,110 @@ it('returns sessionId in both response formats and nested legacy results without
   expect(legacyAgentRun(run).result?.sessionId).toBe(run.conversationId);
   expect(legacyAgentRun(run).result?.agentMessageId).toBe(run.agentMessageId);
   expect(run).toEqual(before);
+});
+
+describe('cited frames in compact results', () => {
+  const hex = (digit: string) => digit.repeat(64);
+  const preview = (assetDigit: string, timestampMs: number) =>
+    ({ collectionId: hex('c'), assetId: hex(assetDigit), timestampMs, width: 640, height: 360 });
+  function frameRun(answer: string, citations: NonNullable<AgentRunView['result']>['citations'], artifacts: NonNullable<AgentRunView['result']>['artifacts']) {
+    const run = completedRun();
+    Object.assign(run.result!, { answer, citations, artifacts });
+    return compactAgentRun(run).result!;
+  }
+  const frame = (id: string, videoId: string, startMs: number, extra: Record<string, unknown> = { sourceKind: 'frames' }) =>
+    ({ id, sourceId: `youtube:${videoId}:frames`, provider: 'youtube' as const, videoId, title: videoId, excerpt: id, startMs, endMs: startMs, ...extra });
+
+  it('lists cited frames in citation order with their saved previews and moment links', () => {
+    const result = frameRun('Late [cite:f2]. Early [cite:f1] and spoken [cite:t1]. Again [cite:f1b]. Legacy [cite:f3]. Missing [cite:f4]. Sheet [cite:s1].', [
+      frame('f1', 'video000001', 5000), frame('f1b', 'video000001', 5000), frame('f2', 'video000001', 61000),
+      // A transcript passage and a storyboard sample at a previewed time are not frames.
+      { id: 't1', sourceId: 'youtube:video000001:transcript', provider: 'youtube', videoId: 'video000001', excerpt: 'said', startMs: 61000, endMs: 64000, sourceKind: 'transcript' },
+      { id: 's1', sourceId: 'youtube:video000001:storyboard', provider: 'youtube', videoId: 'video000001', excerpt: 'sheet', startMs: 5000, endMs: 5000, sourceKind: 'storyboard' },
+      // Stored before sourceKind existed; the frames source ID still identifies it.
+      frame('f3', 'video000002', 2000, {}),
+      frame('f4', 'video000001', 9000),
+    ], [
+      { type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('1', 5000), preview('2', 61000)] } },
+      { type: 'youtube_frame_analysis', data: { videoId: 'video000002', previews: [preview('3', 2000), { assetId: 'not-a-preview' }] } },
+    ]);
+    expect(result.sources.map(source => source.videoId)).toEqual(['video000001', 'video000002']);
+    expect(result.frames).toEqual([
+      { sourceId: '1', timestampMs: 61000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('2')}`, videoUrl: 'https://www.youtube.com/watch?v=video000001&t=61s' },
+      { sourceId: '1', timestampMs: 5000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('1')}`, videoUrl: 'https://www.youtube.com/watch?v=video000001&t=5s' },
+      { sourceId: '2', timestampMs: 2000, width: 640, height: 360, imagePath: `/v1/agent/frames/${hex('c')}/${hex('3')}`, videoUrl: 'https://www.youtube.com/watch?v=video000002&t=2s' },
+    ]);
+  });
+
+  it('shows every frame that supports a shared or combined finding', () => {
+    const span = (id: string, startMs: number, endMs: number) => ({ ...frame(id, 'video000001', startMs), endMs });
+    const result = frameRun('Shared [cite:sh]. Combined [cite:cb]. Older combined [cite:lc].',
+      [span('sh', 5000, 10000), span('cb', 20000, 30000), span('lc', 50000, 70000)],
+      [{ type: 'youtube_frame_analysis', data: { videoId: 'video000001',
+        sharedObservations: [{ excerptId: 'sh', framesMs: [5000, 10000] }],
+        combinedObservations: [{ excerptId: 'cb', framesMs: [20000, 30000] }],
+        previews: [5000, 10000, 20000, 30000, 50000, 60000, 70000].map((time, index) => preview(String(index + 1), time)) } }]);
+    // The older combined finding has no record, so only the frames it names appear, never 60000.
+    expect(result.frames?.map(item => item.timestampMs)).toEqual([5000, 10000, 20000, 30000, 50000, 70000]);
+    expect(result.frames?.every(item => item.sourceId === '1')).toBe(true);
+  });
+
+  it.each([['ancestor first', false], ['current first', true]] as const)(
+    'shows the capture the answer cited, not another saved capture of the same moment (%s)', (_order, currentFirst) => {
+      const capture = (packetId: string, excerptId: string, assetDigit: string): EvidencePacket => ({ packetId, kind: 'youtube_frames',
+        sources: [{ id: 'youtube:video000001:frames', provider: 'youtube', kind: 'frames', videoId: 'video000001' }],
+        excerpts: [{ id: excerptId, sourceId: 'youtube:video000001:frames', text: `Frame ${packetId}`, startMs: 5000, endMs: 5000 }],
+        artifacts: [{ type: 'youtube_frame_retrieval', title: 'Frames', data: { videoId: 'video000001', previews: [preview(assetDigit, 5000)] } }],
+        warnings: [], usage: [], assetVersions: [packetId] });
+      const ancestor = capture('ancestor', 'frames:video000001:old:0:5000', '1'), current = capture('current', 'frames:video000001:new:0:5000', '2');
+      const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
+        agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 10 } as never,
+      { answer: 'The refreshed frame shows the score [cite:frames:video000001:new:0:5000].', intent: 'inspect_video', confidence: 'high',
+        warnings: [], artifacts: [] } as unknown as FinalizeAnswerInput, currentFirst ? [current, ancestor] : [ancestor, current], 1);
+      expect(compactAgentResult(result).frames?.map(item => item.imagePath)).toEqual([`/v1/agent/frames/${hex('c')}/${hex('2')}`]);
+    });
+
+  it('never substitutes another capture when the cited capture has no saved preview', async () => {
+    const { visualAnalysisExcerpts } = await import('../src/agents/providers/youtube/visual-provenance');
+    const capture = (toolCallId: string, observation: string, previews: unknown[]): EvidencePacket => {
+      const visual = visualAnalysisExcerpts({ kind: 'requested', idPrefix: `frames:video000001:${toolCallId}`, sourceId: 'youtube:video000001:frames',
+        findings: [{ observation, frames: [5000] }], sharedFindings: [], timeOf: time => time, assertAvailable: () => {} });
+      return { packetId: toolCallId, kind: 'youtube_frames', excerpts: visual.excerpts, warnings: [], usage: [], assetVersions: [toolCallId],
+        sources: [{ id: 'youtube:video000001:frames', provider: 'youtube', kind: 'frames', videoId: 'video000001' }],
+        artifacts: [{ type: 'youtube_frame_analysis', title: 'Frames', data: { videoId: 'video000001', previews } }] };
+    };
+    // The cited red-sign capture saved no preview; an uncited blue-sign capture of the same moment did.
+    const red = capture('red', 'A red sign.', []), blue = capture('blue', 'A blue sign.', [preview('2', 5000)]);
+    const result = buildAgentTurnResult({ runId: crypto.randomUUID(), conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
+      agentMessageId: crypto.randomUUID() }, { userId: 'test', creditsRemaining: 10 } as never,
+    { answer: `The sign is red [cite:${red.excerpts[0]!.id}].`, intent: 'inspect_video', confidence: 'high', warnings: [], artifacts: [] } as unknown as FinalizeAnswerInput,
+    [blue, red], 1);
+    expect(result.artifacts.find(artifact => artifact.type === 'cited_frame_previews')?.data)
+      .toEqual({ citations: [{ citationId: red.excerpts[0]!.id, frames: [] }] });
+    expect(compactAgentResult(result)).not.toHaveProperty('frames');
+  });
+
+  it('shows nothing for an older answer whose moment has more than one saved capture', () => {
+    const result = frameRun('Score [cite:f0].', [frame('f0', 'video000001', 5000)], [
+      { type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('1', 5000)] } },
+      { type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('2', 5000)] } },
+    ]);
+    expect(result).not.toHaveProperty('frames');
+  });
+
+  it('orders thumbnails like the displayed references within a group', () => {
+    const result = frameRun('Both [cite:late][cite:early].', [frame('late', 'video000001', 61000), frame('early', 'video000001', 5000)],
+      [{ type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: [preview('1', 5000), preview('2', 61000)] } }]);
+    expect(result.answer).toBe('Both [1 · 0:05][1 · 1:01].');
+    expect(result.frames?.map(item => item.timestampMs)).toEqual([5000, 61000]);
+  });
+
+  it('caps cited frames and omits the field when no cited frame has a preview', () => {
+    const times = [1, 2, 3, 4, 5, 6, 7].map(second => second * 1000);
+    const capped = frameRun(times.map((_, index) => `F${index} [cite:f${index}].`).join(' '),
+      times.map((time, index) => frame(`f${index}`, 'video000001', time)),
+      [{ type: 'youtube_frame_retrieval', data: { videoId: 'video000001', previews: times.map((time, index) => preview(String(index + 1), time)) } }]);
+    expect(capped.frames?.map(item => item.timestampMs)).toEqual(times.slice(0, 6));
+    expect(frameRun('No previews [cite:f0].', [frame('f0', 'video000001', 1000)], [])).not.toHaveProperty('frames');
+  });
 });

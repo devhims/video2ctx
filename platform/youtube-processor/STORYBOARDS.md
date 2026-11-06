@@ -1,6 +1,6 @@
 # Storyboard recovery and diagnostics
 
-YouTube can return a playable player response without exposing a storyboard on that client. The extractor checks IOS, ANDROID_VR, MWEB, then the desktop watch player. Each attempt needs both `OK` playability and a parsable storyboard spec. A failed sheet download also advances to another source, while invalid caller options stop immediately.
+YouTube can return a playable player response without exposing a storyboard on that client. The extractor checks IOS, ANDROID_VR, MWEB, then the desktop watch player. A `resolution: 'high'` request checks the desktop watch player first, because only it lists the sharper L3 level; see [STORYBOARD_RESOLUTION.md](../../reference/engineering/STORYBOARD_RESOLUTION.md). Each attempt needs both `OK` playability and a parsable storyboard spec. A failed sheet download also advances to another source, while invalid caller options stop immediately.
 
 `NOT_FOUND` means every checked response was playable but omitted storyboard metadata. Blocked players, failed HTTP requests, or unreadable watch pages leave availability uncertain and produce retryable `UNAVAILABLE`. Malformed specs produce `INVALID_RESPONSE`. If a selected source fails to download, its classified error is retained after alternatives are exhausted. These distinctions describe what was observed, not permanent video availability.
 
@@ -29,7 +29,7 @@ Find `youtube_storyboard_diagnostic` by `videoId`, time, and the per-operation `
 - `player`: client profile, HTTP status when received, whitelisted playability status, missing/malformed/valid spec, outcome, elapsed time.
 - `download`: failed selected-source download, classified code and HTTP status when available.
 - `image_normalized`: WebP and JPEG byte counts, dimensions and conversion time.
-- `complete`: selected client, extracted sheet count and elapsed time for that source.
+- `complete`: selected client, extracted sheet count, served `level` and `resolution`, and elapsed time for that source.
 - `request`: terminal error code and total elapsed time, including response validation failures.
 
 No player bodies, upstream reason text, headers, signed URLs, proxy credentials, local paths or image bytes enter these events. Logging failures do not change extraction behavior. An earlier `player` error followed by `complete` indicates recovery. These records cannot establish which client response caused a historical run that lacked them.

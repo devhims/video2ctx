@@ -10,11 +10,15 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { evidencePacketSchema, type EvidencePacket } from '../../../contracts';
 import type { AgentToolContext } from '../tool-context';
-import { storyboardManifestSchema, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS } from '../storyboard';
+import { servedResolution, storyboardManifestSchema, storyboardSchema, storyboardSheetIndexes, MAX_STORYBOARD_SHEETS, type StoryboardResolution } from '../storyboard';
 import { storyboardPreviewsSchema } from '../../../runtime/storyboard-previews';
 import { safeIdPart, videoIdSchema, youtubeVideoUrl, meteredCredits } from './provider-evidence';
 
 const DEFAULT_STORYBOARD_SHEETS = 3;
+/** Targeted timestamps need few sheets, so they get 4x the pixels per sample. Overviews keep 25 samples per sheet. */
+function requestedResolution(input: { timestampsMs?: number[] }): StoryboardResolution {
+  return input.timestampsMs ? 'high' : 'standard';
+}
 
 const retrievalInput = z.object({
   analysis: retrievalAnalysisSchema,
@@ -23,9 +27,9 @@ const retrievalInput = z.object({
   maxSheets: z.number().int().min(1).max(MAX_STORYBOARD_SHEETS).optional()
     .describe('Choose the number of sheets for a spread overview, up to 20 per call. Defaults to 3 sheets when no selection is supplied. Image payload limit is 8 MiB. Larger selections take more processing time.'),
   sheetIndexes: z.array(z.number().int().nonnegative()).min(1).max(MAX_STORYBOARD_SHEETS).refine(indexes => new Set(indexes).size === indexes.length, 'Select distinct sheet indexes.').optional()
-    .describe('Select zero-based source sheet indexes using the manifest. Choose these or timestampsMs, not both.'),
+    .describe('Select zero-based source sheet indexes using a standard-resolution manifest from an overview or index selection. Timestamp selections return a separate high-resolution manifest whose indexes do not apply here. Choose these or timestampsMs, not both.'),
   timestampsMs: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).min(1).max(MAX_STORYBOARD_SHEETS).optional()
-    .describe('Select sheets containing these sampled timestamps in milliseconds. Nearby targets share one sheet. These are not exact video frames.'),
+    .describe('Select sheets containing these sampled timestamps in milliseconds (10:00 = 600000, 1:02:03 = 3723000). Timestamp selections return the sharpest storyboard YouTube offers, usually 320x180 tiles in 3x3 sheets, so nearby targets share a sheet only within nine samples. These are not exact video frames.'),
 });
 function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementCtx) {
   if (input.sheetIndexes && input.sheetIndexes.length > (input.maxSheets ?? MAX_STORYBOARD_SHEETS)) ctx.addIssue({ code: 'custom', message: 'Selected sheet indexes exceed maxSheets.' });
@@ -37,9 +41,11 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
     description: 'Retrieve storyboard images and metadata. Supply analysis with a visual question to analyze immediately while saving; omit it for retrieval only. With videoId alone, retrieve up to 3 sheets spread across the video. Use maxSheets, sheetIndexes or timestampsMs to select other coverage. No preliminary metadata call is needed. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Use analyze_video_storyboard for questions about versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
     inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
+    // Previews are dashboard images with random IDs. Hidden from the model, which otherwise
+    // mistakes their per-sheet assetId for the analysisAssetVersions analysis needs.
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
       ...output, artifacts: output.artifacts.map(artifact => {
-        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, ...data } = artifact.data;
+        const { combinedTimingsMs: _combinedTimings, visualDiagnostics: _visualDiagnostics, timingsMs: _timings, previews: _previews, ...data } = artifact.data;
         return { ...artifact, data };
       }),
     }) }),
@@ -79,7 +85,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   context.signal.throwIfAborted();
   if (!context.provider.storyboard) throw new Error('Storyboard retrieval is unavailable.');
   const evidence = context.getEvidence?.() ?? [];
-  if (findStoryboardMetadata(parsed.videoId, evidence)) validateStoryboardSelection(parsed, evidence);
+  prevalidateStoryboardSelection(parsed, evidence);
   let previews: z.infer<typeof storyboardPreviewsSchema> | undefined;
   let previewFailed = false, previewMs = 0;
   const { response, finish, retrievalMs } = await retrieveWithAnalysis(context, parsed.analysis ? {
@@ -94,7 +100,8 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     },
     analyze: (value, analysisContext) => analyzeStoryboardEvidence(storyboardSchema.parse(value), parsed.analysis!, analysisContext, toolCallId),
   } : undefined, onReady => withRunDeadline(deadlineAt, context.signal, signal => timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
-    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false, signal, deadlineAt,
+    maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false,
+    resolution: requestedResolution(parsed), signal, deadlineAt,
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : [])), { runId: context.runId, toolCallId }),
     'Storyboard retrieval exceeded its budget.'), async (response, signal) => {
     const storyboard = storyboardSchema.parse(response.value);
@@ -125,6 +132,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     artifacts: [{ type: 'youtube_storyboard_retrieval', title: `Sampled visual evidence for ${parsed.videoId}`,
       data: { timingsMs, analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
         videoId: parsed.videoId, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
+        resolution: servedResolution(storyboard),
         sampledRanges: storyboard.sheets.map(sheet => ({ startMs: sheet.firstFrameIndex * sheet.intervalMs,
           endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs })), totalFrames: storyboard.frameCount,
         sampledFrames: storyboard.sheets.reduce((sum, sheet) => sum + sheet.frameCount, 0), intervalMs: storyboard.intervalMs } }],
@@ -144,18 +152,23 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   return finish(packet);
 }
 
-/** Validate against persisted metadata before waking the image provider or vision model. */
-function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePacket[]) {
+/** The latest saved manifest, of one resolution when given. Manifests saved before resolutions existed are standard. */
+function findStoryboardMetadata(videoId: string, evidence: readonly EvidencePacket[], resolution?: StoryboardResolution) {
   const artifacts = evidence.flatMap(packet => packet.artifacts);
-  const artifact = artifacts.reverse().find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type) && artifact.data.videoId === videoId && artifact.data.manifest);
+  const artifact = artifacts.reverse().find(artifact => ['youtube_storyboard_analysis', 'youtube_storyboard_retrieval'].includes(artifact.type)
+    && artifact.data.videoId === videoId && artifact.data.manifest
+    && (resolution === undefined || (artifact.data.resolution ?? 'standard') === resolution));
   const result = storyboardManifestSchema.safeParse(artifact?.data.manifest);
   const intervalMs = artifact?.data.intervalMs;
   if (!result.success || typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) return;
   return { manifest: result.data, intervalMs };
 }
 
-function validateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
-  const metadata = findStoryboardMetadata(input.videoId, evidence);
-  if (!metadata) throw new Error('Storyboard metadata is unavailable.');
-  storyboardSheetIndexes(metadata, input);
+/** Validate against persisted metadata before waking the image provider or vision model. */
+function prevalidateStoryboardSelection(input: z.infer<typeof getVideoStoryboardInputSchema>, evidence: readonly EvidencePacket[]) {
+  const exact = findStoryboardMetadata(input.videoId, evidence, requestedResolution(input));
+  if (exact) { storyboardSheetIndexes(exact, input); return; }
+  // Another resolution has different sheet boundaries, so it can only check the sampled range.
+  const other = input.timestampsMs && findStoryboardMetadata(input.videoId, evidence);
+  if (other) storyboardSheetIndexes(other, { timestampsMs: input.timestampsMs });
 }

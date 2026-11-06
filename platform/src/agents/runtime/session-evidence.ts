@@ -1011,12 +1011,15 @@ export async function versionEvidencePacket(packet: EvidencePacket): Promise<Evi
             : {}),
         };
       });
-    // Shared visual observations name their excerpt; keep that reference resolvable.
-    if (Array.isArray(artifact.data.sharedObservations))
-      artifact.data.sharedObservations = artifact.data.sharedObservations.map((shared) =>
-        shared && typeof shared === 'object' && typeof (shared as { excerptId?: unknown }).excerptId === 'string'
-          ? { ...shared, excerptId: ids.get((shared as { excerptId: string }).excerptId) ?? (shared as { excerptId: string }).excerptId }
-          : shared);
+    // Shared and combined visual observations name their excerpt; keep that reference resolvable.
+    for (const field of ['sharedObservations', 'combinedObservations'] as const) {
+      const observations = artifact.data[field];
+      if (Array.isArray(observations))
+        artifact.data[field] = observations.map((observation) =>
+          observation && typeof observation === 'object' && typeof (observation as { excerptId?: unknown }).excerptId === 'string'
+            ? { ...observation, excerptId: ids.get((observation as { excerptId: string }).excerptId) ?? (observation as { excerptId: string }).excerptId }
+            : observation);
+    }
   }
   return result;
 }

@@ -1309,6 +1309,144 @@ test('long transcript matches cannot crowd short-video matches out of a search',
     expect(videos(found.packets)).not.toContain(longId);
   }));
 
+test('storyboard manifests are pinned per served resolution', async () =>
+  within('storyboard-resolutions', async (store) => {
+    const board = (resolution: 'standard' | 'high', framesPerSheet: number, indexes: number[]) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000, resolution,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, tileWidth: 100, tileHeight: 100, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, tileWidth: 100, tileHeight: 100,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: resolution === 'standard' ? { partial: true, warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] }
+        : { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn()
+      // The watch page was blocked, so the high request came back at standard resolution.
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('standard', 2, [2]) })
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('high', 1, [5]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    const fallback = await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    // Standard boards carry no resolution label, matching shared assets saved before resolutions existed.
+    expect(fallback.value).toMatchObject({ resolution: undefined, meta: { warnings: ['Storyboard: high resolution unavailable; returned standard sheets'] } });
+    // The fallback is reusable as standard without another provider call.
+    await sessionProvider(p, store).storyboard!(id, undefined, { sheetIndexes: [2], maxSheets: 1 });
+    expect(storyboard).toHaveBeenCalledTimes(1);
+    // High is still missing, so the next high request asks the provider again and pins its own manifest.
+    const high = await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    expect(high.value).toMatchObject({ resolution: 'high', manifest: { framesPerSheet: 1 }, sheets: [{ firstFrameIndex: 5 }] });
+    expect(storyboard).toHaveBeenCalledTimes(2);
+    const manifests = store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest');
+    expect(manifests.map(asset => asset.details.resolution).sort()).toEqual(['high', 'standard']);
+  }));
+
+test('missing sheets for a high manifest that come back at standard resolution are neither shown nor pinned', async () =>
+  within('storyboard-mixed-levels', async (store) => {
+    const board = (resolution: 'standard' | 'high', framesPerSheet: number, indexes: number[]) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000, resolution,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, tileWidth: 100, tileHeight: 100, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, tileWidth: 100, tileHeight: 100,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn()
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board('high', 1, [5]) })
+      // Standard sheet 0 starts at frame 0, so an index check alone would accept it as high sheet 0.
+      .mockImplementationOnce(async (_id: string, _times: unknown, _options: unknown, _diagnostic: unknown, onReady?: (value: unknown) => void) => {
+        const value = board('standard', 2, [0]);
+        onReady?.(value);
+        return { cacheStatus: 'miss', value };
+      });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20, resolution: 'high' });
+    const onReady = vi.fn();
+    await expect(sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20, resolution: 'high' }, undefined, onReady))
+      .rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+    expect(storyboard).toHaveBeenLastCalledWith(id, undefined, expect.objectContaining({ sheetIndexes: [0], resolution: 'high' }), undefined, expect.any(Function));
+    expect(onReady).not.toHaveBeenCalled();
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toHaveLength(1);
+  }));
+
+test.each([
+  ['an unlabelled L3 manifest', 320, 180, 3],
+  ['a manifest whose missing sheets come back with other geometry', 100, 90, 4],
+])('a stale standard session manifest is rediscovered once: %s', async (_name, tileWidth, tileHeight, calls) =>
+  within(`storyboard-stale-${tileWidth}`, async (store) => {
+    // Before resolutions, a standard request that reached the web fallback pinned L3 with no label.
+    const board = (framesPerSheet: number, indexes: number[], tile = { tileWidth: 160, tileHeight: 90 }) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, ...tile, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, ...tile,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn().mockResolvedValueOnce({ cacheStatus: 'miss', value: board(1, [5], { tileWidth, tileHeight }) });
+    if (calls === 4) storyboard.mockResolvedValueOnce({ cacheStatus: 'miss', value: board(2, [0]) });
+    storyboard.mockResolvedValueOnce({ cacheStatus: 'miss', value: board(2, [0]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20 });
+    const result = await sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20 });
+    expect(result.value).toMatchObject({ manifest: { framesPerSheet: 2, tileWidth: 160 }, sheets: [{ firstFrameIndex: 0 }] });
+    expect(storyboard).toHaveBeenCalledTimes(calls - 1);
+    expect(storyboard).toHaveBeenLastCalledWith(id, [0], expect.objectContaining({ refresh: true }), undefined);
+    // The stale version stays pinned for evidence that cites it; the standard pointer moves on.
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest')).toHaveLength(2);
+  }));
+
+test('deleting session assets during a missing-sheet fetch stops stale-manifest rediscovery', async () =>
+  within('storyboard-rediscovery-deletion', async (store, reopen) => {
+    const board = (framesPerSheet: number, indexes: number[], tile = { tileWidth: 160, tileHeight: 90 }) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, ...tile, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, ...tile,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const started = visualGate(), held = visualGate();
+    const storyboard = vi.fn()
+      // A standard manifest plus one sheet, with geometry the tile-size check cannot recognize as stale.
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board(1, [5], { tileWidth: 100, tileHeight: 90 }) })
+      // The missing sheet comes back with other geometry after the session assets were deleted.
+      .mockImplementationOnce(async () => { started.release(); await held.promise; return { cacheStatus: 'miss', value: board(2, [0]) }; })
+      .mockResolvedValue({ cacheStatus: 'miss', value: board(2, [0]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20 });
+    const pending = sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20 });
+    const rejected = expect(pending).rejects.toThrow('Session assets changed');
+    await started.promise;
+    try { await store.delete(); } finally { held.release(); }
+    await rejected;
+    expect(storyboard).toHaveBeenCalledTimes(2);
+    expect(reopen().brief().assets).toHaveLength(0);
+  }));
+
+test.each([['metadata-only', true], ['image', false]] as const)(
+  'deleting session assets during a high request that falls back to standard keeps the session empty (%s)', async (name, metadataOnly) =>
+    within(`storyboard-fallback-deletion-${name}`, async (store, reopen) => {
+      // An unlabelled board is standard: the web page was unavailable, so the high request fell back.
+      const standard = {
+        videoId: id, frameCount: 6, intervalMs: 5000,
+        manifest: { totalSheets: 1, framesPerSheet: 6, tileWidth: 160, tileHeight: 90, columns: 6, rows: 1, lastSampleMs: 25000 },
+        selection: metadataOnly ? { mode: 'metadata' as const } : { mode: 'timestamps' as const, requestedTimestampsMs: [0] },
+        sheets: metadataOnly ? [] : [{ firstFrameIndex: 0, frameCount: 6, tileWidth: 160, tileHeight: 90,
+          columns: 6, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' }],
+        meta: { partial: false, warnings: [] },
+      };
+      const started = visualGate(), held = visualGate();
+      const storyboard = vi.fn(async () => { started.release(); await held.promise; return { cacheStatus: 'miss', value: standard }; });
+      const p = { storyboard } as unknown as YouTubeAgentProvider;
+      const pending = sessionProvider(p, store).storyboard!(id, metadataOnly ? undefined : [0],
+        { maxSheets: 20, resolution: 'high', ...(metadataOnly ? { metadataOnly: true } : {}) });
+      const rejected = expect(pending).rejects.toThrow('Session assets changed');
+      await started.promise;
+      try { await store.delete(); } finally { held.release(); }
+      await rejected;
+      expect(storyboard).toHaveBeenCalledTimes(1);
+      expect(reopen().brief().assets).toHaveLength(0);
+    }));
+
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
   within('storyboard-single-middle', async (store, reopen) => {
     const value = { videoId: id, frameCount: 6, intervalMs: 5000,
@@ -1389,17 +1527,20 @@ test('versioned shared observations keep resolvable references, and search keeps
   within('visual-provenance-versions', async (store) => {
     const { visualAnalysisExcerpts } = await import('../src/agents/providers/youtube/visual-provenance');
     const visual = visualAnalysisExcerpts({ kind: 'requested', idPrefix: `frames:${id}:tool`, sourceId: 'f',
-      findings: [{ observation: 'White is ahead.', frames: [1000] }],
+      findings: [{ observation: 'White is ahead.', frames: [1000] }, { observation: 'White leads, then black.', frames: [1000, 5000] }],
       sharedFindings: [{ observation: 'The scoreboard reads 2-1.', frames: [1000, 5000] }],
       timeOf: time => time, assertAvailable: () => {} });
     const versioned = await versionEvidencePacket({ packetId: 'packet:run:frames', kind: 'youtube_frames',
       sources: [{ id: 'f', provider: 'youtube', kind: 'frames', videoId: id }], excerpts: visual.excerpts,
-      artifacts: [{ type: 'youtube_frame_analysis', data: { provenanceVersion: 2, sharedObservations: visual.sharedObservations } }],
+      artifacts: [{ type: 'youtube_frame_analysis', data: { provenanceVersion: 2, sharedObservations: visual.sharedObservations,
+        combinedObservations: visual.combinedObservations } }],
       warnings: [], usage: [] });
     const ids = new Set(versioned.excerpts.map(excerpt => excerpt.id));
     const shared = versioned.artifacts[0]!.data.sharedObservations as Array<{ excerptId: string }>;
+    const combined = versioned.artifacts[0]!.data.combinedObservations as Array<{ excerptId: string }>;
     expect(shared).toHaveLength(1);
-    for (const reference of shared) expect(ids.has(reference.excerptId)).toBe(true);
+    expect(combined).toHaveLength(1);
+    for (const reference of [...shared, ...combined]) expect(ids.has(reference.excerptId)).toBe(true);
 
     // A legacy packet repeated one observation at two frames; a single search hit must still say so.
     const raw = await store.retrieve('frame:abcdefghijk:640:1000', 'frame', id, false,

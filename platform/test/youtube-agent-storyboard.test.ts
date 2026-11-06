@@ -53,7 +53,7 @@ async function retrieveAndAnalyze(input: Parameters<typeof executeGetVideoStoryb
 describe('storyboard agent tool', () => {
   it.each([
     { sheetIndexes: [6] }, { sheetIndexes: [5, 6, 7] },
-    { timestampsMs: [60000] }, { timestampsMs: [0, 50000], maxSheets: 1 },
+    { timestampsMs: [60000] },
   ])('rejects unavailable selections before provider and vision calls: %j', async selection => {
     const ctx = context();
     ctx.analyzeStoryboard = vi.fn();
@@ -61,6 +61,44 @@ describe('storyboard agent tool', () => {
       .rejects.toThrow('Available sheet indexes are 0 through 5');
     expect(ctx.provider.storyboard).not.toHaveBeenCalled();
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
+  });
+  it('counts timestamp sheets only against a manifest of the requested resolution', async () => {
+    const ctx = context();
+    const packet = (resolution: 'standard' | 'high', framesPerSheet: number) => ({ packetId: resolution, kind: 'youtube_storyboard' as const,
+      sources: [], excerpts: [], warnings: [], usage: [], artifacts: [{ type: 'youtube_storyboard_retrieval', data: { videoId: storyboard.videoId,
+        intervalMs: 10_000, resolution, manifest: { totalSheets: Math.ceil(100 / framesPerSheet), framesPerSheet, tileWidth: 160, tileHeight: 90,
+          columns: framesPerSheet === 25 ? 5 : 3, rows: framesPerSheet === 25 ? 5 : 3, lastSampleMs: 990_000 } } }] });
+    // 240 s and 250 s straddle standard sheets 0 and 1 (250 s each), but share high sheet 2 (180-269 s).
+    ctx.getEvidence = () => [packet('standard', 25)];
+    const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>().mockResolvedValue({ value: storyboard, cacheStatus: 'miss' });
+    ctx.provider.storyboard = provider;
+    await executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [240_000, 250_000], maxSheets: 1 }, ctx, 'boundary');
+    expect(provider).toHaveBeenCalledWith(storyboard.videoId, [240_000, 250_000], expect.objectContaining({ resolution: 'high', maxSheets: 1 }), expect.any(Function));
+    // Another resolution still bounds the sampled range.
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [1_000_000] }, ctx, 'range'))
+      .rejects.toThrow('timestamps must be below 1000000 ms');
+    // A high manifest counts high sheets.
+    ctx.getEvidence = () => [packet('standard', 25), packet('high', 9)];
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [0, 250_000], maxSheets: 1 }, ctx, 'high-count'))
+      .rejects.toThrow('within maxSheets=1');
+    expect(provider).toHaveBeenCalledTimes(1);
+  });
+  it('plans sheet indexes only with a standard manifest and requests timestamps at high resolution', async () => {
+    const ctx = context();
+    const standard = ctx.getEvidence!()[0]!;
+    // A later high-resolution manifest has more, smaller sheets. Its indexes must not validate standard requests.
+    const high = { ...standard, packetId: 'high', artifacts: standard.artifacts.map(artifact => ({ ...artifact, data: { ...artifact.data, resolution: 'high',
+      manifest: { totalSheets: 12, framesPerSheet: 1, tileWidth: 320, tileHeight: 180, columns: 1, rows: 1, lastSampleMs: 55000 } } })) };
+    ctx.getEvidence = () => [standard, high];
+    await expect(executeGetVideoStoryboard({ videoId: storyboard.videoId, sheetIndexes: [8] }, ctx, 'standard-only'))
+      .rejects.toThrow('Available sheet indexes are 0 through 5');
+    ctx.getEvidence = () => [high];
+    const provider = vi.fn<NonNullable<typeof ctx.provider.storyboard>>().mockResolvedValue({ value: { ...storyboard, resolution: 'high',
+      manifest: high.artifacts[0]!.data.manifest as Storyboard['manifest'], sheets: [{ ...storyboard.sheets[0]!, columns: 1, frameCount: 1, firstFrameIndex: 11 }] }, cacheStatus: 'miss' });
+    ctx.provider.storyboard = provider;
+    const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [55000] }, ctx, 'high');
+    expect(provider).toHaveBeenCalledWith(storyboard.videoId, [55000], expect.objectContaining({ resolution: 'high' }), expect.any(Function));
+    expect(packet.artifacts[0]!.data).toMatchObject({ resolution: 'high', manifest: { framesPerSheet: 1 } });
   });
   it.each([false, true])('retrieves missing metadata with images in one call (unrelated metadata: %s)', async unrelated => {
     const ctx = context();
@@ -151,7 +189,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execute;
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId }, ctx, 'overview');
     expect(ctx.provider.storyboard).toHaveBeenCalledExactlyOnceWith(storyboard.videoId, undefined,
-      { metadataOnly: false, maxSheets: 3, sheetIndexes: undefined, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+      { metadataOnly: false, maxSheets: 3, sheetIndexes: undefined, resolution: 'standard', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(execute.mock.calls[0]![0].input).toEqual({ videoId: storyboard.videoId, maxSheets: 3 });
     expect(execute.mock.calls[0]![0].semanticKey).not.toBe(`storyboard:${JSON.stringify({ videoId: storyboard.videoId })}`);
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
@@ -210,7 +248,7 @@ describe('storyboard agent tool', () => {
     const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, focus: 'Charts',
       sheetIndexes: [0, 1, 2, 3], maxSheets: 4 }, ctx, 'four');
     expect(upstream).toHaveBeenCalledWith(storyboard.videoId, undefined,
-      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+      { maxSheets: 4, sheetIndexes: [0, 1, 2, 3], metadataOnly: false, resolution: 'standard', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(ctx.analyzeStoryboard).not.toHaveBeenCalled();
     const { evidencePacketForModel } = await import('../src/agents/runtime/model-evidence');
     expect(evidencePacketForModel(packet).visualCoverage?.sampledRanges).toHaveLength(4);
@@ -229,7 +267,7 @@ describe('storyboard agent tool', () => {
     ctx.executeEvidenceTool = execution => { keys.push(execution.semanticKey); return execution.execute(); };
     await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [50000] }, ctx, 'first');
     const result = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 2, focus: 'Diagram', timestampsMs: [55000] }, ctx, 'second');
-    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
+    expect(provider.storyboard).toHaveBeenLastCalledWith(storyboard.videoId, [55000], { maxSheets: 2, sheetIndexes: undefined, metadataOnly: false, resolution: 'high', signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }, expect.any(Function));
     expect(keys[0]).not.toBe(keys[1]);
     expect(result.artifacts[0]!.data).toMatchObject({ sampledRanges: [{ startMs: 50000, endMs: 55000 }] });
   });
@@ -440,6 +478,25 @@ it('keeps timings in the stored result but excludes them from immediate model ou
   expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('visualDiagnostics');
   expect(JSON.stringify(evidencePacketForModel(packet))).not.toContain('timingsMs');
   expect(packet.artifacts[0]!.data.timingsMs).toBeDefined();
+});
+
+it('keeps dashboard preview IDs out of model output while retaining analysis versions', async () => {
+  const ctx = context();
+  const packet = await executeGetVideoStoryboard({ videoId: storyboard.videoId, maxSheets: 1 }, ctx, 'previews');
+  const previewId = 'f'.repeat(64);
+  const previews = [{ collectionId: 'c'.repeat(32), assetId: previewId, width: 960, height: 540 }];
+  // Inline analysis copies the retrieval data, previews included, into the analysis artifact.
+  const withPreviews = { ...packet, artifacts: [
+    { ...packet.artifacts[0]!, data: { ...packet.artifacts[0]!.data, previews, analysisAssetVersions: ['a'.repeat(64)] } },
+    { type: 'youtube_storyboard_analysis', title: 'Analysis', data: { previews } },
+  ] };
+  const output = JSON.stringify(await createGetVideoStoryboardTool(ctx).toModelOutput!({ toolCallId: 'previews',
+    input: { videoId: storyboard.videoId, maxSheets: 1 }, output: withPreviews }));
+  expect(output).not.toContain(previewId);
+  const shown = JSON.parse(JSON.parse(output).value) as { artifacts: { data: Record<string, unknown> }[] };
+  expect(shown.artifacts.every(artifact => !('previews' in artifact.data))).toBe(true);
+  expect(output).toContain('analysisAssetVersions');
+  expect(withPreviews.artifacts[0]!.data.previews).toEqual(previews);
 });
 
 it('splits a twelve-sheet tool selection and reports only successfully analyzed coverage', async () => {

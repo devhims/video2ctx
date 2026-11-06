@@ -4,7 +4,7 @@ const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const frameRequestSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   timestampsMs: z.array(timestamp).min(1).max(6)
-    .describe('Requested seek positions in milliseconds, strictly before video duration.'),
+    .describe('Requested seek positions in milliseconds (10:00 = 600000, 1:02:03 = 3723000), strictly before video duration.'),
   maxWidth: z.number().int().min(320).max(1920).default(1920),
 }).strict();
 

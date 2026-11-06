@@ -250,9 +250,12 @@ describe('frame-specific visual provenance', () => {
   });
 
   it('never attributes a compound multi-frame finding to any single frame', () => {
-    const { excerpts } = build([{ observation: 'Earlier white leads; later black leads.', frames: [10_000, 70_000] }]);
+    const { excerpts, sharedObservations, combinedObservations } = build([{ observation: 'Earlier white leads; later black leads.', frames: [70_000, 40_000, 10_000] }]);
     expect(excerpts).toHaveLength(1);
     expect(excerpts[0]!.text).toContain('not attributed to any one frame');
+    // The supporting frames are recorded together, separately from shared observations.
+    expect(sharedObservations).toEqual([]);
+    expect(combinedObservations).toEqual([{ excerptId: `frames:${VIDEO}:tool:0:combined`, framesMs: [10_000, 40_000, 70_000] }]);
   });
 
   it('warns about legacy visual packets that repeat one observation across frames', () => {

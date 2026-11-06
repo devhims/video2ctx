@@ -6992,6 +6992,18 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
+                          },
                           "width": {
                             "type": "integer",
                             "minimum": 0,
@@ -7390,6 +7402,57 @@
                         "sourceId",
                         "provider",
                         "excerpt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "frames": {
+                    "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. A citation supported by several frames contributes each of them. Storyboard samples are not included.",
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sourceId": {
+                          "type": "string",
+                          "description": "Numbered source in this result that the frame belongs to."
+                        },
+                        "timestampMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991,
+                          "description": "Moment of the cited frame in its video."
+                        },
+                        "width": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "height": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "imagePath": {
+                          "type": "string",
+                          "pattern": "^\\/v1\\/agent\\/frames\\/[a-f0-9]{64}\\/[a-f0-9]{64}$",
+                          "description": "Saved preview image, served by GET /v1/agent/frames/{collectionId}/{assetId} without authentication until the evidence or account is deleted."
+                        },
+                        "videoUrl": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "The video at the cited moment, to the second."
+                        }
+                      },
+                      "required": [
+                        "sourceId",
+                        "timestampMs",
+                        "width",
+                        "height",
+                        "imagePath",
+                        "videoUrl"
                       ],
                       "additionalProperties": false
                     }
@@ -8434,6 +8497,18 @@
                                 "minimum": 0,
                                 "maximum": 9007199254740991
                               },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "resolution": {
+                                "type": "string",
+                                "enum": [
+                                  "standard",
+                                  "high"
+                                ]
+                              },
                               "width": {
                                 "type": "integer",
                                 "minimum": 0,
@@ -9119,6 +9194,57 @@
                     "sourceId",
                     "provider",
                     "excerpt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "frames": {
+                "description": "Exact video frames cited in the answer, in citation order, when their saved previews are available. A citation supported by several frames contributes each of them. Storyboard samples are not included.",
+                "maxItems": 6,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "description": "Numbered source in this result that the frame belongs to."
+                    },
+                    "timestampMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991,
+                      "description": "Moment of the cited frame in its video."
+                    },
+                    "width": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "imagePath": {
+                      "type": "string",
+                      "pattern": "^\\/v1\\/agent\\/frames\\/[a-f0-9]{64}\\/[a-f0-9]{64}$",
+                      "description": "Saved preview image, served by GET /v1/agent/frames/{collectionId}/{assetId} without authentication until the evidence or account is deleted."
+                    },
+                    "videoUrl": {
+                      "type": "string",
+                      "format": "uri",
+                      "description": "The video at the cited moment, to the second."
+                    }
+                  },
+                  "required": [
+                    "sourceId",
+                    "timestampMs",
+                    "width",
+                    "height",
+                    "imagePath",
+                    "videoUrl"
                   ],
                   "additionalProperties": false
                 }
@@ -10163,6 +10289,18 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
+                          },
                           "width": {
                             "type": "integer",
                             "minimum": 0,
@@ -11192,6 +11330,18 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolution": {
+                            "type": "string",
+                            "enum": [
+                              "standard",
+                              "high"
+                            ]
                           },
                           "width": {
                             "type": "integer",

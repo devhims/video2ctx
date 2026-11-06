@@ -7,11 +7,15 @@ import {
   type StoryboardContactSheet,
   type StoryboardIndex,
   type StoryboardOptions,
+  type StoryboardResolution,
 } from './youtube-types';
 
 const DEFAULT_MAX_SHEETS = 12;
 const MAX_SHEETS = 20;
 const MAX_SHEET_BYTES = 4 * 1024 * 1024;
+// Mobile players list L0-L2. Only the web watch page adds L3, so standard stops at L2
+// even when a web response serves it. That keeps standard manifests stable across clients.
+const STANDARD_MAX_LEVEL = 2;
 
 type JsonObject = Record<string, unknown>;
 
@@ -185,6 +189,9 @@ export function validateStoryboardOptions(options: StoryboardOptions): number {
     || options.timestampsMs.some(time => !Number.isSafeInteger(time) || time < 0))) {
     throw new YouTubeClientError('INVALID_INPUT', 'timestampsMs must contain 1 to 20 nonnegative integer timestamps.');
   }
+  if (options.resolution !== undefined && !['standard', 'high'].includes(options.resolution)) {
+    throw new YouTubeClientError('INVALID_INPUT', 'resolution must be standard or high.');
+  }
   if (options.metadataOnly !== undefined && typeof options.metadataOnly !== 'boolean') {
     throw new YouTubeClientError('INVALID_INPUT', 'metadataOnly must be a boolean.');
   }
@@ -235,29 +242,54 @@ function metadata(warnings: string[]): SourceMetadata {
   };
 }
 
+const highResolutionUnavailable = new WeakSet<Error>();
+/** Every other client serves the same standard spec, so trying them cannot help. */
+export function isHighResolutionUnavailable(error: unknown): boolean {
+  return error instanceof Error && highResolutionUnavailable.has(error);
+}
+
 // The processor and both skill bundles are generated from this source limit.
 // Keep proxy fan-out separate from the platform's storage concurrency.
 const STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
 
+/**
+ * `allowHigh` permits levels above L2, which only a web watch response lists. The result is labelled
+ * high only when such a level is served, so a video without L3 returns the same standard manifest
+ * and sheets whichever client served it. A high request served at L2 gets a warning.
+ */
 export async function downloadStoryboard(
   raw: JsonObject,
   options: StoryboardOptions,
   fetchImpl: typeof fetch,
+  allowHigh = false,
 ): Promise<StoryboardIndex> {
   const maxSheets = validateStoryboardOptions(options);
   const spec = parseStoryboardSpec(raw);
   if (!spec) {
     throw new YouTubeClientError('NOT_FOUND', 'No storyboard is available for this video.');
   }
-  const level = [...spec.levels].sort((a, b) =>
+  const level = spec.levels.filter(level => allowHigh || level.index <= STANDARD_MAX_LEVEL).sort((a, b) =>
     (b.tileWidth * b.tileHeight) - (a.tileWidth * a.tileHeight)
   )[0];
   if (!level) {
     throw new YouTubeClientError('NOT_FOUND', 'No usable storyboard level is available for this video.');
   }
+  const resolution: StoryboardResolution = level.index > STANDARD_MAX_LEVEL ? 'high' : 'standard';
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
-  const selectedSheets = selectSheets(level, options, maxSheets);
+  let selectedSheets: number[];
+  try {
+    selectedSheets = selectSheets(level, options, maxSheets);
+  } catch (error) {
+    // High sheet indexes run past the end of the coarser L2 grid. Only the level is wrong, so retry later.
+    if (options.resolution === 'high' && resolution !== 'high' && options.sheetIndexes
+      && options.sheetIndexes.every(index => index < level.frameCount) && new Set(options.sheetIndexes).size <= maxSheets) {
+      const unavailable = new YouTubeClientError('UNAVAILABLE', 'High-resolution storyboards are temporarily unavailable.', { retryable: true });
+      highResolutionUnavailable.add(unavailable);
+      throw unavailable;
+    }
+    throw error;
+  }
   const directory = resolve(options.outputDir, 'storyboards');
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets: StoryboardContactSheet[] = [];
@@ -285,12 +317,14 @@ export async function downloadStoryboard(
       sheets.push(result.value);
     }
   }
-  const warnings = !options.metadataOnly && selectedSheets.length < availableSheets
-    ? [`Storyboard: limited to ${selectedSheets.length} sheets`]
-    : [];
+  const warnings = [
+    ...(options.resolution === 'high' && resolution !== 'high' ? ['Storyboard: high resolution unavailable; returned standard sheets'] : []),
+    ...(!options.metadataOnly && selectedSheets.length < availableSheets ? [`Storyboard: limited to ${selectedSheets.length} sheets`] : []),
+  ];
   return {
     videoId: options.videoId,
     level: level.index,
+    resolution,
     frameCount: level.frameCount,
     intervalMs: level.intervalMs,
     manifest: { totalSheets: availableSheets, framesPerSheet: capacity, tileWidth: level.tileWidth, tileHeight: level.tileHeight,

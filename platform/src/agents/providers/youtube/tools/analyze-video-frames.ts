@@ -1,4 +1,5 @@
 import { recordedFrameSelections } from '../../../runtime/frame-selection';
+import { recordedFramePreviews } from '../../../runtime/frame-previews';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { framesSchema } from '../../../../lib/youtube-frames-contract';
@@ -17,6 +18,13 @@ export function createAnalyzeVideoFramesTool(context: AgentToolContext) {
       'Analyze saved frame assetVersions with a focused visual question. Reads the original images from this session only; never extracts frames again. The runtime may load missing video metadata through get_video. Reuse these versions for follow-up questions. Returns timestamped observations with evidence IDs. Missing or deleted assets require explicit retrieval.',
     inputSchema: analyzeVideoFramesInputSchema,
     outputSchema: evidencePacketSchema,
+    // Carried previews are dashboard images with random IDs; the model analyzes assetVersions.
+    toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
+      ...output, artifacts: output.artifacts.map(artifact => {
+        const { previews: _previews, ...data } = artifact.data;
+        return { ...artifact, data };
+      }),
+    }) }),
     execute: (input, { toolCallId }) => executeAnalyzeVideoFrames(input, context, toolCallId),
   });
 }
@@ -62,6 +70,13 @@ export function executeAnalyzeVideoFrames(
       // Carry the recorded selections for the analyzed positions from the request that retrieved them.
       const selections = recordedFrameSelections(context.getEvidence?.() ?? [], versions, frames.frames.map(frame => frame.timestampMs));
       if (selections) packet.artifacts[0]!.data.selections = selections;
+      // Carry the previews saved at retrieval, so answers citing this analysis can show its frames.
+      // This run's evidence comes first; an earlier turn's retrieval is read from session storage.
+      const saved = assets.map(({ asset }, index) => ({ version: asset.version, timestampMs: values[index]!.frames[0]!.timestampMs }));
+      const previews = new Map((recordedFramePreviews(context.getEvidence?.() ?? [], saved) ?? []).map(preview => [preview.timestampMs, preview]));
+      if (previews.size < saved.length)
+        for (const preview of context.savedFramePreviews?.(saved) ?? []) if (!previews.has(preview.timestampMs)) previews.set(preview.timestampMs, preview);
+      if (previews.size) packet.artifacts[0]!.data.previews = [...previews.values()].sort((a, b) => a.timestampMs - b.timestampMs);
       if (assets.some(({ asset }) => !asset.current)) packet.warnings.unshift({
         code: 'SUPERSEDED_SESSION_EVIDENCE', message: 'Analysis uses an older stored frame version.',
       });
@@ -115,6 +130,7 @@ export async function analyzeFrameEvidence(frames: z.infer<typeof framesSchema>,
           failures: frames.failures,
           provenanceVersion: VISUAL_PROVENANCE_VERSION,
           sharedObservations: visual.sharedObservations,
+          combinedObservations: visual.combinedObservations,
         },
       },
     ],

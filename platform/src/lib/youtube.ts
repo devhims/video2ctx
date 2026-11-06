@@ -134,7 +134,8 @@ async function cached<T extends VideoResourceOperation>(
   sessionReceipt = false,
   onReady?: (value: ResourceResult<T>) => void,
 ): Promise<CachedResult<ResourceResult<T> & { freshness?: Record<string, unknown> }>> {
-  const legacyCacheKey = `youtube:v1:${await hash(JSON.stringify([type, id]))}`;
+  const highStoryboard = operation.kind === 'storyboard' && operation.resolution === 'high';
+  const legacyCacheKey = `youtube:v1:${await hash(JSON.stringify(highStoryboard ? [type, id, 'high'] : [type, id]))}`;
   const catalog = videoCatalog(env);
   const resource = videoResourceKey(operation);
   const cacheKey = catalog && resource ? `video-resource:v1:${await hash(JSON.stringify(resource))}` : legacyCacheKey;

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { ApiError } from '../../../lib/http';
 
 export const MAX_STORYBOARD_SHEETS = 20;
+/** Standard is the mobile players' L2. High adds the web watch page's sharper L3 when a video has one. */
+export type StoryboardResolution = 'standard' | 'high';
 
 const positive = z.number().int().positive();
 export const storyboardManifestSchema = z.object({
@@ -16,10 +18,16 @@ export interface StoryboardSelectionOptions {
   maxSheets?: number;
   sheetIndexes?: number[];
   metadataOnly?: boolean;
+  resolution?: StoryboardResolution;
 }
 export const storyboardSchema = z.object({
   manifest: storyboardManifestSchema.optional(),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  /**
+   * Present only for high (L3) boards. Standard is dropped so new standard payloads stay
+   * byte-identical to shared assets saved before resolutions existed.
+   */
+  resolution: z.preprocess(value => value === 'standard' ? undefined : value, z.literal('high').optional()),
   frameCount: positive,
   intervalMs: positive,
   selection: z.object({ mode: z.enum(['leading', 'spread', 'timestamps', 'indexes', 'metadata']),
@@ -53,6 +61,10 @@ export const storyboardSchema = z.object({
   }
 });
 export type Storyboard = z.infer<typeof storyboardSchema>;
+
+export function servedResolution(board: Pick<Storyboard, 'resolution'>): StoryboardResolution {
+  return board.resolution ?? 'standard';
+}
 
 /** Image-download failures do not make the discovered manifest incomplete. */
 export function storyboardMetadata(board: Storyboard): Storyboard {

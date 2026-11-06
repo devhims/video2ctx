@@ -26,6 +26,7 @@ const publicExtractionEventSchema = z.object({
   status: z.number().int().min(100).max(599).optional(), elapsedMs: metric.optional(),
   timestampMs: count.optional(), candidateIndex: count.optional(), candidateCount: count.optional(),
   attempt: count.optional(), delayMs: metric.optional(), sheetCount: count.optional(),
+  level: count.optional(), resolution: z.enum(['standard', 'high']).optional(),
   width: count.optional(), height: count.optional(), sourceWidth: count.optional(), sourceHeight: count.optional(),
   formatId: count.optional(), inputBytes: count.optional(), outputBytes: count.optional(),
   exitCode: z.number().int().min(-255).max(255).optional(),
