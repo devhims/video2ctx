@@ -1394,6 +1394,34 @@ test.each([
     expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest')).toHaveLength(2);
   }));
 
+test('deleting session assets during a missing-sheet fetch stops stale-manifest rediscovery', async () =>
+  within('storyboard-rediscovery-deletion', async (store, reopen) => {
+    const board = (framesPerSheet: number, indexes: number[], tile = { tileWidth: 160, tileHeight: 90 }) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, ...tile, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, ...tile,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const started = visualGate(), held = visualGate();
+    const storyboard = vi.fn()
+      // A standard manifest plus one sheet, with geometry the tile-size check cannot recognize as stale.
+      .mockResolvedValueOnce({ cacheStatus: 'miss', value: board(1, [5], { tileWidth: 100, tileHeight: 90 }) })
+      // The missing sheet comes back with other geometry after the session assets were deleted.
+      .mockImplementationOnce(async () => { started.release(); await held.promise; return { cacheStatus: 'miss', value: board(2, [0]) }; })
+      .mockResolvedValue({ cacheStatus: 'miss', value: board(2, [0]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20 });
+    const pending = sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20 });
+    const rejected = expect(pending).rejects.toThrow('Session assets changed');
+    await started.promise;
+    try { await store.delete(); } finally { held.release(); }
+    await rejected;
+    expect(storyboard).toHaveBeenCalledTimes(2);
+    expect(reopen().brief().assets).toHaveLength(0);
+  }));
+
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
   within('storyboard-single-middle', async (store, reopen) => {
     const value = { videoId: id, frameCount: 6, intervalMs: 5000,

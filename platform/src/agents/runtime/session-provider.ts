@@ -151,13 +151,18 @@ export function sessionProvider(
           visual('storyboard', id, options.signal, () => {
           // A stale manifest, such as unlabelled L3 pinned as standard before resolutions existed,
           // is rediscovered once. Earlier pinned versions stay readable for existing evidence.
-          const attempt = async (rediscover: boolean): Promise<CachedResult<Storyboard>> => {
+          // One deletion generation spans every attempt, so rediscovery cannot republish deleted evidence.
+          const generation = store.generation();
+          const rediscover = () => {
+            if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
+            return attempt(true);
+          };
+          const attempt = async (rediscovering: boolean): Promise<CachedResult<Storyboard>> => {
             options.signal?.throwIfAborted();
-            const generation = store.generation();
             // Sheet indexes are level-specific, so each served resolution has its own manifest.
             const requested = options.resolution ?? 'standard';
             const manifestKey = (resolution: StoryboardResolution) => `storyboard:${id}:manifest${resolution === 'high' ? ':high' : ''}`;
-            const fresh = rediscover || (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
+            const fresh = rediscovering || (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
             let prefetched: CachedResult<Storyboard> | undefined;
             let loaded = false;
             const retrieveManifest = (resolution: StoryboardResolution, reload: boolean, load: () => Promise<CachedResult<Storyboard>>) => store.retrieve(
@@ -193,7 +198,7 @@ export function sessionProvider(
               metadata = await retrieveManifest(served, true, async () => fallback);
             }
             // Only a pinned manifest can be legacy; the provider no longer serves unlabelled L3.
-            if (!loaded && !fresh && legacyHighManifest(metadata.value)) return attempt(true);
+            if (!loaded && !fresh && legacyHighManifest(metadata.value)) return rediscover();
             if (metadata.assetVersions?.length) refreshed.add(manifestKey(served));
             options.signal?.throwIfAborted();
             if (options.metadataOnly) return metadata;
@@ -232,7 +237,7 @@ export function sessionProvider(
                 })); } : undefined,
               );
               if (!sameManifest(fetched.value)) {
-                if (!fresh && servedResolution(fetched.value) === served) return attempt(true);
+                if (!fresh && servedResolution(fetched.value) === served) return rediscover();
                 throw storyboardResolutionUnavailable();
               }
               onReady?.(storyboardSchema.parse({ ...fetched.value,
