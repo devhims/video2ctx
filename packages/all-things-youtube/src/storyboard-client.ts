@@ -1,4 +1,4 @@
-import { downloadStoryboard, parseStoryboardSpec, readBoundedBytes, validateStoryboardOptions } from './storyboard';
+import { downloadStoryboard, isHighResolutionUnavailable, parseStoryboardSpec, readBoundedBytes, validateStoryboardOptions } from './storyboard';
 import { createYouTubeTransport } from './youtube-transport';
 import { WEB_PROFILE, PLAYER_PROFILES, extractInitialPlayerResponse } from './youtube-player';
 import { isBotChallengeReason, YouTubeClientError, type StoryboardOptions, type YouTubeClientOptions } from './youtube-types';
@@ -130,6 +130,7 @@ export async function getStoryboardWithFallback(options: StoryboardRequest) {
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof YouTubeClientError && error.code === 'INVALID_INPUT') throw error;
+        if (isHighResolutionUnavailable(error)) throw error;
         downloadError = error instanceof YouTubeClientError ? error
           : new YouTubeClientError('UPSTREAM_ERROR', 'Storyboard download failed.', { retryable: true });
         emit({ stage: 'download', profile: profile.name, outcome: 'error', code: downloadError.code,

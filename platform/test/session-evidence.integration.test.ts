@@ -1367,6 +1367,33 @@ test('missing sheets for a high manifest that come back at standard resolution a
     expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_sheet')).toHaveLength(1);
   }));
 
+test.each([
+  ['an unlabelled L3 manifest', 320, 180, 3],
+  ['a manifest whose missing sheets come back with other geometry', 100, 90, 4],
+])('a stale standard session manifest is rediscovered once: %s', async (_name, tileWidth, tileHeight, calls) =>
+  within(`storyboard-stale-${tileWidth}`, async (store) => {
+    // Before resolutions, a standard request that reached the web fallback pinned L3 with no label.
+    const board = (framesPerSheet: number, indexes: number[], tile = { tileWidth: 160, tileHeight: 90 }) => ({
+      videoId: id, frameCount: 6, intervalMs: 5000,
+      manifest: { totalSheets: 6 / framesPerSheet, framesPerSheet, ...tile, columns: framesPerSheet, rows: 1, lastSampleMs: 25000 },
+      selection: { mode: 'indexes' as const, requestedSheetIndexes: indexes },
+      sheets: indexes.map(index => ({ firstFrameIndex: index * framesPerSheet, frameCount: framesPerSheet, ...tile,
+        columns: framesPerSheet, rows: 1, intervalMs: 5000, imageBase64: '/9j/2Q==' })),
+      meta: { partial: false, warnings: [] },
+    });
+    const storyboard = vi.fn().mockResolvedValueOnce({ cacheStatus: 'miss', value: board(1, [5], { tileWidth, tileHeight }) });
+    if (calls === 4) storyboard.mockResolvedValueOnce({ cacheStatus: 'miss', value: board(2, [0]) });
+    storyboard.mockResolvedValueOnce({ cacheStatus: 'miss', value: board(2, [0]) });
+    const p = { storyboard } as unknown as YouTubeAgentProvider;
+    await sessionProvider(p, store).storyboard!(id, [25000], { maxSheets: 20 });
+    const result = await sessionProvider(p, store).storyboard!(id, [0], { maxSheets: 20 });
+    expect(result.value).toMatchObject({ manifest: { framesPerSheet: 2, tileWidth: 160 }, sheets: [{ firstFrameIndex: 0 }] });
+    expect(storyboard).toHaveBeenCalledTimes(calls - 1);
+    expect(storyboard).toHaveBeenLastCalledWith(id, [0], expect.objectContaining({ refresh: true }), undefined);
+    // The stale version stays pinned for evidence that cites it; the standard pointer moves on.
+    expect(store.brief().assets.filter(asset => asset.kind === 'storyboard_manifest')).toHaveLength(2);
+  }));
+
 test('single-sheet storyboard reuses the processor middle sheet across restored sessions', async () =>
   within('storyboard-single-middle', async (store, reopen) => {
     const value = { videoId: id, frameCount: 6, intervalMs: 5000,

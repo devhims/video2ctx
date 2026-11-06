@@ -213,3 +213,18 @@ test('the public API forwards resolution and rejects an unknown one before conta
     resolution: 'max' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   expect(fetch).not.toHaveBeenCalled();
 });
+
+test('high sheet indexes beyond the standard grid stay retryable when only mobile responds', async () => {
+  // 30 samples: 4 high sheets of 9, but 2 standard sheets of 25. High sheet 3 has no standard equivalent.
+  const blocked = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'Sign in to confirm you’re not a bot' } };
+  const fetch = players({ watch: blocked, mobile: [mobileSpec, mobileSpec, mobileSpec] });
+  await expect(createYouTubeClient({ fetch }).getStoryboard({ videoId: 'abcdefghijk', outputDir: await storyboardDir(),
+    sheetIndexes: [3], resolution: 'high' })).rejects.toMatchObject({ code: 'UNAVAILABLE', retryable: true });
+  // The remaining mobile clients serve the same standard spec, so they are not tried.
+  expect(fetch).toHaveBeenCalledTimes(2);
+  // Indexes invalid at any level, and standard requests, keep INVALID_INPUT.
+  await expect(createYouTubeClient({ fetch: players({ watch: blocked, mobile: [mobileSpec] }) }).getStoryboard({ videoId: 'abcdefghijk',
+    outputDir: await storyboardDir(), sheetIndexes: [30], resolution: 'high' })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  await expect(createYouTubeClient({ fetch: players({ mobile: [mobileSpec] }) }).getStoryboard({ videoId: 'abcdefghijk',
+    outputDir: await storyboardDir(), sheetIndexes: [3] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+});

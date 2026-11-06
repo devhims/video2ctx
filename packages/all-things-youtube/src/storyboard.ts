@@ -242,6 +242,12 @@ function metadata(warnings: string[]): SourceMetadata {
   };
 }
 
+const highResolutionUnavailable = new WeakSet<Error>();
+/** Every other client serves the same standard spec, so trying them cannot help. */
+export function isHighResolutionUnavailable(error: unknown): boolean {
+  return error instanceof Error && highResolutionUnavailable.has(error);
+}
+
 // The processor and both skill bundles are generated from this source limit.
 // Keep proxy fan-out separate from the platform's storage concurrency.
 const STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
@@ -271,7 +277,19 @@ export async function downloadStoryboard(
   const resolution: StoryboardResolution = level.index > STANDARD_MAX_LEVEL ? 'high' : 'standard';
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
-  const selectedSheets = selectSheets(level, options, maxSheets);
+  let selectedSheets: number[];
+  try {
+    selectedSheets = selectSheets(level, options, maxSheets);
+  } catch (error) {
+    // High sheet indexes run past the end of the coarser L2 grid. Only the level is wrong, so retry later.
+    if (options.resolution === 'high' && resolution !== 'high' && options.sheetIndexes
+      && options.sheetIndexes.every(index => index < level.frameCount) && new Set(options.sheetIndexes).size <= maxSheets) {
+      const unavailable = new YouTubeClientError('UNAVAILABLE', 'High-resolution storyboards are temporarily unavailable.', { retryable: true });
+      highResolutionUnavailable.add(unavailable);
+      throw unavailable;
+    }
+    throw error;
+  }
   const directory = resolve(options.outputDir, 'storyboards');
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets: StoryboardContactSheet[] = [];

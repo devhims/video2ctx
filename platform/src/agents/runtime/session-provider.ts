@@ -2,7 +2,7 @@ import type { RunAssetCache } from './run-asset-cache';
 import { visualSpan } from '../../lib/visual-diagnostics';
 import { timeStoryboardStage } from '../../lib/storyboard-timing';
 import { mapInBatches, FRAME_IO_CONCURRENCY } from '../../lib/map-in-batches';
-import { storyboardResolutionUnavailable } from '../../lib/video-resources';
+import { legacyHighManifest, storyboardResolutionUnavailable } from '../../lib/video-resources';
 import type { CachedResult } from '../../lib/youtube';
 import { framesSchema, type VideoFrames } from '../../lib/youtube-frames-contract';
 import type { YouTubeAgentProvider } from '../providers/youtube/provider';
@@ -148,14 +148,18 @@ export function sessionProvider(
     },
     storyboard: provider.storyboard
       ? (id, timestamps, options = {}, diagnostic, onReady) =>
-          visual('storyboard', id, options.signal, async () => {
+          visual('storyboard', id, options.signal, () => {
+          // A stale manifest, such as unlabelled L3 pinned as standard before resolutions existed,
+          // is rediscovered once. Earlier pinned versions stay readable for existing evidence.
+          const attempt = async (rediscover: boolean): Promise<CachedResult<Storyboard>> => {
             options.signal?.throwIfAborted();
             const generation = store.generation();
             // Sheet indexes are level-specific, so each served resolution has its own manifest.
             const requested = options.resolution ?? 'standard';
             const manifestKey = (resolution: StoryboardResolution) => `storyboard:${id}:manifest${resolution === 'high' ? ':high' : ''}`;
-            const fresh = (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
+            const fresh = rediscover || (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
             let prefetched: CachedResult<Storyboard> | undefined;
+            let loaded = false;
             const retrieveManifest = (resolution: StoryboardResolution, reload: boolean, load: () => Promise<CachedResult<Storyboard>>) => store.retrieve(
               manifestKey(resolution),
               'storyboard_manifest',
@@ -173,6 +177,7 @@ export function sessionProvider(
               options.signal,
             );
             let metadata = await retrieveManifest(requested, fresh, async () => {
+                loaded = true;
                 if (options.metadataOnly) return provider.storyboard!(id, undefined,
                   { metadataOnly: true, ...(options.resolution ? { resolution: options.resolution } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...(fresh ? {refresh:true} : {}) }, diagnostic);
                 prefetched = await provider.storyboard!(id, timestamps,
@@ -187,6 +192,8 @@ export function sessionProvider(
               const fallback = metadata;
               metadata = await retrieveManifest(served, true, async () => fallback);
             }
+            // Only a pinned manifest can be legacy; the provider no longer serves unlabelled L3.
+            if (!loaded && !fresh && legacyHighManifest(metadata.value)) return attempt(true);
             if (metadata.assetVersions?.length) refreshed.add(manifestKey(served));
             options.signal?.throwIfAborted();
             if (options.metadataOnly) return metadata;
@@ -224,7 +231,10 @@ export function sessionProvider(
                   sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
                 })); } : undefined,
               );
-              if (!sameManifest(fetched.value)) throw storyboardResolutionUnavailable();
+              if (!sameManifest(fetched.value)) {
+                if (!fresh && servedResolution(fetched.value) === served) return attempt(true);
+                throw storyboardResolutionUnavailable();
+              }
               onReady?.(storyboardSchema.parse({ ...fetched.value,
                 sheets: [...results.flatMap(result => result.value.sheets), ...fetched.value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),
               }));
@@ -295,6 +305,8 @@ export function sessionProvider(
               verifiedImages: results.flatMap(result => result.verifiedImages ?? []),
               assetVersions: [manifestVersion, ...results.flatMap((r) => r.assetVersions ?? [])],
             };
+          };
+          return attempt(false);
           })
       : undefined,
     frames: provider.frames

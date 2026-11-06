@@ -226,6 +226,10 @@ function metadata(warnings) {
     warnings
   };
 }
+var highResolutionUnavailable = /* @__PURE__ */ new WeakSet();
+function isHighResolutionUnavailable(error) {
+  return error instanceof Error && highResolutionUnavailable.has(error);
+}
 var STORYBOARD_DOWNLOAD_CONCURRENCY = 4;
 async function downloadStoryboard(raw, options, fetchImpl, allowHigh = false) {
   const maxSheets = validateStoryboardOptions(options);
@@ -242,7 +246,17 @@ async function downloadStoryboard(raw, options, fetchImpl, allowHigh = false) {
   const resolution = level.index > STANDARD_MAX_LEVEL ? "high" : "standard";
   const capacity = level.columns * level.rows;
   const availableSheets = Math.ceil(level.frameCount / capacity);
-  const selectedSheets = selectSheets(level, options, maxSheets);
+  let selectedSheets;
+  try {
+    selectedSheets = selectSheets(level, options, maxSheets);
+  } catch (error) {
+    if (options.resolution === "high" && resolution !== "high" && options.sheetIndexes && options.sheetIndexes.every((index) => index < level.frameCount) && new Set(options.sheetIndexes).size <= maxSheets) {
+      const unavailable = new YouTubeClientError("UNAVAILABLE", "High-resolution storyboards are temporarily unavailable.", { retryable: true });
+      highResolutionUnavailable.add(unavailable);
+      throw unavailable;
+    }
+    throw error;
+  }
   const directory = resolve(options.outputDir, "storyboards");
   if (!options.metadataOnly) await mkdir(directory, { recursive: true });
   const sheets = [];
@@ -687,6 +701,7 @@ async function getStoryboardWithFallback(options) {
       } catch (error) {
         signal.throwIfAborted();
         if (error instanceof YouTubeClientError && error.code === "INVALID_INPUT") throw error;
+        if (isHighResolutionUnavailable(error)) throw error;
         downloadError = error instanceof YouTubeClientError ? error : new YouTubeClientError("UPSTREAM_ERROR", "Storyboard download failed.", { retryable: true });
         emit({
           stage: "download",
