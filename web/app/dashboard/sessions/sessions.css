@@ -105,16 +105,12 @@
 .agent-sources { margin-top: 24px; }
 .agent-cited-frames { margin-top: 24px; }
 .agent-cited-frames h3 { font-size: 11px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
-/* Large enough to read slide text in place: one frame spans the answer up to 640px, several sit two per row. */
-.agent-cited-frame-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; }
-.agent-cited-frame-grid.single { grid-template-columns: minmax(0, 640px); }
-.agent-cited-frame { display: flex; flex-direction: column; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-.agent-sessions .agent-cited-frame-image { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; cursor: zoom-in; }
-.agent-sessions .agent-cited-frame-image:hover { background: #000; }
-.agent-cited-frame-image img { display: block; width: 100%; height: auto; }
-/* Side by side, frames share one shape so rows align; a single frame keeps its own. */
-.agent-cited-frame-grid:not(.single) .agent-cited-frame-image { aspect-ratio: 16 / 9; }
-.agent-cited-frame-grid:not(.single) .agent-cited-frame-image img { position: absolute; inset: 0; height: 100%; object-fit: contain; }
+/* Same size as inspected-frame previews: half the answer column in a 16:9 box, one column on phones. */
+.agent-cited-frame-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.agent-cited-frame { display: flex; flex-direction: column; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.agent-sessions .agent-cited-frame-image { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; padding: 0; border: 0; border-radius: 0; background: var(--color-dashboard-surface-muted); cursor: zoom-in; }
+.agent-sessions .agent-cited-frame-image:hover { background: var(--color-dashboard-surface-muted); }
+.agent-cited-frame-image img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
 .agent-cited-frame-image .agent-frame-zoom { opacity: 0; transition: opacity .15s ease; }
 .agent-cited-frame-image:is(:hover, :focus-visible) .agent-frame-zoom { opacity: 1; }
 .agent-cited-frame figcaption { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; font-size: 12px; line-height: 1.5; border-top: 1px solid var(--line); }
@@ -125,6 +121,7 @@
 .agent-frame-viewer footer a { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; font-size: 12px; color: var(--ink); text-decoration: none; }
 @media (hover: none) { .agent-cited-frame-image .agent-frame-zoom { opacity: 1; } }
 @media (max-width: 700px) {
+  .agent-cited-frame-grid { grid-template-columns: minmax(0, 1fr); }
   .agent-cited-frame figcaption { flex-wrap: wrap; row-gap: 2px; }
   .agent-cited-frame-title { order: 3; flex-basis: 100%; }
 }

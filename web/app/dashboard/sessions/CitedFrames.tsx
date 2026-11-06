@@ -7,8 +7,8 @@ import { citedFrameImageUrl, citedFrameLabel, safeSourceUrl, type CitedFrame } f
 
 type Source = { id: string; title: string };
 
-/** Exact frames the answer cites, shown large enough to read without opening them. Selecting an
- * image enlarges it; the caption opens the video at that moment. A deleted preview disappears. */
+/** Exact frames the answer cites, sized like the inspected-frame previews. Selecting an image
+ * enlarges it; the caption opens the video at that moment. A deleted preview disappears. */
 export function CitedFrames({ frames, sources = [] }: { frames: CitedFrame[]; sources?: Source[] }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
@@ -29,7 +29,7 @@ export function CitedFrames({ frames, sources = [] }: { frames: CitedFrame[]; so
   if (!visible.length) return null;
   return <section className='agent-cited-frames' aria-label='Frames cited in this answer'>
     <h3>{visible.length === 1 ? 'Frame cited' : 'Frames cited'}</h3>
-    <div className={`agent-cited-frame-grid${visible.length === 1 ? ' single' : ''}`}>{visible.map(({ frame, image, href, label, time, title }) =>
+    <div className='agent-cited-frame-grid'>{visible.map(({ frame, image, href, label, time, title }) =>
       <figure key={frame.imagePath} className='agent-cited-frame'>
         <button type='button' className='agent-cited-frame-image' aria-label={`Enlarge frame ${label}`} onClick={() => setSelected(frame.imagePath)}>
           <Image unoptimized src={image} width={frame.width} height={frame.height} loading='lazy'
