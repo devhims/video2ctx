@@ -77,9 +77,11 @@ export async function* openYouTubeFrameSources(env: Env, videoId: string, maxWid
         if (group.isLive === undefined) metadata ??= await frameAbortable(signal, () => getDetails({ videoId, ...options }));
         live = group.isLive === true || (group.isLive === undefined && metadata?.isLive === true);
         if (live) throw new FrameMediaError('unsupported');
-        const [preferred, ...alternates] = group.candidates.filter(c => c.mimeType.includes('avc1'));
-        // Prefer detail first, then the progressive source that avoids adaptive range failures.
-        const candidates = preferred ? [preferred, ...alternates.filter(c => c.progressive), ...alternates.filter(c => !c.progressive)] : [];
+        const avc = group.candidates.filter(c => c.mimeType.includes('avc1'));
+        // Progressive 360p first. YouTube usually refuses adaptive range reads past the start
+        // of the file with HTTP 403, so sharper streams remain only as a fallback, for example
+        // for live replays that offer no progressive file.
+        const candidates = [...avc.filter(c => c.progressive), ...avc.filter(c => !c.progressive)];
         for (const candidate of candidates) {
           // Resume here only for missing frames.
           signal.throwIfAborted();

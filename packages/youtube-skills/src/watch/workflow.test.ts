@@ -211,6 +211,13 @@ describe('youtube-ctx visual workflow', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  test.each([[false, [1, 0]], [true, [0, 1]]] as const)('tries only the iOS and Android media profiles (preferResolution %s)', async (preferResolution, order) => {
+    mocks.loadMediaCandidateGroup.mockResolvedValue(undefined);
+    await expect(extractFrames({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', timestampsMs: [1_000], preferResolution }))
+      .rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE' });
+    expect(mocks.loadMediaCandidateGroup.mock.calls.map(call => call[0])).toEqual(order);
+  });
+
   test('includes contact-sheet evidence when storyboards are explicitly requested', async () => {
     const result = await getWatchIndex({ videoId: 'abcdefghijk', outputDir: '/tmp/watch-test', withStoryboards: true });
 

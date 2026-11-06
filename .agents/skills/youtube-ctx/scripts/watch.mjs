@@ -22386,9 +22386,10 @@ async function extractFramesWithinBudget(options, deadlineAt) {
   const budget = new TransferBudget();
   const frames = /* @__PURE__ */ new Map();
   const lastErrors = /* @__PURE__ */ new Map();
-  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps2.length && Date.now() < deadlineAt; profileIndex += 1) {
+  for (const profileIndex of options.preferResolution ? [0, 1] : [1, 0]) {
+    if (frames.size >= timestamps2.length || Date.now() >= deadlineAt) break;
     const group = await loadMediaCandidateGroup(
-      options.preferResolution ? profileIndex : [1, 0, 2, 3][profileIndex],
+      profileIndex,
       options.videoId,
       maxWidth,
       clientOptions,

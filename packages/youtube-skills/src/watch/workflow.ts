@@ -236,9 +236,13 @@ async function extractFramesWithinBudget(options: ExtractFramesRequest, deadline
   const frames = new Map<number, ExtractedFrame>();
   const lastErrors = new Map<number, unknown>();
 
-  for (let profileIndex = 0; profileIndex < 4 && frames.size < timestamps.length && Date.now() < deadlineAt; profileIndex += 1) {
+  // Only the iOS and Android clients still return playable media. ANDROID_VR now requires
+  // sign-in and MWEB cannot play these streams, so neither is tried here; MWEB still serves
+  // broadcast checks in innertube.ts.
+  for (const profileIndex of options.preferResolution ? [0, 1] : [1, 0]) {
+    if (frames.size >= timestamps.length || Date.now() >= deadlineAt) break;
     const group = await loadMediaCandidateGroup(
-      options.preferResolution ? profileIndex : [1, 0, 2, 3][profileIndex]!,
+      profileIndex,
       options.videoId,
       maxWidth,
       clientOptions,

@@ -142,7 +142,7 @@ test('uncertain broadcasts retain the existing FFmpeg verification path', async 
   expect(fetch).not.toHaveBeenCalled();
 });
 
-test('prefers the sharper supported candidate over progressive 360p', async () => {
+test('prefers progressive 360p over a sharper adaptive candidate', async () => {
   await setup();
   const candidate = { url: 'https://r1.googlevideo.com/videoplayback', mimeType: 'video/mp4; codecs="avc1"' };
   vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ profile: 'android', candidates: [
@@ -150,7 +150,7 @@ test('prefers the sharper supported candidate over progressive 360p', async () =
     { ...candidate, formatId: 18, width: 640, height: 360, progressive: true },
   ] });
   const source = await openYouTubeFrameSource(env, id, 1280, new AbortController().signal);
-  expect(source.formatId).toBe(136);
+  expect(source.formatId).toBe(18);
   expect(vi.mocked(loadMediaCandidateGroup).mock.calls[0]![4]).toBe(true);
   await source.close();
 });
@@ -165,17 +165,17 @@ test('records safe source stages without provider messages or URLs', async () =>
   expect(loadMediaCandidateGroup).toHaveBeenCalledOnce();
 });
 
-test('recovers a blocked sharper source with a progressive source', async () => {
+test('falls back to a sharper source when the progressive source is refused', async () => {
   const { fetch } = await setup();
   const read = fetch.getMockImplementation()!;
   vi.mocked(loadMediaCandidateGroup).mockResolvedValue({ profile: 'android', candidates: [
     { url: 'https://r1.googlevideo.com/high', formatId: 136, width: 1280, progressive: false, mimeType: 'video/mp4; codecs="avc1"' },
     { url: 'https://r1.googlevideo.com/low', formatId: 18, width: 640, progressive: true, mimeType: 'video/mp4; codecs="avc1"' },
   ] });
-  fetch.mockImplementation(async (request, init) => new URL((request as Request).url).pathname === '/high'
+  fetch.mockImplementation(async (request, init) => new URL((request as Request).url).pathname === '/low'
     ? new Response('', { status: 403 }) : read(request, init));
   const source = await openYouTubeFrameSource(env, id, 1280, new AbortController().signal);
-  expect(source.formatId).toBe(18);
+  expect(source.formatId).toBe(136);
   expect((await source.clip(2.5)).bytes.length).toBeGreaterThan(0);
   await source.close();
 });
@@ -233,7 +233,7 @@ test('confirmed bot challenges are redacted, cooled, and can reach the fourth ro
   expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
 });
 
-test('tries progressive recovery before spending its source attempts on more adaptive formats', async () => {
+test('tries the progressive source before adaptive formats, then the sharpest adaptive one', async () => {
   await setup();
   vi.mocked(normalizedProxyUrls).mockReturnValue(['https://one.test']);
   vi.mocked(planProxyOrder).mockResolvedValue({ order: [0] } as Awaited<ReturnType<typeof planProxyOrder>>);
@@ -243,8 +243,8 @@ test('tries progressive recovery before spending its source attempts on more ada
     { ...base, formatId: 134, width: 640 }, { ...base, formatId: 18, width: 640, progressive: true },
   ] });
   const sources = openYouTubeFrameSources(env, id, 1280, new AbortController().signal);
-  expect((await sources.next()).value).toMatchObject({ formatId: 136 });
   expect((await sources.next()).value).toMatchObject({ formatId: 18 });
+  expect((await sources.next()).value).toMatchObject({ formatId: 136 });
   await sources.return();
 });
 
