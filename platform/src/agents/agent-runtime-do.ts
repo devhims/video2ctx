@@ -1050,7 +1050,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
       // An application fallback is checked against what this run had, not earlier turns' cited content.
       runPackets: this.admittedRunEvidence(runId, history),
-    } : undefined);
+    } : undefined, (decision.route === 'inspect_video' || decision.route === 'topic_research')
+      && (decision.frameAccess || decision.refreshFramesOnly) ? { access: decision.frameAccess } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);

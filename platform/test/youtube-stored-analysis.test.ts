@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { z } from 'zod';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
-import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
+import { evidencePacketSchema, type EvidencePacket, type FinalizeAnswerInput, type FrameAccess } from '../src/agents/contracts';
 import { createCapabilityToolSet } from '../src/agents/providers/youtube/tool-library';
 import { executeGetVideoTranscriptForModel } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
@@ -114,8 +115,20 @@ function setup() {
 }
 const kinds = ['transcript', 'frame', 'storyboard_sheet'] as const;
 
+/** Finalizes through the application's answer builder, which owns the frame activity notes. */
+function finalizeThroughApplication(context: AgentToolContext, packets: EvidencePacket[], access: FrameAccess, earlier: EvidencePacket[] = []) {
+  context.runId = crypto.randomUUID();
+  const identity = { runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
+  const finalize = vi.fn(async (_id: string, input: FinalizeAnswerInput) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 },
+    input, [...earlier, ...packets], 0, undefined, { access }));
+  context.finalize = finalize;
+  return async () => (await finalize.mock.results.at(-1)!.value).answer as string;
+}
+
 it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and only fetches 10:45 (saved image %s)', async savedState => {
-  const { context, provider, store, frames } = setup();
+  const { context, provider, store, frames, packets } = setup();
+  const frameAccess = [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }];
+  const answer = finalizeThroughApplication(context, packets, frameAccess);
   const at = (timestampMs: number) => ({ ...frames, frames: [{ ...frames.frames[0]!, timestampMs }] });
   const saved = store.put('frame', videoId, at(630000), { timestampMs: 630000 });
   if (savedState === 'missing') store.remove(saved);
@@ -146,8 +159,7 @@ it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and on
   await runResearchAgentWithModel({ model, finalizationModel, context,
     toolNames: ['analyze_video_frames', 'get_video_frames', 'finalize_answer'],
     message: 'Re-inspect the saved 10:30 image and capture only 10:45. Report the gap if reuse fails.',
-    decision: { route: 'inspect_video', videoId, useStoryboard: true, refreshFramesOnly: true, visualEvidence: 'required',
-      frameAccess: [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }] },
+    decision: { route: 'inspect_video', videoId, useStoryboard: true, refreshFramesOnly: true, visualEvidence: 'required', frameAccess },
   });
   expect(provider.frames).toHaveBeenCalledOnce();
   expect(provider.frames).toHaveBeenCalledWith(expect.objectContaining({ timestampsMs: [645000] }), expect.anything(),
@@ -155,18 +167,19 @@ it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and on
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => input.frames.frames[0]!.timestampMs))
     .toEqual(savedState === 'missing' ? [645000] : [630000, 645000]);
   const savedReport = savedState === 'available' ? 'I re-inspected the saved 10:30 frame' : 'I could not re-inspect the saved 10:30 frame';
-  expect(JSON.stringify(finalizationModel.doGenerateCalls[0]!.prompt)).toContain(savedReport);
-  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-    answer: expect.stringContaining(savedReport),
-  }));
-  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-    answer: expect.stringContaining('I retrieved the 10:45 frame and inspected it.'),
-  }));
+  // Findings keep their citations; the account of tool actions is a separate, uncited paragraph.
+  const [findings, activity] = (await answer()).split('\n\n');
+  expect(findings).toContain('[cite:');
+  expect(activity).toContain(savedReport);
+  expect(activity).toContain('I retrieved the 10:45 frame and inspected it.');
+  expect(activity).not.toContain('[cite:');
 });
 
 it('re-inspects a saved frame of one video while capturing only the other video', async () => {
-  const { context, provider, store, frames } = setup();
+  const { context, provider, store, frames, packets } = setup();
   const other = 'lmnopqrstuv';
+  const frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+  const answer = finalizeThroughApplication(context, packets, frameAccess);
   const at = (id: string, timestampMs: number) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs }] });
   const saved = store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 });
   provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
@@ -194,18 +207,14 @@ it('re-inspects a saved frame of one video while capturing only the other video'
     toolNames: ['analyze_video_frames', 'get_video_frames', 'finalize_answer'],
     message: 'Re-inspect the saved 0:30 frame without recapturing it, and capture only 1:00 of the new video.',
     decision: { route: 'topic_research', comparisonVideoIds: [videoId, other], researchVideoCount: 2, useStoryboard: true,
-      refreshFramesOnly: true, visualEvidence: 'required', frameAccess: [
-        { videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] },
-        { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] },
-      ] },
+      refreshFramesOnly: true, visualEvidence: 'required', frameAccess },
   });
   expect(provider.frames).toHaveBeenCalledOnce();
   expect(provider.frames).toHaveBeenCalledWith(expect.objectContaining({ videoId: other, timestampsMs: [60000] }), expect.anything(),
     expect.anything(), expect.anything(), expect.anything());
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => [input.frames.videoId, input.frames.frames[0]!.timestampMs]))
     .toEqual([[videoId, 30000], [other, 60000]]);
-  const answer = vi.mocked(context.finalize).mock.calls.at(-1)![1].answer;
-  expect(answer).toMatch(/\n\nI re-inspected the saved 0:30 frame of "[^"]+"\. I retrieved the 1:00 frame of "[^"]+" and inspected it\.$/);
+  expect(await answer()).toMatch(/\n\nI re-inspected the saved 0:30 frame of "[^"]+"\. I retrieved the 1:00 frame of "[^"]+" and inspected it\.$/);
 });
 
 it('keeps research open until a required capture is analyzed, without an exact-frame question', async () => {
@@ -241,6 +250,90 @@ it('keeps research open until a required capture is analyzed, without an exact-f
     expect(warn.mock.calls.filter(([line]) => String(line).includes('complete_research did not execute'))).toHaveLength(1);
   } finally { warn.mockRestore(); }
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => input.frames.frames[0]!.timestampMs)).toEqual([45000]);
+});
+
+/** Runs scripted research steps, then keeps asking to complete. Returns how often completion was refused. */
+async function refusedCompletions(context: AgentToolContext, steps: Array<() => { name: string; input: unknown }>,
+  decision: Parameters<typeof runResearchAgentWithModel>[0]['decision']) {
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+  let step = 0;
+  const model = new MockLanguageModelV4({ doGenerate: async () => {
+    const call = steps[step++]?.() ?? { name: 'complete_research', input: {} };
+    return { content: [{ type: 'tool-call', toolCallId: `step-${step}`, toolName: call.name, input: JSON.stringify(call.input) }],
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
+  } });
+  const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [], blocks: [{ text: 'Both wear shirts.', evidenceIds: ['ref_1'] }] }) }],
+    finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [] }) });
+  const warn = vi.spyOn(console, 'warn');
+  try {
+    await runResearchAgentWithModel({ model, finalizationModel, context, decision,
+      toolNames: ['analyze_video_frames', 'get_video_frames', 'finalize_answer'], message: 'Compare the saved 0:30 frame with a new 1:00 capture.' });
+    return warn.mock.calls.filter(([line]) => String(line).includes('complete_research did not execute')).length;
+  } finally { warn.mockRestore(); }
+}
+
+describe('cross-video frame completion', () => {
+  const other = 'lmnopqrstuv';
+  const frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+  const decision = { route: 'topic_research' as const, comparisonVideoIds: [videoId, other], researchVideoCount: 2, useStoryboard: true,
+    refreshFramesOnly: true, visualEvidence: 'required' as const, frameAccess };
+  function scene(legacy = false) {
+    const fixture = setup();
+    const at = (id: string, timestampMs: number) => ({ ...fixture.frames, videoId: id, frames: [{ ...fixture.frames.frames[0]!, timestampMs }] });
+    // Older inventory rows can omit the position that the stored payload still holds.
+    const saved = fixture.store.put('frame', videoId, at(videoId, 30000), legacy ? undefined : { timestampMs: 30000 });
+    fixture.provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
+    fixture.context.analyzeFrames = vi.fn(async ({ frames }) => ({
+      findings: [{ observation: 'A shirt.', timestampsMs: [frames.frames[0]!.timestampMs] }], warnings: [] }));
+    const analyzed = () => vi.mocked(fixture.context.analyzeFrames!).mock.calls.map(([input]) => input.frames.videoId);
+    return { ...fixture, saved, analyzed };
+  }
+
+  it('keeps research open for the other video after one video is inspected', async () => {
+    const { context, packets, saved, analyzed } = scene();
+    const refused = await refusedCompletions(context, [
+      () => ({ name: 'analyze_video_frames', input: { assetVersions: [saved], focus: 'What is he wearing?' } }),
+      () => ({ name: 'get_video_frames', input: { videoId: other, timestampsMs: [60000] } }),
+      () => ({ name: 'complete_research', input: {} }),
+      () => ({ name: 'analyze_video_frames', input: { assetVersions: packets.at(-1)!.assetVersions, focus: 'What is he wearing?' } }),
+    ], decision);
+    expect(refused).toBe(1);
+    expect(analyzed()).toEqual([videoId, other]);
+  });
+
+  it('tries a saved frame whose inventory omits its position before completing', async () => {
+    const { context, saved, analyzed } = scene(true);
+    const refused = await refusedCompletions(context, [
+      () => ({ name: 'get_video_frames', input: { videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' } }),
+      () => ({ name: 'complete_research', input: {} }),
+      () => ({ name: 'analyze_video_frames', input: { assetVersions: [saved], focus: 'What is he wearing?' } }),
+    ], decision);
+    expect(refused).toBe(1);
+    expect(analyzed()).toEqual([other, videoId]);
+  });
+});
+
+it('notes a cited observation from an earlier turn when the route omitted its video', async () => {
+  const { context, store, frames } = setup();
+  const other = 'lmnopqrstuv';
+  const at = (id: string, timestampMs: number) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs }] });
+  context.analyzeFrames = vi.fn(async ({ frames }) => ({
+    findings: [{ observation: 'A shirt.', timestampsMs: [frames.frames[0]!.timestampMs] }], warnings: [] }));
+  // An earlier turn inspected the first video at 0:30.
+  context.runId = crypto.randomUUID();
+  const earlier = await analyze('frame', store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 }), context, 'What is he wearing?');
+  // This turn's route listed only the second video, as in the production incident.
+  context.runId = crypto.randomUUID();
+  context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+  const current = await analyze('frame', store.put('frame', other, at(other, 60000), { timestampMs: 60000 }), context, 'What is he wearing?');
+  const result = buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
+    agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 }, {
+    answer: `He re-checked the saved frame: a shirt [cite:${earlier.excerpts[0]!.id}]. The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`,
+    intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [],
+  }, [earlier, current], 0, undefined, { access: context.frameAccess });
+  expect(result.answer).toMatch(/\n\nThe 0:30 observation( of "[^"]+")? comes from an earlier turn and was not re-inspected in this one\.$/);
+  expect(result.answer).not.toContain('The 1:00 observation');
 });
 
 it('rejects forbidden positions and other videos before metadata, billing or extraction', () => {

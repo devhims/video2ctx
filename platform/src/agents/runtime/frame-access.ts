@@ -9,6 +9,10 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
   const named = scope.length > 1;
   const saved: { videoId: string; time: number; inspected: boolean }[] = [];
   const captures: { videoId: string; time: number; requested: boolean; retrieved: boolean; inspected: boolean }[] = [];
+  // Versions are tracked separately from positions: inspecting one video's frame
+  // must never count as inspecting another video's frame at the same time.
+  const inspectedVersions = new Set<string>();
+  const retrievedVersions = new Set<string>();
   const sentences: string[] = [];
   for (const { videoId, savedTimestampsMs, captureTimestampsMs } of scope) {
     const inspected = new Set<number>();
@@ -23,6 +27,7 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
         const coverage = frameCoverageSchema.safeParse(artifact.data);
         if (!coverage.success) continue;
         const analyzing = artifact.type === 'youtube_frame_analysis';
+        for (const version of packet.assetVersions ?? []) (analyzing ? inspectedVersions : retrievedVersions).add(version);
         if (!analyzing) for (const time of coverage.data.requestedTimestampsMs) requested.add(time);
         for (const frame of coverage.data.frames) (analyzing ? inspected : retrieved).add(frame.timestampMs);
       }
@@ -44,5 +49,27 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
         : `I have no confirmed retrieval of the ${frame(time)} in this turn.`);
     }
   }
-  return { saved, captures, report: sentences.join(' ') };
+  return { saved, captures, inspectedVersions,
+    pendingCaptureVersions: [...retrievedVersions].filter(version => !inspectedVersions.has(version)), report: sentences.join(' ') };
+}
+
+/** Cited frame observations recorded by an earlier turn, which this turn did not inspect again.
+ * The route cannot be trusted to list every video the user meant, so the answer states it. */
+export function earlierFrameNotes(runId: string, cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>,
+  packets: readonly EvidencePacket[]): string[] {
+  const own = (packet: EvidencePacket) => packet.packetId.startsWith(`packet:${runId}:`);
+  const inspectedNow = new Set(packets.filter(packet => own(packet) && packet.kind === 'youtube_frames').flatMap(packet =>
+    packet.artifacts.flatMap(artifact => {
+      if (artifact.type !== 'youtube_frame_analysis') return [];
+      const coverage = frameCoverageSchema.safeParse(artifact.data);
+      return coverage.success ? packet.sources.flatMap(source => coverage.data.frames.map(frame => `${source.videoId}:${frame.timestampMs}`)) : [];
+    })));
+  const notes = new Map<string, string>();
+  for (const { packet, startMs, videoId, title } of cited) {
+    const key = `${videoId}:${startMs}`;
+    if (own(packet) || packet.kind !== 'youtube_frames' || inspectedNow.has(key) || notes.has(key)
+      || !packet.artifacts.some(artifact => artifact.type === 'youtube_frame_analysis')) continue;
+    notes.set(key, `The ${clockTime(startMs)} observation${title ? ` of "${title}"` : ''} comes from an earlier turn and was not re-inspected in this one.`);
+  }
+  return [...notes.values()];
 }

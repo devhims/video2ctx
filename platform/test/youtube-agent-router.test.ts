@@ -1092,12 +1092,12 @@ describe('YouTube agent capability router', () => {
     expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question });
   });
 
-  it.each(['overlap', 'unrestricted'])('repairs an unscoped refresh and rejects %s capture permission', async invalid => {
+  it.each(['overlap', 'omitted'])('repairs an %s capture list before authorizing a bounded refresh', async invalid => {
     const videoId = 'abcdefghijk';
     const frameAccess = [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }];
     const base = { route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough shape'] };
     const model = sequenceClassifier([base, { ...base, frameAccess: invalid === 'overlap'
-      ? [{ ...frameAccess[0]!, captureTimestampsMs: [630000, 645000] }] : 'agent_selected' }]);
+      ? [{ ...frameAccess[0]!, captureTimestampsMs: [630000, 645000] }] : undefined }]);
     const fallbackModel = sequenceClassifier([{ ...base, frameAccess }]);
     const route = await classifyCapabilityWithModel({ model, fallbackModel, message: 'Reuse saved 10:30 without recapturing it and capture only 10:45.',
       sessionBrief: { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame', current: true,
@@ -1146,15 +1146,36 @@ describe('YouTube agent capability router', () => {
       useStoryboard: true, answerDetail: 'standard', frameAccess: legacy })).toMatchObject({ frameAccess: [legacy] });
   });
 
+  it('runs an open refresh without a capture list on the first attempt', async () => {
+    const model = sequenceClassifier([{ route: 'inspect_video', videoId: 'abcdefghijk', refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'] }]);
+    const route = await classifyCapabilityWithModel({ model, message: 'Refresh the frames of https://youtu.be/abcdefghijk', signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', refreshFramesOnly: true });
+    expect(route).not.toHaveProperty('frameAccess');
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   it.each([
-    ['runs an open refresh', 'Refresh the frames of https://youtu.be/abcdefghijk', { route: 'inspect_video', refreshFramesOnly: true }],
-    ['asks before recapturing against a prohibition', 'Look at https://youtu.be/abcdefghijk again without recapturing 0:30, refresh the rest',
-      { route: 'finalize', responseIntent: 'clarification' }],
-  ])('%s when no attempt fixes capture positions', async (_name, message, expected) => {
+    ['a named position', 'Capture only 1:00 of https://youtu.be/abcdefghijk. No other timestamps.'],
+    ['a recapture prohibition', 'Look at https://youtu.be/abcdefghijk again without recapturing the saved frame, refresh the rest'],
+  ])('asks rather than widen %s when no attempt lists the positions', async (_name, message) => {
     const model = sequenceClassifier([{ route: 'inspect_video', videoId: 'abcdefghijk', refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'] }]);
     const route = await expectLastResort(classifyCapabilityWithModel({ model, message, signal: new AbortController().signal }));
-    expect(route).toMatchObject(expected);
-    expect(route).not.toHaveProperty('frameAccess');
+    expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it('asks rather than widen a capture list that no attempt stated validly', async () => {
+    const videoId = 'abcdefghijk';
+    const model = sequenceClassifier([{ route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'],
+      frameAccess: [{ videoId, savedTimestampsMs: [60000], captureTimestampsMs: [60000] }] }]);
+    const route = await expectLastResort(classifyCapabilityWithModel({ model, message: `Refresh the frames of https://youtu.be/${videoId}`, signal: new AbortController().signal }));
+    expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it('keeps frame access outside the persisted route closed on resume', async () => {
+    const frameAccess = { videoId: 'lmnopqrstuv', savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+    const decision = await resolveCapabilityRoute({ persisted: { route: 'inspect_video', videoId: 'abcdefghijk', researchVideoCount: 1,
+      useStoryboard: true, answerDetail: 'standard', frameAccess }, classify: vi.fn(), persist: vi.fn() });
+    expect(decision).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
 
   it('names frameAccess when a saved-only request also asks for captures', async () => {

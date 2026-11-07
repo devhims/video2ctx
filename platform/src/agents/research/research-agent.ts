@@ -11,7 +11,7 @@ import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-a
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
-import { sessionBriefForModel, type SessionEvidenceStore } from '../runtime/session-evidence';
+import { sessionBriefForModel, type SessionBrief, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
 import { createReadPriorEvidenceTool, isHistoryOnlyRoute, preparePriorEvidence, PRIOR_EVIDENCE_GUIDANCE, READ_PRIOR_EVIDENCE_TOOL_NAME,
   type DeliverEvidence, type PriorEvidenceAccess } from '../runtime/prior-evidence';
@@ -626,6 +626,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
     return pending;
   };
+  const frameScope = options.decision.frameAccess;
+  const failedFrameVersions = new Set<string>();
   const trackedContext: AgentToolContext = {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
@@ -668,11 +670,6 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         youtubeAvailabilityWarnings([...toolFailures.values()]));
       // Application notes lead the list so the warning cap never drops them.
       const notes: AgentWarning[] = [];
-      if (frameScope?.some(entry => entry.savedTimestampsMs.length)) {
-        // The unified finalizer renders this in prose. Direct and fallback answers retain it as a note.
-        const { report } = frameActivity(frameScope, options.context.runId, evidence.values());
-        if (!input.answer.includes(report)) notes.push({ code: 'FRAME_ACTIVITY', message: report.slice(0, 1000) });
-      }
       if (visualRequired && !hasVisualObservations()) {
         notes.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
@@ -745,6 +742,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         for (const id of evidence.keys()) if (!retained.has(id)) evidence.delete(id);
         return packet;
       } catch (error) {
+        // A failed saved-frame read is a reported gap, not work to repeat until the deadline.
+        if (frameScope && execution.toolName === 'analyze_video_frames') {
+          for (const version of (execution.input as { assetVersions?: string[] }).assetVersions ?? []) failedFrameVersions.add(version);
+        }
         toolFailures.set(execution.toolCallId, {
           toolCallId: execution.toolCallId,
           toolName: execution.toolName,
@@ -761,8 +762,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   };
   const visualRequired = visualEvidenceLevel(options.decision) === 'required';
   const visualRequirements = options.decision.visualRequirements ?? [];
-  const frameScope = options.decision.frameAccess;
-  let savedFramePositions: Set<string> | undefined;
+  let savedFramesAtStart: SessionBrief['assets'] | undefined;
   const hasVisualObservations = () => [...evidence.values()].some(packet =>
     packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
       ['youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)));
@@ -771,16 +771,19 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const needsVisualWork = () => {
     const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
     if (frameScope) {
-      const { saved, captures } = frameActivity(frameScope, options.context.runId, evidence.values());
-      // Saved positions predate the run, so read the inventory once rather than on every step.
-      savedFramePositions ??= new Set((options.context.session?.brief().assets ?? []).flatMap(asset =>
-        asset.kind === 'frame' && typeof asset.details.timestampMs === 'number' ? [`${asset.videoId}:${asset.details.timestampMs}`] : []));
-      const needsSavedAnalysis = saved.some(item => !item.inspected && savedFramePositions!.has(`${item.videoId}:${item.time}`));
-      // Exact-frame questions, and visual requests with nothing analyzed yet, need the new images read.
-      const needsCaptureAnalysis = ((options.decision.route === 'inspect_video' && options.decision.timestampedFrameQuestion)
-        || (visualRequired && !hasVisualObservations())) && captures.some(item => item.retrieved && !item.inspected);
-      return (toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames && !failed.has('analyze_video_frames')
-        && (needsSavedAnalysis || needsCaptureAnalysis))
+      const { saved, captures, inspectedVersions, pendingCaptureVersions } = frameActivity(frameScope, options.context.runId, evidence.values());
+      // Saved frames predate the run, so read the inventory once rather than on every step.
+      savedFramesAtStart ??= (options.context.session?.brief().assets ?? []).filter(asset => asset.kind === 'frame'
+        && frameScope.some(entry => entry.videoId === asset.videoId && entry.savedTimestampsMs.length));
+      // Each image is tracked by version: one video's inspection never stands in for another's.
+      const open = (version: string) => !failedFrameVersions.has(version) && options.context.session?.has?.(version) !== false;
+      // Older inventory can omit the position the payload holds, so such a frame is tried once.
+      const needsSavedAnalysis = saved.some(item => !item.inspected && savedFramesAtStart!.some(asset => asset.videoId === item.videoId
+        && (asset.details.timestampMs === item.time || typeof asset.details.timestampMs !== 'number')
+        && !inspectedVersions.has(asset.version) && open(asset.version)));
+      const needsCaptureAnalysis = (visualRequired || (options.decision.route === 'inspect_video' && !!options.decision.timestampedFrameQuestion))
+        && pendingCaptureVersions.some(open);
+      return (toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames && (needsSavedAnalysis || needsCaptureAnalysis))
         || (toolNames.includes('get_video_frames') && !!options.context.provider.frames && !failed.has('get_video_frames')
           && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS && captures.some(item => !item.requested));
     }
@@ -1102,8 +1105,7 @@ async function runUnifiedFinalizer(options: {
     .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
   const inspectionRecords = inspected.length
     ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
-  const frameReport = 'frameAccess' in options.decision && options.decision.frameAccess?.some(entry => entry.savedTimestampsMs.length)
-    ? frameActivity(options.decision.frameAccess, options.context.runId, options.evidence).report : undefined;
+  const frameReport = 'frameAccess' in options.decision && !!options.decision.frameAccess?.some(entry => entry.savedTimestampsMs.length);
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -1206,7 +1208,7 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           EVIDENCE_DELIVERY_GUIDANCE,
           INSPECTION_RECORD_GUIDANCE,
-          ...(frameReport ? ['The application appends frameActivityReport to the answer as its own closing paragraph. Write the findings and their limitations. Use only the inspections confirmed in that report as current visual evidence. If a saved inspection is missing, disclose what could not be verified. Leave the account of tool actions to the application.'] : []),
+          ...(frameReport ? ['Base visual claims on inspections made in this turn and explain any gap. The application appends the frame activity, and notes any cited observation from an earlier turn, from the recorded operations. Do not describe tool actions yourself.'] : []),
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           'For list evidence such as playlists, take counts from collection: entriesShown are the entries supplied here, and collection.coverage states what was not retained, not shown, or not stated by the provider. Never report fewer available entries than are shown. Describe unshown or unretained entries as a context limit, not as absent from the source. When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note stating the provider total, the 12-video listing limit and which videos had content reviewed; do not contradict it. Otherwise no note is appended, so state any material playlist coverage limit yourself. Never present listing details as reviewed video content. evidenceOmittedFromContext counts saved list packets that did not fit at all; notListed of them are counted but not named.',
@@ -1231,7 +1233,6 @@ async function runUnifiedFinalizer(options: {
           providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
             ? { ...failure, message: 'VIDEO_TOO_LONG: The video exceeded the configured Agent duration limit.' } : failure),
           inspectionRecords,
-          frameActivityReport: frameReport,
           validationFeedback: feedback,
         })}, ...(usesSavedEvidenceSkill(options.decision)
           ? (options.conversationHistory ?? []).flatMap(turn => [
@@ -1339,12 +1340,6 @@ async function runUnifiedFinalizer(options: {
       for (const [index, block] of output.blocks.entries()) block.text = markUnitMismatches(block.text, figures.filter(figure => figure.blockIndex === index));
       validationStage = 'rendered_answer';
       const input = renderStructuredAnswer({ ...output, intent, artifacts: [] }, prepared.fullIds);
-      // Its own uncited paragraph, so no finding's citation appears to support the account of tool actions.
-      if (frameReport) {
-        const answer = `${input.answer}\n\n${frameReport}`;
-        if (answer.length <= 20_000) input.answer = answer;
-        else notes.push({ code: 'FRAME_ACTIVITY', message: frameReport.slice(0, 1000) });
-      }
       input.warnings = mergeWarnings(input.warnings, [...failureWarnings, ...prepared.evidence.flatMap(packet =>
         packet.warnings.filter(warning => warning.code === 'TRANSCRIPT_CONTEXT_TRUNCATED'))]);
       // A history-only answer carries no source content, so incidental subjects need no citations.
