@@ -1,0 +1,8 @@
+{
+  "name": "video2ctx-hybrid-frame-benchmark",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "googlevideo": "5.0.1"
+  }
+}
