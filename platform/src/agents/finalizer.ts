@@ -10,7 +10,7 @@ import {
   type FinalizeAnswerInput,
   type FrameAccess,
 } from './contracts';
-import { earlierFrameNotes, frameActivity, reinspectionClaimNote } from './runtime/frame-access';
+import { frameTurnNotes, type InventoryFrame } from './runtime/frame-access';
 import { appendNotices, playlistCoverageDisclosures } from './playlist-coverage';
 import { CITED_FRAME_PREVIEWS, citedPacketFramePreviews } from './runtime/frame-previews';
 
@@ -30,8 +30,8 @@ export function buildAgentTurnResult(
   packets: EvidencePacket[],
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
-  /** Present when the route asked for fresh frame work, with any exact access it granted. */
-  frameTurn?: { access?: FrameAccess },
+  /** Present when the route asked for frame work: its exact access, and the session's saved frames. */
+  frameTurn?: { access?: FrameAccess; inventory: readonly InventoryFrame[] },
 ): AgentTurnResult {
   const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
@@ -39,7 +39,7 @@ export function buildAgentTurnResult(
   // Which saved previews each cited frame excerpt used, from its own packet. A later answer can
   // hold other captures of the same moment, so time alone never identifies the pixels.
   const citedFrames: Array<{ citationId: string; frames: ReturnType<typeof citedPacketFramePreviews> }> = [];
-  const citedObservations: Parameters<typeof earlierFrameNotes>[1][number][] = [];
+  const citedObservations: Parameters<typeof frameTurnNotes>[0]['cited'][number][] = [];
   for (const marker of markers) {
     const matches = packets.flatMap((packet) => packet.excerpts
       .filter((excerpt) => excerpt.id === marker)
@@ -84,10 +84,7 @@ export function buildAgentTurnResult(
   const notes = [...playlistCoverage.notes];
   // The application, not the model, states which frames this turn actually inspected.
   if (frameTurn && input.intent !== 'clarification' && input.intent !== 'rejected') {
-    if (frameTurn.access?.some(entry => entry.savedTimestampsMs.length)) notes.push(frameActivity(frameTurn.access, identity.runId, packets).report);
-    notes.push(...earlierFrameNotes(identity.runId, citedObservations, packets));
-    const claim = reinspectionClaimNote(identity.runId, input.answer, packets);
-    if (claim) notes.push(claim);
+    notes.push(...frameTurnNotes({ runId: identity.runId, access: frameTurn.access, inventory: frameTurn.inventory, packets, cited: citedObservations }));
   }
   const disclosedAnswer = appendNotices(answer, notes);
 

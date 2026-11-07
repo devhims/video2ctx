@@ -115,12 +115,18 @@ function setup() {
 }
 const kinds = ['transcript', 'frame', 'storyboard_sheet'] as const;
 
+/** The session's saved frames as the runtime passes them to the answer builder. */
+function inventoryOf(context: AgentToolContext) {
+  return context.session!.brief().assets.flatMap(asset => asset.kind === 'frame'
+    ? [{ version: asset.version, videoId: asset.videoId, ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []);
+}
+
 /** Finalizes through the application's answer builder, which owns the frame activity notes. */
 function finalizeThroughApplication(context: AgentToolContext, packets: EvidencePacket[], access: FrameAccess, earlier: EvidencePacket[] = []) {
   context.runId = crypto.randomUUID();
   const identity = { runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
   const finalize = vi.fn(async (_id: string, input: FinalizeAnswerInput) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 },
-    input, [...earlier, ...packets], 0, undefined, { access }));
+    input, [...earlier, ...packets], 0, undefined, { access, inventory: inventoryOf(context) }));
   context.finalize = finalize;
   return async () => (await finalize.mock.results.at(-1)!.value).answer as string;
 }
@@ -349,7 +355,7 @@ describe('application notes on frame turns', () => {
     const answer = (text: string, packets: EvidencePacket[]) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 },
       { answer: text, intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [] },
-      [earlier, ...packets], 0, undefined, { access: context.frameAccess }).answer;
+      [earlier, ...packets], 0, undefined, { access: context.frameAccess, inventory: inventoryOf(context) }).answer;
     return { context, store, at, savedVersion, earlier, current, answer };
   }
   const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
@@ -362,10 +368,31 @@ describe('application notes on frame turns', () => {
     expect(text).not.toContain('The 1:00 observation');
   });
 
-  it('corrects an uncited claim of re-inspection when no saved frame was inspected', async () => {
+  it.each([
+    'I inspected the saved 0:30 frame again.',
+    'Both frames show shirts.',
+  ])('states that no saved frame was re-inspected, whatever the answer says: %s', async claim => {
     const { current, answer } = await turns();
-    const text = answer(`I re-inspected the saved 0:30 frame. The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
-    expect(text.endsWith(claimNote)).toBe(true);
+    const text = answer(`${claim} The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    expect(text).toContain(claimNote);
+    expect(text).toContain('I retrieved the 1:00 frame and inspected it.');
+  });
+
+  it('judges each citation by its own image when an earlier batch held several', async () => {
+    const { context, store, at, current, answer } = await turns();
+    // An earlier turn analyzed 0:30 and 0:45 together; this turn re-inspects only the exact 0:30 image.
+    context.runId = crypto.randomUUID();
+    context.frameAccess = undefined;
+    const [thirty, fortyFive] = [30000, 45000].map(time => store.put('frame', videoId, at(videoId, time, 480), { timestampMs: time }));
+    const batch = await executeAnalyzeVideoFrames({ assetVersions: [thirty!, fortyFive!], focus: 'What is he wearing?' }, context, 'batch');
+    context.runId = current.packetId.split(':')[1]!;
+    context.frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+    const again = await analyze('frame', thirty!, context, 'What is he wearing?');
+    const cited = batch.excerpts.find(excerpt => excerpt.startMs === 30000)!;
+    const text = answer(`The saved frame shows a shirt [cite:${cited.id}] [cite:${current.excerpts[0]!.id}].`, [batch, current, again]);
+    expect(text).toContain('I re-inspected the saved 0:30 frame');
+    expect(text).not.toMatch(earlierNote);
+    expect(text).not.toContain(claimNote);
   });
 
   it('keeps the earlier-turn note when this turn inspected a different image at the same moment', async () => {

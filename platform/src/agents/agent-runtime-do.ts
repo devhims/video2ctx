@@ -14,6 +14,7 @@ import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } fro
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
 import { framePreviewKey, recordedFramePreviews, saveFramePreviews, type SavedFrame } from './runtime/frame-previews';
+import { frameList, isFrameTurn } from './runtime/frame-access';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -1050,8 +1051,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
       // An application fallback is checked against what this run had, not earlier turns' cited content.
       runPackets: this.admittedRunEvidence(runId, history),
-    } : undefined, (decision.route === 'inspect_video' || decision.route === 'topic_research')
-      && (decision.frameAccess || decision.refreshFramesOnly) ? { access: decision.frameAccess } : undefined);
+    } : undefined, isFrameTurn(decision) ? { access: frameList(decision), inventory: this.sessionStore.brief().assets.flatMap(asset =>
+      asset.kind === 'frame' ? [{ version: asset.version, videoId: asset.videoId,
+        ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []) } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);

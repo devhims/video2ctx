@@ -1,4 +1,4 @@
-import type { EvidencePacket, FrameAccess } from '../contracts';
+import type { CapabilityRouteDecision, EvidencePacket, FrameAccess } from '../contracts';
 import { clockTime } from './clock-time';
 import { frameCoverageSchema } from './model-evidence';
 
@@ -53,38 +53,62 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
     pendingCaptureVersions: [...retrievedVersions].filter(version => !inspectedVersions.has(version)), report: sentences.join(' ') };
 }
 
-/** Versions this run analyzed, and which of them it did not itself retrieve (saved images it re-inspected). */
-function runInspections(runId: string, packets: readonly EvidencePacket[]) {
+/** The exact frame positions a route grants, if it fixed them. */
+export function frameList(decision: CapabilityRouteDecision): FrameAccess | undefined {
+  return 'frameAccess' in decision && Array.isArray(decision.frameAccess) ? decision.frameAccess : undefined;
+}
+
+/** A turn that asked for frame work, whose answer carries the application's account of it. */
+export function isFrameTurn(decision: CapabilityRouteDecision): boolean {
+  return (decision.route === 'inspect_video' || decision.route === 'topic_research')
+    && (!!decision.frameAccess || !!decision.refreshFramesOnly || (decision.route === 'inspect_video' && !!decision.timestampedFrameQuestion));
+}
+
+/** A saved frame as the session inventory records it. */
+export interface InventoryFrame { version: string; videoId: string; timestampMs?: number }
+
+/**
+ * The application's account of a frame turn, built from what the route requested and what
+ * this run recorded, never from the answer's wording or citations:
+ * - each listed position: re-inspected, retrieved, inspected, or a gap;
+ * - saved frames re-inspected outside the list, or that none was;
+ * - cited observations whose exact image this turn did not inspect again.
+ */
+export function frameTurnNotes(options: {
+  runId: string; access?: FrameAccess; inventory: readonly InventoryFrame[]; packets: readonly EvidencePacket[];
+  cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>;
+}): string[] {
+  const { runId, access, inventory, packets } = options;
   const own = packets.filter(packet => packet.packetId.startsWith(`packet:${runId}:`) && packet.kind === 'youtube_frames');
   const versions = (type: string) => new Set(own.filter(packet => packet.artifacts.some(artifact => artifact.type === type))
     .flatMap(packet => packet.assetVersions ?? []));
   const analyzed = versions('youtube_frame_analysis');
   const retrieved = versions('youtube_frame_retrieval');
-  return { analyzed, savedInspected: [...analyzed].some(version => !retrieved.has(version)) };
-}
+  const frames = new Map(inventory.map(frame => [frame.version, frame]));
+  const title = (videoId: string) => packets.flatMap(packet => packet.sources).find(source => source.videoId === videoId && source.title)?.title;
+  const named = (videoId: string, time: number) => `${clockTime(time)} frame${title(videoId) ? ` of "${title(videoId)}"` : ''}`;
+  const notes: string[] = [];
+  if (access?.length) notes.push(frameActivity(access, runId, packets).report);
 
-/** Cited frame observations recorded by an earlier turn whose image this turn did not inspect again.
- * The route cannot be trusted to list every video the user meant, so the answer states it.
- * Matching is by immutable asset version: a newer image at the same moment is a different image. */
-export function earlierFrameNotes(runId: string, cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>,
-  packets: readonly EvidencePacket[]): string[] {
-  const { analyzed } = runInspections(runId, packets);
-  const notes = new Map<string, string>();
-  for (const { packet, startMs, videoId, title } of cited) {
-    const key = `${videoId}:${startMs}`;
-    const versions = packet.assetVersions ?? [];
-    if (packet.packetId.startsWith(`packet:${runId}:`) || packet.kind !== 'youtube_frames' || notes.has(key)
-      || !packet.artifacts.some(artifact => artifact.type === 'youtube_frame_analysis')
-      || (versions.length > 0 && versions.every(version => analyzed.has(version)))) continue;
-    notes.set(key, `The ${clockTime(startMs)} observation${title ? ` of "${title}"` : ''} comes from an image inspected in an earlier turn, not in this one.`);
+  const listedSaved = new Set(access?.flatMap(entry => entry.savedTimestampsMs.map(time => `${entry.videoId}:${time}`)));
+  const reinspected = [...analyzed].filter(version => !retrieved.has(version));
+  for (const frame of reinspected.flatMap(version => frames.get(version) ?? [])) {
+    if (frame.timestampMs !== undefined && !listedSaved.has(`${frame.videoId}:${frame.timestampMs}`))
+      notes.push(`I re-inspected the saved ${named(frame.videoId, frame.timestampMs)}.`);
   }
-  return [...notes.values()];
-}
+  if (!reinspected.length && inventory.some(frame => !retrieved.has(frame.version)))
+    notes.push('No frame saved before this turn was re-inspected in this turn.');
 
-const REINSPECTION_CLAIM = /\b(?:re-?inspect\w*|re-?examin\w*|re-?analy[sz]\w*|re-?check\w*|looked (?:at \w+ )?again|(?:reused?|reusing) (?:the |that |this )?saved)\b/i;
-
-/** A claim of re-inspection needs no citation, so it is checked against what this run did. */
-export function reinspectionClaimNote(runId: string, answer: string, packets: readonly EvidencePacket[]): string | undefined {
-  return REINSPECTION_CLAIM.test(answer) && !runInspections(runId, packets).savedInspected
-    ? 'No frame saved before this turn was re-inspected in this turn.' : undefined;
+  // Each citation is judged by the image behind it, not by its batch or its moment.
+  const earlier = new Map<string, string>();
+  for (const { packet, startMs, videoId, title: cited } of options.cited) {
+    const key = `${videoId}:${startMs}`;
+    if (packet.packetId.startsWith(`packet:${runId}:`) || packet.kind !== 'youtube_frames' || earlier.has(key)
+      || !packet.artifacts.some(artifact => artifact.type === 'youtube_frame_analysis')) continue;
+    const all = packet.assetVersions ?? [];
+    const exact = all.filter(version => frames.get(version)?.videoId === videoId && frames.get(version)?.timestampMs === startMs);
+    if (exact.length ? exact.some(version => analyzed.has(version)) : all.length > 0 && all.every(version => analyzed.has(version))) continue;
+    earlier.set(key, `The ${clockTime(startMs)} observation${cited ? ` of "${cited}"` : ''} comes from an image inspected in an earlier turn, not in this one.`);
+  }
+  return [...notes, ...earlier.values()];
 }

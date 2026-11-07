@@ -1,5 +1,5 @@
 import { inspectionRecordsForModel, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
-import { frameActivity } from '../runtime/frame-access';
+import { frameActivity, frameList, isFrameTurn } from '../runtime/frame-access';
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { scheduleEvidenceTools } from '../runtime/evidence-scheduler';
 import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
@@ -41,6 +41,7 @@ import {
   type AgentWarning,
   type AgentTurnResult,
   type CapabilityRouteDecision,
+  type FrameAccess,
   type EvidenceOperation,
   type EvidencePacket,
   type FinalizeAnswerInput,
@@ -462,10 +463,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     ? options.decision : undefined;
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !options.decision.frameAccess || name !== 'get_video_storyboard')
-    // A saved-only access list authorizes no capture, so the capture tool is not offered.
-    .filter(name => name !== 'get_video_frames' || !options.decision.frameAccess
-      || options.decision.frameAccess.some(entry => entry.captureTimestampsMs.length))
+    .filter(name => !frameList(options.decision) || name !== 'get_video_storyboard')
+    // New captures are closed unless the route lists their positions or delegates them.
+    .filter(name => name !== 'get_video_frames' || capturesAllowed(options.decision))
     .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
@@ -629,7 +629,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
     return pending;
   };
-  const frameScope = options.decision.frameAccess;
+  const frameScope = frameList(options.decision);
   const failedFrameVersions = new Set<string>();
   const failedCaptures = new Set<string>();
   const trackedContext: AgentToolContext = {
@@ -638,7 +638,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     researchQuestion: options.message,
     refreshEvidence: options.decision.refreshEvidence,
     refreshFramesOnly: options.decision.refreshFramesOnly,
-    frameAccess: options.decision.frameAccess,
+    frameAccess: frameScope,
     timestampedFrameQuestion: options.decision.route === 'inspect_video' && !options.decision.savedOnly
       ? options.decision.timestampedFrameQuestion : undefined,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
@@ -883,7 +883,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(savedEvidenceSkill && !verifySaved ? ['Reuse supplied visual observations. Saved visual analysis tools remain available only for requested visual facts that are still missing; they do not replace required original caption/comment reads.'] : []),
             ...(!verifySaved ? ['For exact quotations or source corrections, use search_originals: omit assetVersion to find which saved source says it, then read that source by its version. Analyst summaries are not verbatim evidence. Read original passages before completing research.'] : []),
             ...(options.decision.savedOnly ? ['This run is saved-only. Retrieval and discovery are disabled, including incidental metadata calls. Missing saved assets are gaps, not permission to fetch.'] : []),
-            ...(options.decision.frameAccess ? [`Exact frame access for this turn: ${JSON.stringify(options.decision.frameAccess)}. Analyze the saved positions by their session asset versions. If saved inspection fails, stop that inspection and report the gap. Independently retrieve the authorized new positions. Earlier observations cannot stand in for a successful re-inspection.`] : []),
+            ...(frameScope ? [`Exact frame access for this turn: ${JSON.stringify(frameScope)}. Analyze the saved positions by their session asset versions. If saved inspection fails, stop that inspection and report the gap. Independently retrieve the authorized new positions. Earlier observations cannot stand in for a successful re-inspection.`] : []),
             ...(requestedKinds.length ? [requestedEvidenceGuidance(requestedKinds)] : []),
             // The skill accompanies exactly the visual tools this model can call.
             ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
@@ -1115,7 +1115,7 @@ async function runUnifiedFinalizer(options: {
     .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
   const inspectionRecords = inspected.length
     ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
-  const frameReport = 'frameAccess' in options.decision && !!options.decision.frameAccess?.some(entry => entry.savedTimestampsMs.length);
+  const frameReport = isFrameTurn(options.decision);
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -1498,6 +1498,12 @@ function toolFailureWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
     code: 'EVIDENCE_TOOL_FAILED',
     message: `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`.slice(0, 1_000),
   }))];
+}
+
+/** Whether this route may capture new frames: at listed positions, or anywhere when delegated. */
+function capturesAllowed(decision: CapabilityRouteDecision): boolean {
+  return 'frameAccess' in decision && (decision.frameAccess === 'agent_selected'
+    || !!frameList(decision)?.some(entry => entry.captureTimestampsMs.length));
 }
 
 function mergeWarnings(modelWarnings: AgentWarning[], failureWarnings: AgentWarning[]): AgentWarning[] {
