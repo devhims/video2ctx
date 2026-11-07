@@ -243,8 +243,10 @@ test('names the required visual facts when finalizing without visual observation
   const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'tool-call', toolCallId: 'finish', toolName: 'finalize_answer',
     input: JSON.stringify({ intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [], blocks: [{ text: 'Unverified.', evidenceIds: ['ref_1'] }] }) }],
   finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }) });
-  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+  const warnings = Array.from({ length: 50 }, (_, index) => ({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message: `Omitted passage ${index}.` }));
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [{ ...metadata, warnings }],
     recoveredToolFailures: [{ toolCallId: 'frames', toolName: 'get_video_frames', operation: 'frames', message: 'Frame extraction failed' }] });
+  expect(vi.mocked(context.finalize).mock.calls[0]![1].warnings).toHaveLength(50);
   expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Required visual evidence: player names on shirts');
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
     expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE', message: expect.stringContaining('player names on shirts') })]) }));

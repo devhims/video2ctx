@@ -5,6 +5,8 @@ import { frameCoverageSchema } from './model-evidence';
 /** A requested position, a returned image and an analyst result are different facts.
  * Only packets produced by this run can establish that it did the work. */
 export function frameActivity(scope: FrameAccess, runId: string, evidence: Iterable<EvidencePacket>) {
+  const inspectedVersions = new Set<string>();
+  const retrievedVersions = new Set<string>();
   const inspected = new Set<number>();
   const retrieved = new Set<number>();
   const requested = new Set<number>();
@@ -17,6 +19,7 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
       const coverage = frameCoverageSchema.safeParse(artifact.data);
       if (!coverage.success) continue;
       const analyzing = artifact.type === 'youtube_frame_analysis';
+      for (const version of packet.assetVersions ?? []) (analyzing ? inspectedVersions : retrievedVersions).add(version);
       if (!analyzing) for (const time of coverage.data.requestedTimestampsMs) requested.add(time);
       for (const frame of coverage.data.frames) (analyzing ? inspected : retrieved).add(frame.timestampMs);
     }
@@ -25,7 +28,12 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
   const captures = scope.captureTimestampsMs.map(time => ({
     time, requested: requested.has(time), retrieved: retrieved.has(time), inspected: inspected.has(time),
   }));
-  const report = [
+  return { saved, captures, inspectedVersions, pendingCaptureVersions: [...retrievedVersions].filter(version => !inspectedVersions.has(version)) };
+}
+
+export function frameActivityReport(scope: FrameAccess, runId: string, packets: Iterable<EvidencePacket>): string {
+  const { saved, captures } = frameActivity(scope, runId, packets);
+  return [
     ...saved.map(({ time, inspected }) => inspected ? `I re-inspected the saved ${clockTime(time)} frame.`
       : `I could not re-inspect the saved ${clockTime(time)} frame in this turn.`),
     ...captures.map(({ time, requested, retrieved, inspected }) => retrieved
@@ -33,5 +41,4 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
       : requested ? `I requested ${clockTime(time)}, but no frame was returned.`
       : `I have no confirmed retrieval of the ${clockTime(time)} frame in this turn.`),
   ].join(' ');
-  return { saved, captures, report };
 }

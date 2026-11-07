@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { z } from 'zod';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
-import { evidencePacketSchema, type EvidencePacket } from '../src/agents/contracts';
+import { evidencePacketSchema, type EvidencePacket, type FinalizeAnswerInput } from '../src/agents/contracts';
 import { createCapabilityToolSet } from '../src/agents/providers/youtube/tool-library';
 import { executeGetVideoTranscriptForModel } from '../src/agents/providers/youtube/tools/get-video-transcript';
 import { executeGetVideoFrames } from '../src/agents/providers/youtube/tools/get-video-frames';
@@ -115,9 +116,16 @@ function setup() {
 const kinds = ['transcript', 'frame', 'storyboard_sheet'] as const;
 
 it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and only fetches 10:45 (saved image %s)', async savedState => {
-  const { context, provider, store, frames } = setup();
+  const { context, provider, store, frames, packets } = setup();
+  const identity = { runId: crypto.randomUUID(), conversationId: crypto.randomUUID(),
+    userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
+  context.runId = identity.runId;
+  const frameAccess = { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+  const finalize = vi.fn(async (_id: string, input: FinalizeAnswerInput) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 },
+    input, packets, 0, undefined, frameAccess));
+  context.finalize = finalize;
   const at = (timestampMs: number) => ({ ...frames, frames: [{ ...frames.frames[0]!, timestampMs }] });
-  const saved = store.put('frame', videoId, at(630000), { timestampMs: 630000 });
+  const saved = store.put('frame', videoId, at(630000));
   if (savedState === 'missing') store.remove(saved);
   provider.frames.mockResolvedValue({ value: at(645000), cacheStatus: 'miss' });
   context.analyzeFrames = vi.fn(async ({ frames }) => {
@@ -125,16 +133,21 @@ it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and on
     if (savedState === 'analysis fails' && time === 630000) throw new Error('Saved image analysis failed.');
     return { findings: [{ observation: 'The dough is round.', timestampsMs: [time] }], warnings: [] };
   });
-  const calls = [
-    { name: 'analyze_video_frames', input: { assetVersions: [saved], focus: 'Inspect the saved dough shape.' } },
-    { name: 'get_video_frames', input: { videoId, timestampsMs: [645000], analysis: 'Describe the dough.' } },
-    { name: 'complete_research', input: {} },
-  ];
+  const inspectSaved = { name: 'analyze_video_frames', input: { assetVersions: [saved], focus: 'Inspect the saved dough shape.' } };
+  const capture = { name: 'get_video_frames', input: { videoId, timestampsMs: [645000] } };
+  const inspectCapture = { name: 'analyze_video_frames', input: { assetVersions: [] as string[], focus: 'Describe the dough.' } };
+  const calls = savedState === 'analysis fails' ? [inspectSaved, capture, inspectCapture] : [capture, inspectCapture, inspectSaved];
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
     outputTokens: { total: 1, text: 1, reasoning: 0 } };
   let step = 0;
-  const model = new MockLanguageModelV4({ doGenerate: async () => {
-    const call = calls[step++]!;
+  const model = new MockLanguageModelV4({ doGenerate: async ({ tools }) => {
+    const call = calls[step++] ?? { name: 'complete_research', input: {} };
+    if (call.name !== 'complete_research' && savedState !== 'missing') {
+      expect(tools?.map(tool => tool.name)).not.toContain('complete_research');
+    }
+    if (call === inspectCapture) {
+      inspectCapture.input.assetVersions = packets.find(packet => packet.artifacts.some(artifact => artifact.type === 'youtube_frame_retrieval'))!.assetVersions!;
+    }
     return { content: [{ type: 'tool-call', toolCallId: `step-${step}`, toolName: call.name, input: JSON.stringify(call.input) }],
       finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [] };
   } });
@@ -146,22 +159,21 @@ it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and on
   await runResearchAgentWithModel({ model, finalizationModel, context,
     toolNames: ['analyze_video_frames', 'get_video_frames', 'finalize_answer'],
     message: 'Re-inspect the saved 10:30 image and capture only 10:45. Report the gap if reuse fails.',
-    decision: { route: 'inspect_video', videoId, useStoryboard: true, refreshFramesOnly: true, visualEvidence: 'required',
-      frameAccess: { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] } },
+    decision: { route: 'inspect_video', videoId, useStoryboard: true, visualEvidence: 'required', frameAccess },
   });
   expect(provider.frames).toHaveBeenCalledOnce();
   expect(provider.frames).toHaveBeenCalledWith(expect.objectContaining({ timestampsMs: [645000] }), expect.anything(),
-    expect.anything(), expect.anything(), expect.anything());
+    expect.anything(), expect.anything());
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => input.frames.frames[0]!.timestampMs))
-    .toEqual(savedState === 'missing' ? [645000] : [630000, 645000]);
+    .toEqual(savedState === 'missing' ? [645000] : savedState === 'analysis fails' ? [630000, 645000] : [645000, 630000]);
   const savedReport = savedState === 'available' ? 'I re-inspected the saved 10:30 frame' : 'I could not re-inspect the saved 10:30 frame';
-  expect(JSON.stringify(finalizationModel.doGenerateCalls[0]!.prompt)).toContain(savedReport);
-  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-    answer: expect.stringContaining(savedReport),
-  }));
-  expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-    answer: expect.stringContaining('I retrieved the 10:45 frame and inspected it.'),
-  }));
+  const result = await finalize.mock.results[0]!.value;
+  const [findings, activity] = result.answer.split('\n\n');
+  expect(findings).toContain('[cite:');
+  expect(activity).toContain(savedReport);
+  expect(activity).toContain('I retrieved the 10:45 frame and inspected it.');
+  expect(activity).not.toContain('[cite:');
+  expect(result.warnings).not.toContainEqual(expect.objectContaining({ code: 'FRAME_ACTIVITY' }));
 });
 
 it('rejects forbidden positions and other videos before metadata, billing or extraction', () => {
@@ -180,7 +192,6 @@ it('rejects forbidden positions and other videos before metadata, billing or ext
 
 it('keeps the freshness requirement for a previously saved version at the new capture position', async () => {
   const { context, store, frames } = setup();
-  context.refreshFramesOnly = true;
   context.frameAccess = { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
   const stale = store.put('frame', videoId, { ...frames, frames: [{ ...frames.frames[0]!, timestampMs: 645000 }] });
   await expect(analyze('frame', stale, context)).rejects.toThrow('requires a fresh capture');

@@ -27,7 +27,7 @@ export function createCapabilityProvider(
         ? { ...options, refresh: true, ...(decision.refreshDynamicData ? { includeSignals: true } : {}) } : options;
       let result = await savedProvider.video(id, readOptions);
       const needsDuration = options?.requireFrameDuration || (decision.route === 'inspect_video' &&
-        (decision.refreshFramesOnly || decision.timestampedFrameQuestion));
+        (decision.refreshFramesOnly || decision.frameAccess || decision.timestampedFrameQuestion));
       if (!decision.savedOnly && needsDuration) {
         const missingDuration = result.value.isLive !== true && eligibleDuration(result.value.durationSeconds) === undefined;
         if (!readOptions?.refresh && (result.cacheStatus === 'hit' || result.cacheStatus === 'stale') && (result.value.id !== id || missingDuration))

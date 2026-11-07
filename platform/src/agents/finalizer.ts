@@ -8,7 +8,9 @@ import {
   type AgentTurnResult,
   type EvidencePacket,
   type FinalizeAnswerInput,
+  type FrameAccess,
 } from './contracts';
+import { frameActivityReport } from './runtime/frame-access';
 import { appendNotices, playlistCoverageDisclosures } from './playlist-coverage';
 import { CITED_FRAME_PREVIEWS, citedPacketFramePreviews } from './runtime/frame-previews';
 
@@ -28,6 +30,7 @@ export function buildAgentTurnResult(
   packets: EvidencePacket[],
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
+  frameAccess?: FrameAccess,
 ): AgentTurnResult {
   const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
@@ -75,7 +78,11 @@ export function buildAgentTurnResult(
 
   // The application states playlist totals, the listing limit and reviewed content itself.
   const playlistCoverage = playlistCoverageDisclosures(packets, citations.map(citation => citation.id));
-  const disclosedAnswer = appendNotices(answer, playlistCoverage.notes);
+  const notes = [...playlistCoverage.notes];
+  if (frameAccess?.savedTimestampsMs.length && input.intent !== 'clarification' && input.intent !== 'rejected') {
+    notes.push(frameActivityReport(frameAccess, identity.runId, packets));
+  }
+  const disclosedAnswer = appendNotices(answer, notes);
 
   const warnings = answerWarnings(packets, [
     ...input.warnings,

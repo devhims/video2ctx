@@ -11,7 +11,7 @@ import { durationLimitNotice, withDurationLimitNotice } from './duration-limit-a
 import { canAnalyzeStoryboard, storyboardRetrievalBudget, STORYBOARD_RETRIEVAL_MIN_MS } from '../runtime/storyboard-budget';
 import { transcriptFailureCode, YOUTUBE_UNAVAILABLE_MESSAGE } from '../providers/youtube/tools/transcript-tool-errors';
 import { traceToolCallRepair, traceToolSet, type TraceToolCall } from '../runtime/tool-call-trace';
-import { sessionBriefForModel, type SessionEvidenceStore } from '../runtime/session-evidence';
+import { sessionBriefForModel, type SessionBrief, type SessionEvidenceStore } from '../runtime/session-evidence';
 import { sessionProvider } from '../runtime/session-provider';
 import { createReadPriorEvidenceTool, isHistoryOnlyRoute, preparePriorEvidence, PRIOR_EVIDENCE_GUIDANCE, READ_PRIOR_EVIDENCE_TOOL_NAME,
   type DeliverEvidence, type PriorEvidenceAccess } from '../runtime/prior-evidence';
@@ -275,7 +275,7 @@ async function executeResearchRunWithAssets(options: {
   await options.onCapabilityLoaded(decision.route, researchDeadlineAt);
 
   const upstream = decision.savedOnly ? savedOnlyProvider() : createYouTubeAgentProvider(options.env, undefined, researchDeadlineAt);
-  const refreshFrames = decision.refreshEvidence || decision.refreshFramesOnly;
+  const refreshFrames = decision.refreshEvidence || decision.refreshFramesOnly || !!decision.frameAccess;
   const provider = createCapabilityProvider(options.session ? sessionProvider(upstream, options.session, decision.refreshEvidence, options.registerRetrievedAsset, assetCache, refreshFrames) : upstream, decision);
   const transcriptAnalyst = createTranscriptAnalyst(
     runModel(options.env, options.sessionAffinity, 'low', {
@@ -565,7 +565,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       ...outstandingRequested().map(({ kind, videoId }) => ({ reason: 'requested_evidence_missing', kind, ...(videoId ? { videoId } : {}) })),
     ];
   };
-  const pendingOriginals = () => pendingOriginalSources(options.decision, options.context.session?.brief(), evidence.values(),
+  const pendingOriginals = () => !savedEvidenceSkill ? [] : pendingOriginalSources(options.decision, options.context.session?.brief(), evidence.values(),
     options.context.session?.savedEvidenceReadState?.(options.context.runId));
   const toolFailures = new Map(
     (options.recoveredToolFailures ?? []).map((failure) => [failure.toolCallId, failure]),
@@ -626,6 +626,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
     return pending;
   };
+  const failedFrameVersions = new Set<string>();
   const trackedContext: AgentToolContext = {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
@@ -664,13 +665,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       }
       const target = researchVideoTarget(options.decision);
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
-      const warnings = mergeWarnings(input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
-        youtubeAvailabilityWarnings([...toolFailures.values()]));
-      if (frameScope?.savedTimestampsMs.length) {
-        // The unified finalizer renders this in prose. Direct and fallback answers retain it as a note.
-        const { report } = frameActivity(frameScope, options.context.runId, evidence.values());
-        if (!input.answer.includes(report)) warnings.unshift({ code: 'FRAME_ACTIVITY', message: report.slice(0, 1000) });
-      }
+      const warnings: AgentWarning[] = [];
       if (visualRequired && !hasVisualObservations()) {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
@@ -688,7 +683,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         warnings.push({ code: 'CHANNEL_INSPECTION_INCOMPLETE',
           message: 'The requested channel catalog could not be inspected. Do not treat this response as complete channel research.' });
       }
-      const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings: warnings.slice(0, 50), artifacts }, currentDurationNotice()));
+      const answerWarnings = mergeWarnings(
+        [...warnings, ...youtubeAvailabilityWarnings([...toolFailures.values()])],
+        input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
+      );
+      const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings: answerWarnings, artifacts }, currentDurationNotice()));
       finalized = true;
       return result;
     },
@@ -743,6 +742,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         for (const id of evidence.keys()) if (!retained.has(id)) evidence.delete(id);
         return packet;
       } catch (error) {
+        if (options.decision.frameAccess && execution.toolName === 'analyze_video_frames') {
+          const versions = (execution.input as { assetVersions: string[] }).assetVersions;
+          for (const version of versions) failedFrameVersions.add(version);
+        }
         toolFailures.set(execution.toolCallId, {
           toolCallId: execution.toolCallId,
           toolName: execution.toolName,
@@ -760,6 +763,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const visualRequired = visualEvidenceLevel(options.decision) === 'required';
   const visualRequirements = options.decision.visualRequirements ?? [];
   const frameScope = options.decision.frameAccess;
+  let initialBrief: SessionBrief | undefined;
+  let savedFramesAtStart: SessionBrief['assets'] = [];
+
   const hasVisualObservations = () => [...evidence.values()].some(packet =>
     packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
       ['youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)));
@@ -768,16 +774,16 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const needsVisualWork = () => {
     const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
     if (frameScope) {
-      const { saved, captures } = frameActivity(frameScope, options.context.runId, evidence.values());
-      const available = options.context.session?.brief().assets ?? [];
-      const needsSavedAnalysis = saved.some(item => !item.inspected && available.some(asset => asset.kind === 'frame'
-        && asset.videoId === frameScope.videoId && asset.details.timestampMs === item.time));
-      const needsCaptureAnalysis = options.decision.route === 'inspect_video' && options.decision.timestampedFrameQuestion
-        && captures.some(item => item.retrieved && !item.inspected);
-      return (toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames && !failed.has('analyze_video_frames')
+      const { saved, captures, inspectedVersions, pendingCaptureVersions } = frameActivity(frameScope, options.context.runId, evidence.values());
+      const needsSavedAnalysis = saved.some(item => !item.inspected && savedFramesAtStart.some(asset =>
+        (asset.details.timestampMs === item.time || (typeof asset.details.timestampMs !== 'number' && !failed.has('analyze_video_frames')))
+        && !inspectedVersions.has(asset.version) && !failedFrameVersions.has(asset.version) && options.context.session?.has?.(asset.version) !== false));
+      const needsCaptureAnalysis = (visualRequired || (options.decision.route === 'inspect_video' && options.decision.timestampedFrameQuestion))
+        && pendingCaptureVersions.some(version => !failedFrameVersions.has(version) && options.context.session?.has?.(version) !== false);
+      if ((toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames
         && (needsSavedAnalysis || needsCaptureAnalysis))
         || (toolNames.includes('get_video_frames') && !!options.context.provider.frames && !failed.has('get_video_frames')
-          && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS && captures.some(item => !item.requested));
+          && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS && captures.some(item => !item.requested))) return true;
     }
     if (!visualRequired || hasVisualObservations()) return false;
     const savedFrames = [...evidence.values()].some(packet => packet.kind === 'youtube_frames' && packet.assetVersions?.length);
@@ -787,7 +793,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && (savedFrames || frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS);
     const savedStoryboards = [...evidence.values()].some(packet => packet.kind === 'youtube_storyboard'
       && packet.artifacts.some(artifact => artifact.type === 'youtube_storyboard_retrieval' && Number(artifact.data.sampledFrames) > 0))
-      || options.context.session?.brief().assets.some(asset => asset.kind === 'storyboard_sheet') === true;
+      || initialBrief?.assets.some(asset => asset.kind === 'storyboard_sheet') === true;
     const storyboardPossible = toolNames.includes('get_video_storyboard') && toolNames.includes('analyze_video_storyboard')
       && !!options.context.provider.storyboard && !!options.context.analyzeStoryboard
       && !failed.has('analyze_video_storyboard') && canAnalyzeStoryboard(options.researchDeadlineAt)
@@ -821,7 +827,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         },
       };
       if (options.decision.route === 'inspect_video' && toolNames.includes('get_video') && (options.decision.refreshDynamicData || options.decision.refreshEvidence ||
-        ((options.decision.timestampedFrameQuestion || options.decision.refreshFramesOnly) && verifiedFrameMetadata(options.decision.videoId, [...evidence.values()]) === undefined)
+        ((options.decision.timestampedFrameQuestion || options.decision.refreshFramesOnly || options.decision.frameAccess) && verifiedFrameMetadata(options.decision.videoId, [...evidence.values()]) === undefined)
         || !transcriptSourceContext(options.decision.videoId, [...evidence.values()]).title)) {
         try {
           await executeGetVideo({ videoId: options.decision.videoId }, phaseContext, `initial-video:${options.decision.videoId}`);
@@ -835,6 +841,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           signal.throwIfAborted();
         }
       }
+      initialBrief = options.context.session?.brief();
+      if (frameScope) savedFramesAtStart = initialBrief?.assets.filter(asset => asset.kind === 'frame' && asset.videoId === frameScope.videoId) ?? [];
       const sessionTools: ToolSet = {
         ...contextHandoff.tools(await phaseContext.session?.searchTools?.((packets, source = 'search_context') => {
           const admitted = options.context.deliverEvidence ? options.context.deliverEvidence(packets, source).admitted : packets;
@@ -909,7 +917,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
           options.conversationHistory ?? [],
           options.message,
           [...evidence.values()].map(evidencePacketForModel),
-          options.context.session ? sessionBriefForModel(options.context.session.brief()) : undefined,
+          initialBrief ? sessionBriefForModel(initialBrief) : undefined,
           options.inheritedResolved && options.context.session ? options.prior?.pointers ?? [] : undefined,
         ),
         context: phaseContext,
@@ -1097,8 +1105,6 @@ async function runUnifiedFinalizer(options: {
     .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
   const inspectionRecords = inspected.length
     ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
-  const frameReport = 'frameAccess' in options.decision && options.decision.frameAccess?.savedTimestampsMs.length
-    ? frameActivity(options.decision.frameAccess, options.context.runId, options.evidence).report : undefined;
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -1201,7 +1207,8 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           EVIDENCE_DELIVERY_GUIDANCE,
           INSPECTION_RECORD_GUIDANCE,
-          ...(frameReport ? ['The application will insert frameActivityReport into the answer. Write the findings and their limitations. Use only the inspections confirmed in that report as current visual evidence. If a saved inspection is missing, disclose what could not be verified. Leave the account of tool actions to the application.'] : []),
+          ...('frameAccess' in options.decision && options.decision.frameAccess?.savedTimestampsMs.length
+            ? ['Base visual claims on successful inspections. Explain any gap. The application adds the frame activity to the answer from the recorded operations.'] : []),
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           'For list evidence such as playlists, take counts from collection: entriesShown are the entries supplied here, and collection.coverage states what was not retained, not shown, or not stated by the provider. Never report fewer available entries than are shown. Describe unshown or unretained entries as a context limit, not as absent from the source. When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note stating the provider total, the 12-video listing limit and which videos had content reviewed; do not contradict it. Otherwise no note is appended, so state any material playlist coverage limit yourself. Never present listing details as reviewed video content. evidenceOmittedFromContext counts saved list packets that did not fit at all; notListed of them are counted but not named.',
@@ -1226,7 +1233,6 @@ async function runUnifiedFinalizer(options: {
           providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
             ? { ...failure, message: 'VIDEO_TOO_LONG: The video exceeded the configured Agent duration limit.' } : failure),
           inspectionRecords,
-          frameActivityReport: frameReport,
           validationFeedback: feedback,
         })}, ...(usesSavedEvidenceSkill(options.decision)
           ? (options.conversationHistory ?? []).flatMap(turn => [
@@ -1324,7 +1330,6 @@ async function runUnifiedFinalizer(options: {
       for (const block of output.blocks) {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);
       }
-      if (frameReport && output.blocks.length) output.blocks[0]!.text += ` ${frameReport}`;
       validationStage = 'answer_notes';
       // Judge each block by every reference it will render, declared or inline.
       const references = output.blocks.map(block => blockReferences(block, prepared.fullIds));

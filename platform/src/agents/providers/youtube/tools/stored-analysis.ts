@@ -46,7 +46,7 @@ export async function readAnalysisAssets(
     () => mapInBatches(versions, async (version) => {
       context.signal.throwIfAborted();
       const requiresRetrieval =
-        (context.refreshEvidence || (context.refreshFramesOnly && kind === 'frame')) &&
+        (context.refreshEvidence || ((scope || context.refreshFramesOnly) && kind === 'frame')) &&
         !(context.getEvidence?.() ?? []).some(
           (packet) =>
             packet.packetId.startsWith(`packet:${context.runId}:`) &&

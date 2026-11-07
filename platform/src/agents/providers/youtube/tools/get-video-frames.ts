@@ -106,7 +106,7 @@ export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputS
         },
         analyze: (value, analysisContext) => analyzeFrameEvidence(validateFrameResponse(request, value), parsed.analysis!, analysisContext, toolCallId),
       } : undefined, onReady => visualSpan('retrieval', () => context.provider.frames!(request, context.signal, { extractionTimeoutMs,
-          ...(!context.session && (context.refreshFramesOnly || context.refreshEvidence) ? { refresh: true } : {}) },
+          ...(!context.session && (context.frameAccess || context.refreshFramesOnly || context.refreshEvidence) ? { refresh: true } : {}) },
         event => { extractionDiagnostics.push(event); context.onExtractionDiagnostic?.({ ...event, toolCallId }); }, ...(onReady ? [onReady] : []))), async (response, signal) => {
         const frames = validateFrameResponse(request, response.value);
         if (!context.saveFramePreviews) return;

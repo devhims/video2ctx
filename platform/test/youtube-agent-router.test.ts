@@ -1091,19 +1091,40 @@ describe('YouTube agent capability router', () => {
     expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question });
   });
 
-  it.each(['overlap', 'unrestricted'])('repairs an unscoped refresh and rejects %s capture permission', async invalid => {
+  it.each(['direct', 'recovery'])('runs an open-ended frame refresh after %s routing', async mode => {
     const videoId = 'abcdefghijk';
+    const model = sequenceClassifier([{ route: 'inspect_video', videoId, refreshFramesOnly: true,
+      visualEvidence: mode === 'direct' ? 'helpful' : 'invalid' }]);
+    const decision = await classifyCapabilityWithModel({ model, message: 'Refresh the frames in https://youtu.be/abcdefghijk',
+      signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'inspect_video', videoId, refreshFramesOnly: true });
+    expect(decision).not.toHaveProperty('frameAccess');
+  });
+
+  it.each(['overlap', 'unrestricted', 'omitted', 'wrong video', 'comparison'] as const)('repairs %s before authorizing a bounded frame refresh', async invalid => {
+    const videoId = 'abcdefghijk', previous = 'lmnopqrstuv';
     const frameAccess = { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
-    const base = { route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough shape'] };
-    const model = sequenceClassifier([base, { ...base, frameAccess: invalid === 'overlap'
-      ? { ...frameAccess, captureTimestampsMs: [630000, 645000] } : 'agent_selected' }]);
-    const fallbackModel = sequenceClassifier([{ ...base, frameAccess }]);
-    const route = await classifyCapabilityWithModel({ model, fallbackModel, message: 'Reuse saved 10:30 without recapturing it and capture only 10:45.',
-      sessionBrief: { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame', current: true,
-        collectedAt: 1, details: { timestampMs: 630000 } }] }, signal: new AbortController().signal });
-    expect(route).toMatchObject({ route: 'inspect_video', videoId, frameAccess, refreshFramesOnly: true });
+    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['dough shape'] };
+    const candidates = {
+      omitted: base,
+      overlap: { ...base, refreshFramesOnly: { ...frameAccess, captureTimestampsMs: [645000, 630000] } },
+      unrestricted: { ...base, refreshFramesOnly: true },
+      'wrong video': { ...base, videoId: previous, refreshFramesOnly: { ...frameAccess, videoId: previous } },
+      comparison: { ...base, route: 'topic_research', comparisonVideoIds: [previous, videoId], refreshFramesOnly: frameAccess },
+    };
+    const model = sequenceClassifier([candidates[invalid], { ...base, refreshFramesOnly: frameAccess }]);
+    const route = await classifyCapabilityWithModel({ model, message: 'Reuse saved 10:30 without recapturing it and capture only 10:45 in https://youtu.be/abcdefghijk.',
+      sessionBrief: { memories: [], assets: [{ videoId: previous, version: 'a'.repeat(64), kind: 'frame', current: true,
+        collectedAt: 1, details: {} }] }, signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', videoId, frameAccess });
     expect(model.doGenerateCalls).toHaveLength(2);
-    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('keeps conflicting persisted frame permissions closed on resume', async () => {
+    const frameAccess = { videoId: 'lmnopqrstuv', savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+    const decision = await resolveCapabilityRoute({ persisted: { route: 'inspect_video', videoId: 'abcdefghijk', frameAccess },
+      classify: vi.fn(), persist: vi.fn() });
+    expect(decision).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
 
   it('pins inspect_video provider calls to the classified video', async () => {
