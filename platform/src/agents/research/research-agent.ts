@@ -1,4 +1,5 @@
 import { inspectionRecordsForModel, INSPECTION_RECORD_GUIDANCE } from '../runtime/inspection-records';
+import { frameActivity } from '../runtime/frame-access';
 import { VISUAL_INSPECTION_SKILL } from './skills/visual-inspection.generated';
 import { scheduleEvidenceTools } from '../runtime/evidence-scheduler';
 import { withRunAssetCache, type RunAssetCache } from '../runtime/run-asset-cache';
@@ -461,6 +462,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     ? options.decision : undefined;
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
+    .filter(name => !options.decision.frameAccess || name !== 'get_video_storyboard')
     .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
@@ -630,6 +632,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     researchQuestion: options.message,
     refreshEvidence: options.decision.refreshEvidence,
     refreshFramesOnly: options.decision.refreshFramesOnly,
+    frameAccess: options.decision.frameAccess,
     timestampedFrameQuestion: options.decision.route === 'inspect_video' && !options.decision.savedOnly
       ? options.decision.timestampedFrameQuestion : undefined,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
@@ -663,6 +666,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const requiredVideos = options.decision.comparisonVideoIds?.length ?? (options.decision.route === 'topic_research' ? options.decision.requiredVideoCount : undefined);
       const warnings = mergeWarnings(input.warnings.filter(warning => warning.code !== 'RESEARCH_COVERAGE_SHORTFALL'),
         youtubeAvailabilityWarnings([...toolFailures.values()]));
+      if (frameScope?.savedTimestampsMs.length) {
+        // The unified finalizer renders this in prose. Direct and fallback answers retain it as a note.
+        const { report } = frameActivity(frameScope, options.context.runId, evidence.values());
+        if (!input.answer.includes(report)) warnings.unshift({ code: 'FRAME_ACTIVITY', message: report.slice(0, 1000) });
+      }
       if (visualRequired && !hasVisualObservations()) {
         warnings.push({ code: 'VISUAL_EVIDENCE_INCOMPLETE',
           message: `The request required visual evidence${visualRequirements.length ? ` (${visualRequirements.join('; ')})` : ''}, but no analyzed visual observations were collected. Visual portions of the answer remain unverified.` });
@@ -680,7 +688,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         warnings.push({ code: 'CHANNEL_INSPECTION_INCOMPLETE',
           message: 'The requested channel catalog could not be inspected. Do not treat this response as complete channel research.' });
       }
-      const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings, artifacts }, currentDurationNotice()));
+      const result = await options.context.finalize(id, withDurationLimitNotice({ ...input, warnings: warnings.slice(0, 50), artifacts }, currentDurationNotice()));
       finalized = true;
       return result;
     },
@@ -751,14 +759,27 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   };
   const visualRequired = visualEvidenceLevel(options.decision) === 'required';
   const visualRequirements = options.decision.visualRequirements ?? [];
+  const frameScope = options.decision.frameAccess;
   const hasVisualObservations = () => [...evidence.values()].some(packet =>
     packet.excerpts.length > 0 && packet.artifacts.some(artifact =>
       ['youtube_frame_analysis', 'youtube_storyboard_analysis'].includes(artifact.type)));
   // Transcript breadth is not completion when the requested facts need images.
   // Keep the existing time, total-call, step and cost ceilings authoritative.
   const needsVisualWork = () => {
-    if (!visualRequired || hasVisualObservations()) return false;
     const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
+    if (frameScope) {
+      const { saved, captures } = frameActivity(frameScope, options.context.runId, evidence.values());
+      const available = options.context.session?.brief().assets ?? [];
+      const needsSavedAnalysis = saved.some(item => !item.inspected && available.some(asset => asset.kind === 'frame'
+        && asset.videoId === frameScope.videoId && asset.details.timestampMs === item.time));
+      const needsCaptureAnalysis = options.decision.route === 'inspect_video' && options.decision.timestampedFrameQuestion
+        && captures.some(item => item.retrieved && !item.inspected);
+      return (toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames && !failed.has('analyze_video_frames')
+        && (needsSavedAnalysis || needsCaptureAnalysis))
+        || (toolNames.includes('get_video_frames') && !!options.context.provider.frames && !failed.has('get_video_frames')
+          && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS && captures.some(item => !item.requested));
+    }
+    if (!visualRequired || hasVisualObservations()) return false;
     const savedFrames = [...evidence.values()].some(packet => packet.kind === 'youtube_frames' && packet.assetVersions?.length);
     const framesPossible = toolNames.includes('get_video_frames') && toolNames.includes('analyze_video_frames')
       && !!options.context.provider.frames && !!options.context.analyzeFrames
@@ -844,6 +865,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(savedEvidenceSkill && !verifySaved ? ['Reuse supplied visual observations. Saved visual analysis tools remain available only for requested visual facts that are still missing; they do not replace required original caption/comment reads.'] : []),
             ...(!verifySaved ? ['For exact quotations or source corrections, use search_originals: omit assetVersion to find which saved source says it, then read that source by its version. Analyst summaries are not verbatim evidence. Read original passages before completing research.'] : []),
             ...(options.decision.savedOnly ? ['This run is saved-only. Retrieval and discovery are disabled, including incidental metadata calls. Missing saved assets are gaps, not permission to fetch.'] : []),
+            ...(options.decision.frameAccess ? [`Exact frame access for this turn: ${JSON.stringify(options.decision.frameAccess)}. Analyze the saved positions by their session asset versions. If saved inspection fails, stop that inspection and report the gap. Independently retrieve the authorized new positions. Earlier observations cannot stand in for a successful re-inspection.`] : []),
             ...(requestedKinds.length ? [requestedEvidenceGuidance(requestedKinds)] : []),
             // The skill accompanies exactly the visual tools this model can call.
             ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
@@ -1075,6 +1097,8 @@ async function runUnifiedFinalizer(options: {
     .filter(packet => packet.sources.some(source => source.videoId && subjects.has(source.videoId)));
   const inspectionRecords = inspected.length
     ? inspectionRecordsForModel(inspected, options.context.evidenceRunRecords?.(inspected.map(packet => packet.packetId))) : undefined;
+  const frameReport = 'frameAccess' in options.decision && options.decision.frameAccess?.savedTimestampsMs.length
+    ? frameActivity(options.decision.frameAccess, options.context.runId, options.evidence).report : undefined;
   const baseOutputSchema = conversational ? conversationalFinalizationOutputSchema
     : intent === 'context_answer' ? contextFinalizationOutputSchema : finalizationOutputSchema;
   const numberedItemCount = 'numberedItemCount' in options.decision ? options.decision.numberedItemCount : undefined;
@@ -1177,6 +1201,7 @@ async function runUnifiedFinalizer(options: {
           'Keep JSON compact. Use short ref_N citations rather than full evidence IDs. For specific-video comparisons cite every subject, or explicitly state the missing side and add ANSWER_SCOPE_SHORTFALL. If contextIncomplete is true, do not claim exhaustive coverage unless the supplied evidence establishes it.',
           EVIDENCE_DELIVERY_GUIDANCE,
           INSPECTION_RECORD_GUIDANCE,
+          ...(frameReport ? ['The application will insert frameActivityReport into the answer. Write the findings and their limitations. Use only the inspections confirmed in that report as current visual evidence. If a saved inspection is missing, disclose what could not be verified. Leave the account of tool actions to the application.'] : []),
           'Recovery has a limited token budget. Preserve the requested count where evidence permits by shortening each item before reducing the count. If scope remains incomplete, state the shortfall and add ANSWER_SCOPE_SHORTFALL. Do not pad or invent findings.',
           'State important evidence gaps plainly. Do not claim that a failed provider operation succeeded.',
           'For list evidence such as playlists, take counts from collection: entriesShown are the entries supplied here, and collection.coverage states what was not retained, not shown, or not stated by the provider. Never report fewer available entries than are shown. Describe unshown or unretained entries as a context limit, not as absent from the source. When the answer cites a playlist entry, or reviewed transcript or visual content for a listed video, the application appends a playlist coverage note stating the provider total, the 12-video listing limit and which videos had content reviewed; do not contradict it. Otherwise no note is appended, so state any material playlist coverage limit yourself. Never present listing details as reviewed video content. evidenceOmittedFromContext counts saved list packets that did not fit at all; notListed of them are counted but not named.',
@@ -1201,6 +1226,7 @@ async function runUnifiedFinalizer(options: {
           providerFailures: groupedToolFailures(options.toolFailures).map(failure => failure.durationLimit
             ? { ...failure, message: 'VIDEO_TOO_LONG: The video exceeded the configured Agent duration limit.' } : failure),
           inspectionRecords,
+          frameActivityReport: frameReport,
           validationFeedback: feedback,
         })}, ...(usesSavedEvidenceSkill(options.decision)
           ? (options.conversationHistory ?? []).flatMap(turn => [
@@ -1298,6 +1324,7 @@ async function runUnifiedFinalizer(options: {
       for (const block of output.blocks) {
         block.evidenceIds = block.evidenceIds.map(id => prepared.fullIds.get(id) ?? id);
       }
+      if (frameReport && output.blocks.length) output.blocks[0]!.text += ` ${frameReport}`;
       validationStage = 'answer_notes';
       // Judge each block by every reference it will render, declared or inline.
       const references = output.blocks.map(block => blockReferences(block, prepared.fullIds));

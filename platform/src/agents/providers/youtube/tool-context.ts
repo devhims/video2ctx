@@ -4,7 +4,7 @@ import type { FrameAnalyst } from './frame-analyst';
 import type { SaveFramePreviews } from '../../runtime/frame-previews';
 import type { SaveStoryboardPreviews } from '../../runtime/storyboard-previews';
 import type { VisualAnalyst } from './visual-analyst';
-import type { AgentTurnResult, EvidenceOperation, EvidencePacket, FinalizeAnswerInput } from '../../contracts';
+import type { AgentTurnResult, EvidenceOperation, EvidencePacket, FinalizeAnswerInput, FrameAccess } from '../../contracts';
 import type { YouTubeAgentProvider } from './provider';
 import type { YouTubeEvidenceToolName } from './tool-names';
 import type { TranscriptAnalyst } from './transcript-analyst';
@@ -57,6 +57,7 @@ export interface AgentToolContext {
   maxVideoSeconds?: number;
   refreshEvidence?: boolean;
   refreshFramesOnly?: boolean;
+  frameAccess?: FrameAccess;
   timestampedFrameQuestion?: string;
   session?: import('../../runtime/session-evidence').SessionAccess;
   assetCache?: RunAssetCache;

@@ -23,7 +23,7 @@ const MODEL_WARNINGS = 50;
 const MODEL_ANALYSIS_SUMMARY_CHARACTERS = 2_000;
 const MODEL_ANALYSIS_FINDINGS = 20;
 const MODEL_ANALYSIS_FINDING_CHARACTERS = 600;
-const frameCoverageSchema = z.object({
+export const frameCoverageSchema = z.object({
   selections: recordedFrameSelectionsSchema.optional(),
   requestedTimestampsMs: z.array(z.number().int().nonnegative()).max(6),
   frames: z.array(framesSchema.shape.frames.element.omit({ imageBase64: true })).max(6),
