@@ -14,12 +14,20 @@ export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
 export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(8);
 
 const frameTimes = z.array(z.number().int().nonnegative()).max(24);
-/** A fixed capture list stays scoped to one video, including during route recovery. */
-export const frameAccessSchema = z.object({
+const frameAccessEntrySchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   savedTimestampsMs: frameTimes,
-  captureTimestampsMs: frameTimes.min(1),
+  captureTimestampsMs: frameTimes,
 });
+/** Exact saved and new frame positions for each video in the turn. Model-facing, so no transforms. */
+export const frameAccessListSchema = z.array(frameAccessEntrySchema).min(1).max(8);
+/** A fixed capture list stays scoped to its videos, including during route recovery.
+ * Routes persisted before multi-video access stored one entry as a bare object. */
+export const frameAccessSchema = z.preprocess(
+  value => value && typeof value === 'object' && !Array.isArray(value) ? [value] : value,
+  frameAccessListSchema.refine(entries => entries.some(entry => entry.captureTimestampsMs.length > 0),
+    'Frame access authorizes at least one new capture.'),
+);
 export type FrameAccess = z.infer<typeof frameAccessSchema>;
 
 /** Evidence the user explicitly asked to be read before answering. Research cannot complete until each is read or unavailable. */

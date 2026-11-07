@@ -6,6 +6,7 @@ import {
   runResearchAgentWithModel,
 } from '../src/agents/research/research-agent';
 import { INSPECT_VIDEO_TOOL_NAMES } from '../src/agents/research/capabilities/inspect-video';
+import { capabilityRouteDecisionSchema } from '../src/agents/contracts';
 import {
   classifyCapabilityWithModel,
   extractYouTubeVideoIds,
@@ -1093,10 +1094,10 @@ describe('YouTube agent capability router', () => {
 
   it.each(['overlap', 'unrestricted'])('repairs an unscoped refresh and rejects %s capture permission', async invalid => {
     const videoId = 'abcdefghijk';
-    const frameAccess = { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+    const frameAccess = [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }];
     const base = { route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough shape'] };
     const model = sequenceClassifier([base, { ...base, frameAccess: invalid === 'overlap'
-      ? { ...frameAccess, captureTimestampsMs: [630000, 645000] } : 'agent_selected' }]);
+      ? [{ ...frameAccess[0]!, captureTimestampsMs: [630000, 645000] }] : 'agent_selected' }]);
     const fallbackModel = sequenceClassifier([{ ...base, frameAccess }]);
     const route = await classifyCapabilityWithModel({ model, fallbackModel, message: 'Reuse saved 10:30 without recapturing it and capture only 10:45.',
       sessionBrief: { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame', current: true,
@@ -1104,6 +1105,68 @@ describe('YouTube agent capability router', () => {
     expect(route).toMatchObject({ route: 'inspect_video', videoId, frameAccess, refreshFramesOnly: true });
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(fallbackModel.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('routes a saved frame on one video and a capture on another as a comparison of both', async () => {
+    const [saved, linked] = ['abcdefghijk', 'lmnopqrstuv'];
+    const frameAccess = [{ videoId: saved, savedTimestampsMs: [30000], captureTimestampsMs: [] },
+      { videoId: linked, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+    const visual = { refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['outfits'] };
+    // Each rejected shape left the saved video's frame unreadable in production.
+    const model = sequenceClassifier([
+      { route: 'inspect_video', videoId: linked, ...visual, frameAccess },
+      { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'outfits', ...visual, frameAccess },
+    ]);
+    const fallbackModel = sequenceClassifier([{ route: 'topic_research', comparisonVideoIds: [saved, linked], ...visual, frameAccess }]);
+    const route = await classifyCapabilityWithModel({ model, fallbackModel,
+      message: `Compare this with https://www.youtube.com/watch?v=${linked}: re-inspect the saved 0:30 frame without recapturing it, and capture only 1:00 of the new video.`,
+      sessionBrief: { memories: [], assets: [{ videoId: saved, version: 'a'.repeat(64), kind: 'frame', current: true,
+        collectedAt: 1, details: { timestampMs: 30000 } }] }, signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'topic_research', comparisonVideoIds: [saved, linked], frameAccess });
+    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('keeps frame access on the linked video when one video is linked', async () => {
+    const [saved, linked] = ['abcdefghijk', 'lmnopqrstuv'];
+    const visual = { refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['outfit'] };
+    const model = sequenceClassifier([
+      { route: 'inspect_video', videoId: saved, ...visual, frameAccess: [{ videoId: saved, savedTimestampsMs: [], captureTimestampsMs: [45000] }] },
+      { route: 'inspect_video', videoId: linked, ...visual, frameAccess: [{ videoId: linked, savedTimestampsMs: [], captureTimestampsMs: [45000] }] },
+    ]);
+    const route = await classifyCapabilityWithModel({ model, message: `Capture only 0:45 of https://youtu.be/${linked}`,
+      sessionBrief: { memories: [], assets: [{ videoId: saved, version: 'a'.repeat(64), kind: 'frame', current: true, collectedAt: 1, details: { timestampMs: 30000 } }] },
+      signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', videoId: linked, frameAccess: [{ videoId: linked }] });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('reads routes persisted with single-video frame access', () => {
+    const legacy = { videoId: 'abcdefghijk', savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+    expect(capabilityRouteDecisionSchema.parse({ route: 'inspect_video', videoId: legacy.videoId, researchVideoCount: 1,
+      useStoryboard: true, answerDetail: 'standard', frameAccess: legacy })).toMatchObject({ frameAccess: [legacy] });
+  });
+
+  it.each([
+    ['runs an open refresh', 'Refresh the frames of https://youtu.be/abcdefghijk', { route: 'inspect_video', refreshFramesOnly: true }],
+    ['asks before recapturing against a prohibition', 'Look at https://youtu.be/abcdefghijk again without recapturing 0:30, refresh the rest',
+      { route: 'finalize', responseIntent: 'clarification' }],
+  ])('%s when no attempt fixes capture positions', async (_name, message, expected) => {
+    const model = sequenceClassifier([{ route: 'inspect_video', videoId: 'abcdefghijk', refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'] }]);
+    const route = await expectLastResort(classifyCapabilityWithModel({ model, message, signal: new AbortController().signal }));
+    expect(route).toMatchObject(expected);
+    expect(route).not.toHaveProperty('frameAccess');
+  });
+
+  it('names frameAccess when a saved-only request also asks for captures', async () => {
+    const videoId = 'abcdefghijk';
+    const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [45000] }];
+    const model = sequenceClassifier([
+      { route: 'inspect_video', videoId, savedOnly: true, visualEvidence: 'required', visualRequirements: ['scene'], frameAccess },
+      { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'], frameAccess },
+    ]);
+    const route = await classifyCapabilityWithModel({ model, message: `Capture only 0:45 of https://youtu.be/${videoId}`, signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', frameAccess, refreshFramesOnly: true });
+    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('Saved-only requests cannot capture frames');
   });
 
   it('pins inspect_video provider calls to the classified video', async () => {

@@ -7661,38 +7661,42 @@
                             }
                           },
                           "frameAccess": {
-                            "type": "object",
-                            "properties": {
-                              "videoId": {
-                                "type": "string",
-                                "pattern": "^[A-Za-z0-9_-]{11}$"
-                              },
-                              "savedTimestampsMs": {
-                                "maxItems": 24,
-                                "type": "array",
-                                "items": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "videoId": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9_-]{11}$"
+                                },
+                                "savedTimestampsMs": {
+                                  "maxItems": 24,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "captureTimestampsMs": {
+                                  "maxItems": 24,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
                                 }
                               },
-                              "captureTimestampsMs": {
-                                "minItems": 1,
-                                "maxItems": 24,
-                                "type": "array",
-                                "items": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              }
-                            },
-                            "required": [
-                              "videoId",
-                              "savedTimestampsMs",
-                              "captureTimestampsMs"
-                            ],
-                            "additionalProperties": false
+                              "required": [
+                                "videoId",
+                                "savedTimestampsMs",
+                                "captureTimestampsMs"
+                              ],
+                              "additionalProperties": false
+                            }
                           },
                           "refreshFramesOnly": {
                             "type": "boolean"
@@ -7792,38 +7796,42 @@
                             }
                           },
                           "frameAccess": {
-                            "type": "object",
-                            "properties": {
-                              "videoId": {
-                                "type": "string",
-                                "pattern": "^[A-Za-z0-9_-]{11}$"
-                              },
-                              "savedTimestampsMs": {
-                                "maxItems": 24,
-                                "type": "array",
-                                "items": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "videoId": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9_-]{11}$"
+                                },
+                                "savedTimestampsMs": {
+                                  "maxItems": 24,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "captureTimestampsMs": {
+                                  "maxItems": 24,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
                                 }
                               },
-                              "captureTimestampsMs": {
-                                "minItems": 1,
-                                "maxItems": 24,
-                                "type": "array",
-                                "items": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              }
-                            },
-                            "required": [
-                              "videoId",
-                              "savedTimestampsMs",
-                              "captureTimestampsMs"
-                            ],
-                            "additionalProperties": false
+                              "required": [
+                                "videoId",
+                                "savedTimestampsMs",
+                                "captureTimestampsMs"
+                              ],
+                              "additionalProperties": false
+                            }
                           },
                           "refreshFramesOnly": {
                             "type": "boolean"
@@ -9521,38 +9529,42 @@
                         }
                       },
                       "frameAccess": {
-                        "type": "object",
-                        "properties": {
-                          "videoId": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]{11}$"
-                          },
-                          "savedTimestampsMs": {
-                            "maxItems": 24,
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "videoId": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{11}$"
+                            },
+                            "savedTimestampsMs": {
+                              "maxItems": 24,
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "captureTimestampsMs": {
+                              "maxItems": 24,
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
                             }
                           },
-                          "captureTimestampsMs": {
-                            "minItems": 1,
-                            "maxItems": 24,
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          }
-                        },
-                        "required": [
-                          "videoId",
-                          "savedTimestampsMs",
-                          "captureTimestampsMs"
-                        ],
-                        "additionalProperties": false
+                          "required": [
+                            "videoId",
+                            "savedTimestampsMs",
+                            "captureTimestampsMs"
+                          ],
+                          "additionalProperties": false
+                        }
                       },
                       "refreshFramesOnly": {
                         "type": "boolean"
@@ -9652,38 +9664,42 @@
                         }
                       },
                       "frameAccess": {
-                        "type": "object",
-                        "properties": {
-                          "videoId": {
-                            "type": "string",
-                            "pattern": "^[A-Za-z0-9_-]{11}$"
-                          },
-                          "savedTimestampsMs": {
-                            "maxItems": 24,
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "videoId": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{11}$"
+                            },
+                            "savedTimestampsMs": {
+                              "maxItems": 24,
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "captureTimestampsMs": {
+                              "maxItems": 24,
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
                             }
                           },
-                          "captureTimestampsMs": {
-                            "minItems": 1,
-                            "maxItems": 24,
-                            "type": "array",
-                            "items": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            }
-                          }
-                        },
-                        "required": [
-                          "videoId",
-                          "savedTimestampsMs",
-                          "captureTimestampsMs"
-                        ],
-                        "additionalProperties": false
+                          "required": [
+                            "videoId",
+                            "savedTimestampsMs",
+                            "captureTimestampsMs"
+                          ],
+                          "additionalProperties": false
+                        }
                       },
                       "refreshFramesOnly": {
                         "type": "boolean"
