@@ -1083,13 +1083,14 @@ describe('YouTube agent capability router', () => {
 
   it('carries the timestamp question across recovery candidates for the same video', async () => {
     const videoId = 'abcdefghijk', question = 'What does the scoreboard show at 1:00?';
+    const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
     const model = sequenceClassifier([
-      { route: 'inspect_video', videoId, timestampedFrameQuestion: question, visualEvidence: 'invalid' },
+      { route: 'inspect_video', videoId, timestampedFrameQuestion: question, visualEvidence: 'invalid', frameAccess },
       { videoId, visualEvidence: 'required', visualRequirements: ['scoreboard'] },
     ]);
     const decision = await expectLastResort(classifyCapabilityWithModel({ message: `At 1:00 in https://youtu.be/${videoId}, read the scoreboard`,
       model, signal: new AbortController().signal }));
-    expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question });
+    expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question, frameAccess });
   });
 
   it.each(['overlap', 'omitted'])('repairs an %s capture list before authorizing a bounded refresh', async invalid => {
@@ -1188,6 +1189,38 @@ describe('YouTube agent capability router', () => {
     const route = await classifyCapabilityWithModel({ model, message: `Capture only 0:45 of https://youtu.be/${videoId}`, signal: new AbortController().signal });
     expect(route).toMatchObject({ route: 'inspect_video', frameAccess, refreshFramesOnly: true });
     expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('Saved-only requests cannot capture frames');
+  });
+
+  it.each([
+    ['an exact-frame question without a refresh', 'Capture only 1:00 of https://youtu.be/abcdefghijk. No other timestamps.', 60000,
+      { timestampedFrameQuestion: 'What is on screen at 1:00?' }],
+    ['a refresh at a position given in seconds', 'Refresh the frame of https://youtu.be/abcdefghijk at only 60 seconds.', 60000,
+      { refreshFramesOnly: true }],
+  ])('requires a capture list for %s', async (_name, message, time, fields) => {
+    const videoId = 'abcdefghijk';
+    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['screen'], ...fields };
+    const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [time] }];
+    const model = sequenceClassifier([base, { ...base, frameAccess }]);
+    const route = await classifyCapabilityWithModel({ model, message, signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', frameAccess });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('records a saved frame at a named time that the route left out', async () => {
+    const [saved, linked] = ['abcdefghijk', 'lmnopqrstuv'];
+    const visual = { visualEvidence: 'required', visualRequirements: ['outfits'] };
+    const both = [{ videoId: saved, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: linked, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+    // The production decision: only the linked video's capture, with the saved frame silently dropped.
+    const model = sequenceClassifier([
+      { route: 'inspect_video', videoId: linked, ...visual, frameAccess: [both[1]] },
+      { route: 'topic_research', comparisonVideoIds: [saved, linked], ...visual, frameAccess: both },
+    ]);
+    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
+      message: `Reuse the saved 0:30 frame and capture 1:00 of https://youtu.be/${linked}. Compare the outfits.`,
+      sessionBrief: { memories: [], assets: [{ videoId: saved, version: 'a'.repeat(64), kind: 'frame', current: true, collectedAt: 1, details: { timestampMs: 30000 } }] } });
+    expect(route).toMatchObject({ route: 'topic_research', frameAccess: both });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain('saved 0:30 frame of abcdefghijk');
   });
 
   it('pins inspect_video provider calls to the classified video', async () => {

@@ -53,23 +53,38 @@ export function frameActivity(scope: FrameAccess, runId: string, evidence: Itera
     pendingCaptureVersions: [...retrievedVersions].filter(version => !inspectedVersions.has(version)), report: sentences.join(' ') };
 }
 
-/** Cited frame observations recorded by an earlier turn, which this turn did not inspect again.
- * The route cannot be trusted to list every video the user meant, so the answer states it. */
+/** Versions this run analyzed, and which of them it did not itself retrieve (saved images it re-inspected). */
+function runInspections(runId: string, packets: readonly EvidencePacket[]) {
+  const own = packets.filter(packet => packet.packetId.startsWith(`packet:${runId}:`) && packet.kind === 'youtube_frames');
+  const versions = (type: string) => new Set(own.filter(packet => packet.artifacts.some(artifact => artifact.type === type))
+    .flatMap(packet => packet.assetVersions ?? []));
+  const analyzed = versions('youtube_frame_analysis');
+  const retrieved = versions('youtube_frame_retrieval');
+  return { analyzed, savedInspected: [...analyzed].some(version => !retrieved.has(version)) };
+}
+
+/** Cited frame observations recorded by an earlier turn whose image this turn did not inspect again.
+ * The route cannot be trusted to list every video the user meant, so the answer states it.
+ * Matching is by immutable asset version: a newer image at the same moment is a different image. */
 export function earlierFrameNotes(runId: string, cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>,
   packets: readonly EvidencePacket[]): string[] {
-  const own = (packet: EvidencePacket) => packet.packetId.startsWith(`packet:${runId}:`);
-  const inspectedNow = new Set(packets.filter(packet => own(packet) && packet.kind === 'youtube_frames').flatMap(packet =>
-    packet.artifacts.flatMap(artifact => {
-      if (artifact.type !== 'youtube_frame_analysis') return [];
-      const coverage = frameCoverageSchema.safeParse(artifact.data);
-      return coverage.success ? packet.sources.flatMap(source => coverage.data.frames.map(frame => `${source.videoId}:${frame.timestampMs}`)) : [];
-    })));
+  const { analyzed } = runInspections(runId, packets);
   const notes = new Map<string, string>();
   for (const { packet, startMs, videoId, title } of cited) {
     const key = `${videoId}:${startMs}`;
-    if (own(packet) || packet.kind !== 'youtube_frames' || inspectedNow.has(key) || notes.has(key)
-      || !packet.artifacts.some(artifact => artifact.type === 'youtube_frame_analysis')) continue;
-    notes.set(key, `The ${clockTime(startMs)} observation${title ? ` of "${title}"` : ''} comes from an earlier turn and was not re-inspected in this one.`);
+    const versions = packet.assetVersions ?? [];
+    if (packet.packetId.startsWith(`packet:${runId}:`) || packet.kind !== 'youtube_frames' || notes.has(key)
+      || !packet.artifacts.some(artifact => artifact.type === 'youtube_frame_analysis')
+      || (versions.length > 0 && versions.every(version => analyzed.has(version)))) continue;
+    notes.set(key, `The ${clockTime(startMs)} observation${title ? ` of "${title}"` : ''} comes from an image inspected in an earlier turn, not in this one.`);
   }
   return [...notes.values()];
+}
+
+const REINSPECTION_CLAIM = /\b(?:re-?inspect\w*|re-?examin\w*|re-?analy[sz]\w*|re-?check\w*|looked (?:at \w+ )?again|(?:reused?|reusing) (?:the |that |this )?saved)\b/i;
+
+/** A claim of re-inspection needs no citation, so it is checked against what this run did. */
+export function reinspectionClaimNote(runId: string, answer: string, packets: readonly EvidencePacket[]): string | undefined {
+  return REINSPECTION_CLAIM.test(answer) && !runInspections(runId, packets).savedInspected
+    ? 'No frame saved before this turn was re-inspected in this turn.' : undefined;
 }

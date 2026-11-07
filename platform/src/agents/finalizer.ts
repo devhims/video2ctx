@@ -10,7 +10,7 @@ import {
   type FinalizeAnswerInput,
   type FrameAccess,
 } from './contracts';
-import { earlierFrameNotes, frameActivity } from './runtime/frame-access';
+import { earlierFrameNotes, frameActivity, reinspectionClaimNote } from './runtime/frame-access';
 import { appendNotices, playlistCoverageDisclosures } from './playlist-coverage';
 import { CITED_FRAME_PREVIEWS, citedPacketFramePreviews } from './runtime/frame-previews';
 
@@ -86,6 +86,8 @@ export function buildAgentTurnResult(
   if (frameTurn && input.intent !== 'clarification' && input.intent !== 'rejected') {
     if (frameTurn.access?.some(entry => entry.savedTimestampsMs.length)) notes.push(frameActivity(frameTurn.access, identity.runId, packets).report);
     notes.push(...earlierFrameNotes(identity.runId, citedObservations, packets));
+    const claim = reinspectionClaimNote(identity.runId, input.answer, packets);
+    if (claim) notes.push(claim);
   }
   const disclosedAnswer = appendNotices(answer, notes);
 

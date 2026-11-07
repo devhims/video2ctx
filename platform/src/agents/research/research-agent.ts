@@ -463,6 +463,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   // Missing flags belong to legacy persisted routes, which retain their tool set.
   const toolNames = (options.toolNames ?? capability.toolNames)
     .filter(name => !options.decision.frameAccess || name !== 'get_video_storyboard')
+    // A saved-only access list authorizes no capture, so the capture tool is not offered.
+    .filter(name => name !== 'get_video_frames' || !options.decision.frameAccess
+      || options.decision.frameAccess.some(entry => entry.captureTimestampsMs.length))
     .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
@@ -628,6 +631,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   };
   const frameScope = options.decision.frameAccess;
   const failedFrameVersions = new Set<string>();
+  const failedCaptures = new Set<string>();
   const trackedContext: AgentToolContext = {
     ...options.context,
     researchDeadlineAt: options.researchDeadlineAt,
@@ -746,6 +750,11 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         if (frameScope && execution.toolName === 'analyze_video_frames') {
           for (const version of (execution.input as { assetVersions?: string[] }).assetVersions ?? []) failedFrameVersions.add(version);
         }
+        // A failed capture closes only its own positions; other authorized captures stay required.
+        if (frameScope && execution.toolName === 'get_video_frames') {
+          const { videoId, timestampsMs } = execution.input as { videoId?: string; timestampsMs?: number[] };
+          for (const time of timestampsMs ?? []) failedCaptures.add(`${videoId}:${time}`);
+        }
         toolFailures.set(execution.toolCallId, {
           toolCallId: execution.toolCallId,
           toolName: execution.toolName,
@@ -784,8 +793,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       const needsCaptureAnalysis = (visualRequired || (options.decision.route === 'inspect_video' && !!options.decision.timestampedFrameQuestion))
         && pendingCaptureVersions.some(open);
       return (toolNames.includes('analyze_video_frames') && !!options.context.analyzeFrames && (needsSavedAnalysis || needsCaptureAnalysis))
-        || (toolNames.includes('get_video_frames') && !!options.context.provider.frames && !failed.has('get_video_frames')
-          && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS && captures.some(item => !item.requested));
+        || (toolNames.includes('get_video_frames') && !!options.context.provider.frames
+          && frameExtractionBudget(options.researchDeadlineAt) >= FRAME_EXTRACTION_MIN_MS
+          && captures.some(item => !item.requested && !failedCaptures.has(`${item.videoId}:${item.time}`)));
     }
     if (!visualRequired || hasVisualObservations()) return false;
     const savedFrames = [...evidence.values()].some(packet => packet.kind === 'youtube_frames' && packet.assetVersions?.length);

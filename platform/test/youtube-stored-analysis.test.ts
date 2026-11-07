@@ -302,6 +302,23 @@ describe('cross-video frame completion', () => {
     expect(analyzed()).toEqual([videoId, other]);
   });
 
+  it('keeps other authorized captures required after one capture fails', async () => {
+    const { context, provider, frames } = scene();
+    const at = (id: string, timestampMs: number) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs }] });
+    provider.frames.mockImplementation((async (request: { videoId: string }) => {
+      if (request.videoId === videoId) throw new Error('Extraction failed.');
+      return { value: at(other, 60000), cacheStatus: 'miss' };
+    }) as never);
+    const refused = await refusedCompletions(context, [
+      () => ({ name: 'get_video_frames', input: { videoId, timestampsMs: [35000] } }),
+      () => ({ name: 'complete_research', input: {} }),
+      () => ({ name: 'get_video_frames', input: { videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' } }),
+    ], { ...decision, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [35000] },
+      { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }] });
+    expect(refused).toBe(1);
+    expect((provider.frames.mock.calls as unknown as [{ videoId: string }][]).map(([request]) => request.videoId)).toEqual([videoId, other]);
+  });
+
   it('tries a saved frame whose inventory omits its position before completing', async () => {
     const { context, saved, analyzed } = scene(true);
     const refused = await refusedCompletions(context, [
@@ -314,26 +331,59 @@ describe('cross-video frame completion', () => {
   });
 });
 
-it('notes a cited observation from an earlier turn when the route omitted its video', async () => {
-  const { context, store, frames } = setup();
+describe('application notes on frame turns', () => {
   const other = 'lmnopqrstuv';
-  const at = (id: string, timestampMs: number) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs }] });
-  context.analyzeFrames = vi.fn(async ({ frames }) => ({
-    findings: [{ observation: 'A shirt.', timestampsMs: [frames.frames[0]!.timestampMs] }], warnings: [] }));
-  // An earlier turn inspected the first video at 0:30.
-  context.runId = crypto.randomUUID();
-  const earlier = await analyze('frame', store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 }), context, 'What is he wearing?');
-  // This turn's route listed only the second video, as in the production incident.
-  context.runId = crypto.randomUUID();
-  context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
-  const current = await analyze('frame', store.put('frame', other, at(other, 60000), { timestampMs: 60000 }), context, 'What is he wearing?');
-  const result = buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(),
-    agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 }, {
-    answer: `He re-checked the saved frame: a shirt [cite:${earlier.excerpts[0]!.id}]. The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`,
-    intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [],
-  }, [earlier, current], 0, undefined, { access: context.frameAccess });
-  expect(result.answer).toMatch(/\n\nThe 0:30 observation( of "[^"]+")? comes from an earlier turn and was not re-inspected in this one\.$/);
-  expect(result.answer).not.toContain('The 1:00 observation');
+  /** An earlier turn inspected the first video at 0:30; this turn's route listed only the second video. */
+  async function turns() {
+    const { context, store, frames, provider } = setup();
+    const at = (id: string, timestampMs: number, width = 640) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs, width }] });
+    context.analyzeFrames = vi.fn(async ({ frames }) => ({
+      findings: [{ observation: 'A shirt.', timestampsMs: [frames.frames[0]!.timestampMs] }], warnings: [] }));
+    context.runId = crypto.randomUUID();
+    const savedVersion = store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 });
+    const earlier = await analyze('frame', savedVersion, context, 'What is he wearing?');
+    context.runId = crypto.randomUUID();
+    context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
+    provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
+    const current = await executeGetVideoFrames({ videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' }, context, 'capture');
+    const answer = (text: string, packets: EvidencePacket[]) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
+      userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 },
+      { answer: text, intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [] },
+      [earlier, ...packets], 0, undefined, { access: context.frameAccess }).answer;
+    return { context, store, at, savedVersion, earlier, current, answer };
+  }
+  const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
+  const claimNote = 'No frame saved before this turn was re-inspected in this turn.';
+
+  it('states that a cited observation came from an earlier turn', async () => {
+    const { earlier, current, answer } = await turns();
+    const text = answer(`The saved frame shows a shirt [cite:${earlier.excerpts[0]!.id}]. The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    expect(text).toMatch(earlierNote);
+    expect(text).not.toContain('The 1:00 observation');
+  });
+
+  it('corrects an uncited claim of re-inspection when no saved frame was inspected', async () => {
+    const { current, answer } = await turns();
+    const text = answer(`I re-inspected the saved 0:30 frame. The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    expect(text.endsWith(claimNote)).toBe(true);
+  });
+
+  it('keeps the earlier-turn note when this turn inspected a different image at the same moment', async () => {
+    const { context, store, at, earlier, current, answer } = await turns();
+    context.frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, ...context.frameAccess!];
+    const replacement = await analyze('frame', store.put('frame', videoId, at(videoId, 30000, 320), { timestampMs: 30000 }), context, 'What is he wearing?');
+    const text = answer(`The saved frame shows a shirt [cite:${earlier.excerpts[0]!.id}] [cite:${current.excerpts[0]!.id}].`, [current, replacement]);
+    expect(text).toMatch(earlierNote);
+  });
+
+  it('adds neither note when this turn re-inspected the cited image', async () => {
+    const { context, savedVersion, earlier, current, answer } = await turns();
+    context.frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, ...context.frameAccess!];
+    const again = await analyze('frame', savedVersion, context, 'What is he wearing?');
+    const text = answer(`I re-inspected the saved frame: a shirt [cite:${earlier.excerpts[0]!.id}] [cite:${current.excerpts[0]!.id}].`, [current, again]);
+    expect(text).not.toMatch(earlierNote);
+    expect(text).not.toContain(claimNote);
+  });
 });
 
 it('rejects forbidden positions and other videos before metadata, billing or extraction', () => {

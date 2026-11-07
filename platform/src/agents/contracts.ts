@@ -25,8 +25,7 @@ export const frameAccessListSchema = z.array(frameAccessEntrySchema).min(1).max(
  * Routes persisted before multi-video access stored one entry as a bare object. */
 export const frameAccessSchema = z.preprocess(
   value => value && typeof value === 'object' && !Array.isArray(value) ? [value] : value,
-  frameAccessListSchema.refine(entries => entries.some(entry => entry.captureTimestampsMs.length > 0),
-    'Frame access authorizes at least one new capture.'),
+  frameAccessListSchema,
 );
 export type FrameAccess = z.infer<typeof frameAccessSchema>;
 
