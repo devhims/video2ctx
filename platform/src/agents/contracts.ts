@@ -15,7 +15,8 @@ export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200
 
 const frameTimes = z.array(z.number().int().nonnegative()).max(24);
 const frameAccessEntrySchema = z.object({
-  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  /** Absent: capture times for whichever videos discovery selects. */
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
   savedTimestampsMs: frameTimes,
   captureTimestampsMs: frameTimes,
 });

@@ -27,13 +27,13 @@ export const getVideoFramesInputSchema = frameRequestSchema.extend({
 export function createGetVideoFramesTool(context: AgentToolContext) {
   const schema = getVideoFramesInputSchema.omit({ focus: true });
   const captures = context.frameAccess?.filter(entry => entry.captureTimestampsMs.length);
+  const times = captures?.length ? z.array(z.literal([...new Set(captures.flatMap(entry => entry.captureTimestampsMs))])).min(1).max(6) : undefined;
+  const videos = captures?.every(entry => entry.videoId) ? captures.map(entry => entry.videoId!) : undefined;
   return tool({
     description: 'Retrieve or reuse up to six video frames at millisecond timestamps. Supply analysis with your question to analyze immediately while images are saved. Omit analysis for retrieval only. Returns saved assetVersions, dimensions and failures, without image bytes. Use analyze_video_frames for questions about versions already saved. If suitable frames already exist in session inventory, analyze them directly. Still images cannot establish motion or speech.',
     // Per-video pairing is enforced at execution; the schema narrows what the model can propose.
-    inputSchema: captures?.length ? schema.extend({
-      videoId: z.literal(captures.map(entry => entry.videoId)),
-      timestampsMs: z.array(z.literal([...new Set(captures.flatMap(entry => entry.captureTimestampsMs))])).min(1).max(6),
-    }) : schema,
+    // An entry without a video fixes only the times, for whichever video discovery selects.
+    inputSchema: !times ? schema : videos ? schema.extend({ videoId: z.literal(videos), timestampsMs: times }) : schema.extend({ timestampsMs: times }),
     outputSchema: evidencePacketSchema,
     // Previews are dashboard images with random IDs; the model analyzes assetVersions instead.
     toModelOutput: ({ output }) => ({ type: 'text', value: JSON.stringify({
@@ -49,10 +49,10 @@ export function createGetVideoFramesTool(context: AgentToolContext) {
 export function executeGetVideoFrames(input: z.input<typeof getVideoFramesInputSchema>, context: AgentToolContext, toolCallId: string) {
   const parsed = getVideoFramesInputSchema.parse(input);
   const scope = context.frameAccess;
-  const allowed = scope?.find(entry => entry.videoId === parsed.videoId)?.captureTimestampsMs ?? [];
+  const allowed = (scope?.find(entry => entry.videoId === parsed.videoId) ?? scope?.find(entry => !entry.videoId))?.captureTimestampsMs ?? [];
   if (scope && parsed.timestampsMs.some(time => !allowed.includes(time))) {
     const permitted = scope.filter(entry => entry.captureTimestampsMs.length)
-      .map(entry => `${entry.captureTimestampsMs.join(', ')} ms on ${entry.videoId}`).join('; ');
+      .map(entry => `${entry.captureTimestampsMs.join(', ')} ms on ${entry.videoId ?? 'videos found by discovery'}`).join('; ');
     throw new Error(`Capture is limited to ${permitted}. Use saved analysis for saved positions. If it fails, report the gap.`);
   }
   if (!parsed.analysis && parsed.videoId === context.pinnedVideoId &&

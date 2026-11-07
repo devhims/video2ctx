@@ -118,15 +118,16 @@ const kinds = ['transcript', 'frame', 'storyboard_sheet'] as const;
 /** The session's saved frames as the runtime passes them to the answer builder. */
 function inventoryOf(context: AgentToolContext) {
   return context.session!.brief().assets.flatMap(asset => asset.kind === 'frame'
-    ? [{ version: asset.version, videoId: asset.videoId, ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []);
+    ? [{ version: asset.version, videoId: asset.videoId, collectedAt: asset.collectedAt,
+      ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []);
 }
 
 /** Finalizes through the application's answer builder, which owns the frame activity notes. */
-function finalizeThroughApplication(context: AgentToolContext, packets: EvidencePacket[], access: FrameAccess, earlier: EvidencePacket[] = []) {
+function finalizeThroughApplication(context: AgentToolContext, packets: EvidencePacket[], access: FrameAccess, startedAt: number) {
   context.runId = crypto.randomUUID();
   const identity = { runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() };
   const finalize = vi.fn(async (_id: string, input: FinalizeAnswerInput) => buildAgentTurnResult(identity, { userId: 'user', creditsRemaining: 100 },
-    input, [...earlier, ...packets], 0, undefined, { access, inventory: inventoryOf(context) }));
+    input, packets, 0, undefined, { access, inventory: inventoryOf(context), startedAt }));
   context.finalize = finalize;
   return async () => (await finalize.mock.results.at(-1)!.value).answer as string;
 }
@@ -134,9 +135,9 @@ function finalizeThroughApplication(context: AgentToolContext, packets: Evidence
 it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and only fetches 10:45 (saved image %s)', async savedState => {
   const { context, provider, store, frames, packets } = setup();
   const frameAccess = [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }];
-  const answer = finalizeThroughApplication(context, packets, frameAccess);
   const at = (timestampMs: number) => ({ ...frames, frames: [{ ...frames.frames[0]!, timestampMs }] });
   const saved = store.put('frame', videoId, at(630000), { timestampMs: 630000 });
+  const answer = finalizeThroughApplication(context, packets, frameAccess, store.runStart());
   if (savedState === 'missing') store.remove(saved);
   provider.frames.mockResolvedValue({ value: at(645000), cacheStatus: 'miss' });
   context.analyzeFrames = vi.fn(async ({ frames }) => {
@@ -185,9 +186,9 @@ it('re-inspects a saved frame of one video while capturing only the other video'
   const { context, provider, store, frames, packets } = setup();
   const other = 'lmnopqrstuv';
   const frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
-  const answer = finalizeThroughApplication(context, packets, frameAccess);
   const at = (id: string, timestampMs: number) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs }] });
   const saved = store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 });
+  const answer = finalizeThroughApplication(context, packets, frameAccess, store.runStart());
   provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
   context.analyzeFrames = vi.fn(async ({ frames }) => ({
     findings: [{ observation: 'A blue shirt.', timestampsMs: [frames.frames[0]!.timestampMs] }], warnings: [] }));
@@ -349,14 +350,17 @@ describe('application notes on frame turns', () => {
     const savedVersion = store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 });
     const earlier = await analyze('frame', savedVersion, context, 'What is he wearing?');
     context.runId = crypto.randomUUID();
+    let startedAt = store.runStart();
     context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
     provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
     const current = await executeGetVideoFrames({ videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' }, context, 'capture');
     const answer = (text: string, packets: EvidencePacket[]) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 },
       { answer: text, intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [] },
-      [earlier, ...packets], 0, undefined, { access: context.frameAccess, inventory: inventoryOf(context) }).answer;
-    return { context, store, at, savedVersion, earlier, current, answer };
+      [earlier, ...packets], 0, undefined, { access: context.frameAccess, inventory: inventoryOf(context), startedAt }).answer;
+    /** Moves this turn's start after saves made by a test's own earlier turn. */
+    const restart = () => { startedAt = store.runStart(); };
+    return { context, store, at, savedVersion, earlier, current, answer, restart };
   }
   const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
   const claimNote = 'No frame saved before this turn was re-inspected in this turn.';
@@ -378,13 +382,41 @@ describe('application notes on frame turns', () => {
     expect(text).toContain('I retrieved the 1:00 frame and inspected it.');
   });
 
+  it('counts an image served from session storage as a re-inspected saved frame', async () => {
+    const { savedVersion, current, answer } = await turns();
+    // A capture request answered from the session returns the image saved by the earlier turn.
+    const reused = { ...current, assetVersions: [savedVersion] };
+    const text = answer(`The frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [reused]);
+    expect(text).not.toContain(claimNote);
+  });
+
+  it.each([
+    ['re-inspected alone', 'single', false],
+    ['re-inspected with another image', 'batch', true],
+  ])('handles a cited batch image without inventory positions when it was %s', async (_name, mode, uncertain) => {
+    const { context, store, at, current, answer, restart } = await turns();
+    context.runId = crypto.randomUUID();
+    context.frameAccess = undefined;
+    // Older inventory rows omit positions, so only the recorded analyses can place each image.
+    const [thirty, fortyFive, other] = [30000, 45000, 50000].map(time => store.put('frame', videoId, at(videoId, time, 480)));
+    const batch = await executeAnalyzeVideoFrames({ assetVersions: [thirty!, fortyFive!], focus: 'What is he wearing?' }, context, 'batch');
+    restart();
+    context.runId = current.packetId.split(':')[1]!;
+    const again = await executeAnalyzeVideoFrames({ assetVersions: mode === 'single' ? [thirty!] : [fortyFive!, other!], focus: 'What is he wearing?' }, context, 'again');
+    const cited = batch.excerpts.find(excerpt => excerpt.startMs === 30000)!;
+    const text = answer(`The saved frame shows a shirt [cite:${cited.id}] [cite:${current.excerpts[0]!.id}].`, [batch, current, again]);
+    expect(text).not.toMatch(earlierNote);
+    expect(text.includes('It is not recorded whether the cited 0:30 observation')).toBe(uncertain);
+  });
+
   it('judges each citation by its own image when an earlier batch held several', async () => {
-    const { context, store, at, current, answer } = await turns();
+    const { context, store, at, current, answer, restart } = await turns();
     // An earlier turn analyzed 0:30 and 0:45 together; this turn re-inspects only the exact 0:30 image.
     context.runId = crypto.randomUUID();
     context.frameAccess = undefined;
     const [thirty, fortyFive] = [30000, 45000].map(time => store.put('frame', videoId, at(videoId, time, 480), { timestampMs: time }));
     const batch = await executeAnalyzeVideoFrames({ assetVersions: [thirty!, fortyFive!], focus: 'What is he wearing?' }, context, 'batch');
+    restart();
     context.runId = current.packetId.split(':')[1]!;
     context.frameAccess = [{ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] }, { videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
     const again = await analyze('frame', thirty!, context, 'What is he wearing?');
@@ -411,6 +443,16 @@ describe('application notes on frame turns', () => {
     expect(text).not.toMatch(earlierNote);
     expect(text).not.toContain(claimNote);
   });
+});
+
+it('enforces a capture time fixed before discovery on whichever video is chosen', async () => {
+  const { context, provider, frames } = setup();
+  context.frameAccess = [{ savedTimestampsMs: [], captureTimestampsMs: [30000] }];
+  provider.frames.mockResolvedValue({ value: { ...frames, videoId: 'lmnopqrstuv', frames: [{ ...frames.frames[0]!, timestampMs: 30000 }] }, cacheStatus: 'miss' });
+  expect(() => executeGetVideoFrames({ videoId: 'lmnopqrstuv', timestampsMs: [60000] }, context, 'other-time')).toThrow('Capture is limited');
+  await executeGetVideoFrames({ videoId: 'lmnopqrstuv', timestampsMs: [30000] }, context, 'fixed-time');
+  expect((provider.frames.mock.calls as unknown as [{ videoId: string; timestampsMs: number[] }][])[0]![0])
+    .toMatchObject({ videoId: 'lmnopqrstuv', timestampsMs: [30000] });
 });
 
 it('rejects forbidden positions and other videos before metadata, billing or extraction', () => {

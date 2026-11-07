@@ -7693,7 +7693,6 @@
                                     }
                                   },
                                   "required": [
-                                    "videoId",
                                     "savedTimestampsMs",
                                     "captureTimestampsMs"
                                   ],
@@ -7838,7 +7837,6 @@
                                     }
                                   },
                                   "required": [
-                                    "videoId",
                                     "savedTimestampsMs",
                                     "captureTimestampsMs"
                                   ],
@@ -9581,7 +9579,6 @@
                                 }
                               },
                               "required": [
-                                "videoId",
                                 "savedTimestampsMs",
                                 "captureTimestampsMs"
                               ],
@@ -9726,7 +9723,6 @@
                                 }
                               },
                               "required": [
-                                "videoId",
                                 "savedTimestampsMs",
                                 "captureTimestampsMs"
                               ],

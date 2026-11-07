@@ -18,6 +18,7 @@ import {
   type FinalizeAnswerInput,
 } from '../contracts';
 import { sessionBriefForModel, type SessionBrief } from '../runtime/session-evidence';
+import { clockTime } from '../runtime/clock-time';
 import { conversationAssistantMessage, type ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
@@ -30,7 +31,8 @@ const classifierDecisionSchema = z.object({
   skill: z.enum(['verify_saved_evidence']).optional().describe('Verify saved evidence: use for follow-ups that read saved original captions/comments, check exact quotations or precise passage links, or correct source claims. It does not by itself prohibit fetching; set savedOnly separately. Omit for broad summaries and visual analysis.'),
   requestedEvidence: requestedEvidenceSchema.optional().describe('Evidence the user explicitly asks to be read before answering: original_quotes for exact quotations, verbatim wording or precise passage links from captions; comments for what viewers or commenters say. Research must read each or report it unavailable. Omit when not explicitly requested.'),
   savedOnly: z.boolean().optional().describe('True when the user requires existing saved evidence only or prohibits fresh retrieval. All provider access is disabled for this run; use saved evidence reads and report missing assets.'),
-  frameAccess: z.union([frameAccessListSchema, z.literal('agent_selected')]).optional().describe('Permission to capture new video frames; without it no new frame is captured. When the user fixes frame positions, saved or new, list one entry per video the turn touches: captureTimestampsMs holds only the permitted NEW capture positions in milliseconds, empty when nothing may be captured; savedTimestampsMs holds saved positions to re-inspect without recapture, even if their assets are missing. Required for exact-timestamp questions and for any limit on what may be captured. Use agent_selected only when new frames may help and the user leaves every position to you.'),
+  frameAccess: z.union([frameAccessListSchema, z.literal('agent_selected')]).optional().describe('Permission to capture new video frames; without it no new frame is captured. When the user fixes frame positions, saved or new, list one entry per video the turn touches: captureTimestampsMs holds only the permitted NEW capture positions in milliseconds, empty when nothing may be captured; savedTimestampsMs holds saved positions to re-inspect without recapture, even if their assets are missing. When the videos are still to be found by discovery, give one entry without videoId holding the capture times. Required for exact-timestamp questions and for any limit on what may be captured. Use agent_selected only when new frames may help and the user leaves every position to you.'),
+  setAsideFrames: z.array(z.object({ videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/), timestampMs: z.number().int().nonnegative() })).max(24).optional().describe('Saved frames from the session inventory at a time the user named that this turn must not use: the user excluded them, or the time refers to another video. Every saved frame at a named time belongs either in its video\'s frameAccess entry or here.'),
   timestampedFrameQuestion: z.string().trim().min(1).max(500).optional().describe('For inspect_video: when the user supplies exact timestamps and asks what is visible, copy the focused visual question here. Include this for a request to describe each specified frame. Omit for image retrieval only or saved-only requests.'),
   refreshFramesOnly: z.boolean().optional().describe('For inspection or research, including multi-video comparisons: true when the user asks to freshly capture or refresh frames only. Reuse verified video metadata. Leave refreshEvidence unset unless other source evidence must also be refreshed.'),
   refreshEvidence: z.boolean().optional().describe('Except for a frames-only refresh, true only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
@@ -178,7 +180,8 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   if (scope === 'agent_selected' && input.savedOnly === true)
     issue('frameAccess', 'Saved-only requests cannot capture frames. Omit frameAccess, or list only savedTimestampsMs.');
   if (Array.isArray(scope)) {
-    const scoped = scope.map(entry => entry.videoId);
+    const scoped = scope.flatMap(entry => entry.videoId ? [entry.videoId] : []);
+    const open = scope.filter(entry => !entry.videoId);
     // Every scoped video must be a subject of the route, or its frames cannot be read or captured.
     const subjects = input.route === 'inspect_video' ? [input.videoId]
       : input.route === 'topic_research' && Array.isArray(input.comparisonVideoIds) ? input.comparisonVideoIds : [];
@@ -186,6 +189,9 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
       issue('frameAccess', 'Saved-only requests cannot capture frames. List only savedTimestampsMs, or omit savedOnly if the user authorized new captures.');
     else if (scoped.some(id => !suppliedVideoIds.includes(id) || !subjects.includes(id)) || new Set(scoped).size !== scoped.length)
       issue('frameAccess', 'List one frameAccess entry per video, only for the route\'s subjects. When saved or new frames span several videos, use topic_research with every one in comparisonVideoIds.');
+    else if (open.length && (open.length > 1 || scope.length > 1 || open.some(entry => entry.savedTimestampsMs.length)
+      || input.route !== 'topic_research' || input.comparisonVideoIds !== undefined))
+      issue('frameAccess', 'An entry without videoId fixes capture times for videos that discovery will select. Use it alone, once, without saved positions, and only for topic_research without comparisonVideoIds.');
     else if (scope.some(entry => new Set([...entry.savedTimestampsMs, ...entry.captureTimestampsMs]).size !== entry.savedTimestampsMs.length + entry.captureTimestampsMs.length))
       issue('frameAccess', 'Give each timestamp exactly one role, saved inspection or fresh capture.');
   }
@@ -300,7 +306,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Select skill verify_saved_evidence for follow-ups that recover saved original captions/comments, verify exact quotations or passage links, or correct source claims. This replaces general discovery and analysis with a verification workflow. The skill does not prohibit fetching: a request that also needs evidence not yet saved, such as comments, still gets it unless savedOnly is set. Omit the skill for broad summaries or visual analysis.',
       'Set requestedEvidence for each kind of evidence the user explicitly asks for: original_quotes for exact quotations, verbatim wording or precise passage links; comments for what viewers or commenters say. Include every requested kind in one decision, alongside any explanation. Research cannot complete until each is read or reported unavailable, so choose an executable route.',
       'Set savedOnly true whenever the user prohibits fresh retrieval or asks to use existing saved sources only. Keep this restriction on follow-ups when it remains in force. Missing saved evidence is a gap, never permission to fetch. Use the saved reader instead of transcript retrieval or discovery.',
-      'New frames are captured only with frameAccess. When the user names frame positions, limits what may be captured, asks about exact timestamps, or re-inspects saved frames, list them in frameAccess with one entry per video. Set agent_selected only when new frames may help and the user leaves every position to you, including a plain frame refresh. Omit savedOnly when new captures are allowed. For example, re-inspect saved 10:30 and capture only 10:45 means [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }]. A prohibition on recapturing 10:30 still allows the requested 10:45. When the saved frame belongs to one video and the new capture to another, list both videos and choose topic_research with both in comparisonVideoIds, even if the message links only one. Times mentioned for comparison, narration or history do not authorize capture.',
+      'New frames are captured only with frameAccess. When discovery will choose the videos but the user fixes the time, use one entry without videoId. When the session holds a saved frame at a time the user names, list it on its own video, or in setAsideFrames if the user excluded it or meant another video. When the user names frame positions, limits what may be captured, asks about exact timestamps, or re-inspects saved frames, list them in frameAccess with one entry per video. Set agent_selected only when new frames may help and the user leaves every position to you, including a plain frame refresh. Omit savedOnly when new captures are allowed. For example, re-inspect saved 10:30 and capture only 10:45 means [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }]. A prohibition on recapturing 10:30 still allows the requested 10:45. When the saved frame belongs to one video and the new capture to another, list both videos and choose topic_research with both in comparisonVideoIds, even if the message links only one. Times mentioned for comparison, narration or history do not authorize capture.',
       'Requests for exact quotations from original saved captions/comments, precise passage-start links, or explicit original-asset reads require inspect_video or topic_research with the resolved subjects, even if prior summaries discuss the topic. Research can call search_originals without fetching YouTube. Quoting a source is different from quoting a prior conversation message. Do not route an original-source read directly to finalize.',
       'For every context_answer set contextScope: history for listing, quoting, recalling or correcting conversation messages or preferences; video for claims about video content; mixed only when the requested answer needs both. A video URL inside a quoted earlier message does not require video evidence.',
       'For finalize give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
@@ -595,7 +601,7 @@ const ROUTE_FIELDS = {
   finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
 } as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
 const SHARED_FIELDS = ['skill', 'savedOnly', 'requestedEvidence', 'answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
-  'visualEvidence', 'visualRequirements'] as const satisfies readonly DefaultedClassificationField[];
+  'visualEvidence', 'visualRequirements', 'setAsideFrames'] as const satisfies readonly DefaultedClassificationField[];
 
 function candidateObject(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === 'string') {
@@ -610,6 +616,9 @@ const prohibitsRecapture = (message: string) => /\b(?:without|never|do not|don['
 /** Clock times, and durations introduced as a position ("at 90 seconds", "only 60 seconds"), not lengths ("a 10 minute video"). */
 const FRAME_POSITION = /\b\d+:\d{2}\b|\b\d+\s*ms\b|(?:\b(?:at|from|around|only|to|until)|@)\s*\d+(?:\.\d+)?\s*(?:milliseconds?|s|secs?|seconds?|mins?|minutes?)\b/i;
 const namesFramePositions = (message: string) => FRAME_POSITION.test(message);
+/** Clock times named in the message, in milliseconds. */
+const namedClockTimes = (message: string) => [...message.matchAll(/\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/g)]
+  .map(([, hours, minutes, seconds]) => ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000);
 
 function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
   // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
@@ -622,13 +631,27 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
   // Capture is closed without frameAccess, so omission never widens it. These checks only ask
   // for a list where the classifier itself, or an explicit limit in the message, implies one.
   if (decision.route !== 'finalize' && !decision.savedOnly && !Array.isArray(decision.frameAccess)) {
-    const fixedVideos = decision.route === 'inspect_video' || !!decision.comparisonVideoIds?.length || videoIds.length === 1;
-    const limited = prohibitsRecapture(input.message) || (fixedVideos && namesFramePositions(input.message));
+    // Delegating which video is chosen is not delegating when it is captured.
+    const limited = prohibitsRecapture(input.message) || namesFramePositions(input.message);
     if (decision.timestampedFrameQuestion || (decision.frameAccess === 'agent_selected' && limited)) {
       return [{ path: 'frameAccess', code: 'missing_capture_scope', message: 'The user fixed the frame positions. List the saved inspection positions and the permitted capture positions in frameAccess, one entry per video.' }];
     }
     if (decision.refreshFramesOnly && !decision.frameAccess) {
       return [{ path: 'frameAccess', code: 'missing_capture_permission', message: 'A frame refresh needs capture permission. List the positions in frameAccess, or set agent_selected if the user left them to you.' }];
+    }
+  }
+  // Each saved frame at a time the user named is accounted for on its own video: inspected,
+  // recaptured, or set aside. Otherwise a plan can drop it without the research ever being able to reach it.
+  if (decision.route !== 'finalize' && (decision.frameAccess || decision.refreshFramesOnly || decision.timestampedFrameQuestion || decision.visualEvidence !== 'none')) {
+    const named = new Set(namedClockTimes(input.message));
+    const accounted = (videoId: string, time: number) => (Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry =>
+      entry.videoId === videoId && (entry.savedTimestampsMs.includes(time) || entry.captureTimestampsMs.includes(time))))
+      || !!decision.setAsideFrames?.some(frame => frame.videoId === videoId && frame.timestampMs === time);
+    const omitted = input.sessionBrief?.assets.find(asset => asset.kind === 'frame' && typeof asset.details.timestampMs === 'number'
+      && named.has(asset.details.timestampMs) && !accounted(asset.videoId, asset.details.timestampMs));
+    if (omitted) {
+      const time = clockTime(omitted.details.timestampMs as number);
+      return [{ path: 'frameAccess', code: 'saved_frame_unaccounted', message: `The session holds a saved ${time} frame of ${omitted.videoId}, and the user named ${time}. List it in that video's frameAccess entry (savedTimestampsMs to re-inspect, captureTimestampsMs to recapture), with that video in the route, or in setAsideFrames if the user excluded it or meant another video.` }];
     }
   }
   const scope = comparisonScopeIssues(decision, input, videoIds);
@@ -851,7 +874,8 @@ function expectedComparisonSubjects(input: CapabilityClassifierInput): string[] 
 function finishClassification(
   decision: z.infer<typeof classifierDecisionSchema>, videoIds: string[], channelIds: string[], explicitVideoIds: string[], message: string,
 ): CapabilityRouteDecision {
-  const { explicitSourceCount, ...classified } = withVisualAccess(decision);
+  // Set-aside frames only check the classification; the route carries what research may use.
+  const { explicitSourceCount, setAsideFrames: _setAside, ...classified } = withVisualAccess(decision);
   const pinned = !(decision.route === 'topic_research' && decision.playlistListing) && explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
     && (decision.route !== 'finalize' || (decision.responseIntent === 'context_answer' && decision.contextScope !== 'history'));
   const route = pinned ? { ...classified, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
@@ -995,7 +1019,7 @@ export async function resolveCapabilityRoute(options: {
     // video after validation. Resuming must not run them without the access the user gave.
     const subjects = decision.route === 'inspect_video' ? [decision.videoId]
       : decision.route === 'topic_research' ? decision.comparisonVideoIds ?? [] : [];
-    if ('frameAccess' in decision && Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry => !subjects.includes(entry.videoId))) {
+    if ('frameAccess' in decision && Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry => entry.videoId && !subjects.includes(entry.videoId))) {
       return { route: 'finalize', responseIntent: 'clarification', reason: 'Clarify which video the saved and fresh frame positions refer to.' };
     }
     return decision;

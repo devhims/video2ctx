@@ -753,7 +753,8 @@ async function runResearchAgentWithModelWithinDeadline(options: {
         // A failed capture closes only its own positions; other authorized captures stay required.
         if (frameScope && execution.toolName === 'get_video_frames') {
           const { videoId, timestampsMs } = execution.input as { videoId?: string; timestampsMs?: number[] };
-          for (const time of timestampsMs ?? []) failedCaptures.add(`${videoId}:${time}`);
+          // A time fixed before discovery chose the video is closed by a failure on any video.
+          for (const time of timestampsMs ?? []) { failedCaptures.add(`${videoId}:${time}`); failedCaptures.add(`*:${time}`); }
         }
         toolFailures.set(execution.toolCallId, {
           toolCallId: execution.toolCallId,

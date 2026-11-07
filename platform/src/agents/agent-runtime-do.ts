@@ -1051,9 +1051,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
       // An application fallback is checked against what this run had, not earlier turns' cited content.
       runPackets: this.admittedRunEvidence(runId, history),
-    } : undefined, isFrameTurn(decision) ? { access: frameList(decision), inventory: this.sessionStore.brief().assets.flatMap(asset =>
-      asset.kind === 'frame' ? [{ version: asset.version, videoId: asset.videoId,
-        ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []) } : undefined);
+    } : undefined, isFrameTurn(decision) ? { access: frameList(decision), startedAt: run.created_at,
+      inventory: this.sessionStore.brief().assets.flatMap(asset => asset.kind === 'frame' ? [{ version: asset.version, videoId: asset.videoId,
+        collectedAt: asset.collectedAt, ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []) } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);
