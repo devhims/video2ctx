@@ -13,6 +13,15 @@ export const visualEvidenceSchema = z.enum(['none', 'helpful', 'required']);
 export type VisualEvidence = z.infer<typeof visualEvidenceSchema>;
 export const visualRequirementsSchema = z.array(z.string().trim().min(1).max(200)).min(1).max(8);
 
+const frameTimes = z.array(z.number().int().nonnegative()).max(24);
+/** A fixed capture list stays scoped to one video, including during route recovery. */
+export const frameAccessSchema = z.object({
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  savedTimestampsMs: frameTimes,
+  captureTimestampsMs: frameTimes.min(1),
+});
+export type FrameAccess = z.infer<typeof frameAccessSchema>;
+
 /** Evidence the user explicitly asked to be read before answering. Research cannot complete until each is read or unavailable. */
 export const requestedEvidenceSchema = z.array(z.enum(['original_quotes', 'comments'])).min(1).max(2);
 
@@ -33,6 +42,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     savedOnly: z.boolean().optional(),
     skill: z.enum(['verify_saved_evidence']).optional(),
     requestedEvidence: requestedEvidenceSchema.optional(),
+    frameAccess: frameAccessSchema.optional(),
     refreshFramesOnly: z.boolean().optional(),
     refreshEvidence: z.boolean().optional(),
     refreshDynamicData: z.boolean().optional(),
@@ -50,6 +60,7 @@ export const capabilityRouteDecisionSchema = z.discriminatedUnion('route', [
     savedOnly: z.boolean().optional(),
     skill: z.enum(['verify_saved_evidence']).optional(),
     requestedEvidence: requestedEvidenceSchema.optional(),
+    frameAccess: frameAccessSchema.optional(),
     refreshFramesOnly: z.boolean().optional(),
     timestampedFrameQuestion: z.string().trim().min(1).max(500).optional(),
     refreshEvidence: z.boolean().optional(),

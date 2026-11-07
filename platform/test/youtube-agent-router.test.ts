@@ -1091,6 +1091,21 @@ describe('YouTube agent capability router', () => {
     expect(decision).toMatchObject({ route: 'inspect_video', videoId, timestampedFrameQuestion: question });
   });
 
+  it.each(['overlap', 'unrestricted'])('repairs an unscoped refresh and rejects %s capture permission', async invalid => {
+    const videoId = 'abcdefghijk';
+    const frameAccess = { videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] };
+    const base = { route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough shape'] };
+    const model = sequenceClassifier([base, { ...base, frameAccess: invalid === 'overlap'
+      ? { ...frameAccess, captureTimestampsMs: [630000, 645000] } : 'agent_selected' }]);
+    const fallbackModel = sequenceClassifier([{ ...base, frameAccess }]);
+    const route = await classifyCapabilityWithModel({ model, fallbackModel, message: 'Reuse saved 10:30 without recapturing it and capture only 10:45.',
+      sessionBrief: { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame', current: true,
+        collectedAt: 1, details: { timestampMs: 630000 } }] }, signal: new AbortController().signal });
+    expect(route).toMatchObject({ route: 'inspect_video', videoId, frameAccess, refreshFramesOnly: true });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
+  });
+
   it('pins inspect_video provider calls to the classified video', async () => {
     const video = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {} as never }));
     const provider = createCapabilityProvider(providerWith({ video }), {
