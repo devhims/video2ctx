@@ -1,6 +1,6 @@
 import type { RouteFrameAccess } from '../contracts';
 import { clockTime } from '../runtime/clock-time';
-import { extractYouTubeVideoIds, urlCandidates } from './youtube-references';
+import { extractYouTubeVideoIds, linkedSeek, urlCandidates } from './youtube-references';
 import type { SessionBrief } from '../runtime/session-evidence';
 
 const UNIT_MS: ReadonlyArray<[RegExp, number]> = [[/^(?:ms|milliseconds?)$/i, 1], [/^(?:s|secs?|seconds?)$/i, 1_000],
@@ -33,11 +33,12 @@ function isVideoLength(before: string, after: string): boolean {
 
 // A list continues the preceding operation ("capture 0:30, 0:45 and 1:00").
 // A new clause can change it ("reuse 0:30, then capture 1:00").
-const CLAUSE = /[:;.!?]\s+|\n|(?:,\s*|\b(?:then|and|but)\s+)(?=[a-z])/i;
+const CLAUSE = /[:;.!?]\s+|\n|(?:,\s*|\b(?:then|and|but)\s+)(?=[a-z])|\b(?:with|versus|vs\.?)\s+(?=(?:(?:a|an|the)\s+)?(?:new|fresh|saved|previous|prior)\b)/i;
 function positionRole(clause: string, after: string) {
   if (/\b(?:no|not|never|without|don['’]t|except|instead of|rather than|exclude|ignore|skip)\b/i.test(clause)) return 'excluded';
   if (/\bstoryboards?\b/i.test(clause) || /^\s+storyboard sheet\b/i.test(after)) return 'sheet';
-  if (/\b(?:re-?capture|capture|refresh|new (?:image|still|frame))\b/i.test(clause)) return 'capture';
+  if (/\b(?:re-?capture|capture|refresh|(?:new|fresh) (?:image|still|frame))\b/i.test(clause)
+    || (/\b(?:new|fresh)\s*$/i.test(clause) && /^\s+(?:image|still|frame)\b/i.test(after))) return 'capture';
   if (/\b(?:transcript|caption|comment)s?\b/i.test(clause)) return;
   if (/\b(?:reuse|re-?inspect|saved|previous|prior)\b/i.test(clause) || /^\s+saved (?:frame|image)\b/i.test(after)) return 'saved';
 }
@@ -46,7 +47,9 @@ function positionRole(clause: string, after: string) {
 export function readFrameRequest(message: string) {
   const positions: { time: number; role: ReturnType<typeof positionRole>; videoIds: string[] }[] = [];
   let captureEndMs: number | undefined;
-  function add(match: RegExpExecArray, time: number) {
+  const urls = [...message.matchAll(urlCandidates)];
+  function addProseTime(match: RegExpExecArray, time: number) {
+    if (urls.some(url => match.index >= url.index && match.index < url.index + url[0].length)) return;
     const before = message.slice(0, match.index);
     const after = message.slice(match.index + match[0].length);
     const fromStart = START_ANCHOR.test(after);
@@ -60,23 +63,24 @@ export function readFrameRequest(message: string) {
       positions.push({ time, role: positionRole(prefix, suffix), videoIds: extractYouTubeVideoIds(prefix + match[0] + suffix) });
     }
   }
-  // A link can open at a different time than the requested capture. Its seek position is
-  // relevant only when the user supplies no position or capture window in the surrounding text.
-  const urls = [...message.matchAll(urlCandidates)];
-  const linked: [RegExpExecArray, number][] = [];
-  function record(match: RegExpExecArray, time: number) {
-    if (urls.some(url => match.index >= url.index && match.index < url.index + url[0].length)) linked.push([match, time]);
-    else add(match, time);
-  }
   for (const match of message.matchAll(CLOCK_TIME)) {
     const [, hours, minutes, seconds] = match;
-    record(match, ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1_000);
+    addProseTime(match, ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1_000);
   }
   for (const match of message.matchAll(TIME_QUANTITY)) {
     const [, amount, unit, extra] = match;
-    record(match, Math.round(Number(amount) * unitMs(unit!) + Number(extra ?? 0) * 1_000));
+    addProseTime(match, Math.round(Number(amount) * unitMs(unit!) + Number(extra ?? 0) * 1_000));
   }
-  if (!positions.length && captureEndMs === undefined) for (const [match, time] of linked) add(match, time);
+  // An explicit position or window in the request takes precedence over the link's seek time.
+  if (!positions.length && captureEndMs === undefined) {
+    for (const url of urls) {
+      const seek = linkedSeek(url[0]);
+      if (!seek) continue;
+      const prefix = message.slice(0, url.index).split(CLAUSE).at(-1) ?? '';
+      const suffix = message.slice(url.index + url[0].length).split(CLAUSE, 1)[0] ?? '';
+      positions.push({ ...seek, role: positionRole(prefix, suffix) });
+    }
+  }
   const noRecapture = /\b(?:without|never|do not|don['’]t)\s+re-?captur(?:e|ing)\b/i.test(message);
   const noCapture = /\b(?:never|do not|don['’]t)\s+capture\s+(?:any\s+)?(?:new |exact )?(?:frames?|images?|stills?)\b/i.test(message);
   const sheetTimes = positions.every(position => position.role === 'sheet') && captureEndMs === undefined

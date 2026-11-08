@@ -18,6 +18,7 @@ import { createCapabilityProvider, savedOnlyProvider } from '../src/agents/resea
 import type { ConversationTurn } from '../src/agents/runtime/conversation-memory';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
+import { readFrameRequest } from '../src/agents/research/frame-request';
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
@@ -1206,6 +1207,8 @@ describe('YouTube agent capability router', () => {
   });
 
   it.each([
+    ['Capture only the linked instant at https://youtu.be/abcdefghijk?t=45 and describe it.', [], 45000, 90000],
+    ['Capture only the linked instant at https://www.youtube.com/watch?v=abcdefghijk&t=45.', [], 45000, 90000],
     ['Capture only 0:45 of https://youtu.be/abcdefghijk.', [], 45000, 90000],
     ['Capture only 0:45 of https://youtu.be/abcdefghijk?t=90s.', [], 45000, 90000],
     ['Re-inspect the saved 0:30 frame of https://youtu.be/abcdefghijk. Do not recapture it if reuse fails. Capture only 1:00.', [30000], 60000, 30000],
@@ -1233,6 +1236,35 @@ describe('YouTube agent capability router', () => {
 
     // A pre-upgrade turn being resumed must also close this path.
     await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: invalid }, message, priorAssets: assets,
+      classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it.each([
+    ['Capture the linked instant at https://youtu.be/abcdefghijk?t=0', 0],
+    ['Capture the linked instant at https://www.youtube.com/embed/abcdefghijk?start=45', 45000],
+    ['Capture the linked instant at https://youtu.be/abcdefghijk#t=1m30s', 90000],
+    ['Capture only 0:30 of https://youtu.be/abcdefghijk?t=45', 30000],
+  ] as const)('resolves the exact capture position for %s', (message, time) => {
+    expect(readFrameRequest(message).positions).toEqual([{ videoIds: ['abcdefghijk'], role: 'capture', time }]);
+  });
+
+  it('ignores unrelated URL parameters and seek times on other hosts', () => {
+    expect(readFrameRequest('Inspect https://youtu.be/abcdefghijk?tracking=90s and https://example.org/watch?v=lmnopqrstuv&t=45s').positions).toEqual([]);
+  });
+
+  it.each([['0:30', 30000], ['1:00', 60000]] as const)('compares a saved frame with a new %s frame on another video', async (clock, time) => {
+    const a = 'abcdefghijk', b = 'lmnopqrstuv';
+    const frameAccess = [{ videoId: a, savedTimestampsMs: [30000], captureTimestampsMs: [] },
+      { videoId: b, savedTimestampsMs: [], captureTimestampsMs: [time] }];
+    const route = { route: 'topic_research', comparisonVideoIds: [a, b], frameAccess, visualEvidence: 'required', visualRequirements: ['compare frames'] };
+    const model = classifierModel(route);
+    const message = `Compare the saved 0:30 frame of https://youtu.be/${a} with a new ${clock} frame from https://youtu.be/${b}.`;
+    const assets = [{ videoId: a, kind: 'frame' as const, version: 'a'.repeat(64), current: true, collectedAt: 1, details: { timestampMs: 30000 } }];
+    const decision = await classifyCapabilityWithModel({ model, message, sessionBrief: { assets, memories: [] }, signal: new AbortController().signal });
+    expect(decision).toMatchObject({ route: 'topic_research', frameAccess });
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const swapped = frameAccess.map(entry => ({ ...entry, videoId: entry.videoId === a ? b : a }));
+    await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: swapped }, message, priorAssets: assets,
       classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
 
