@@ -13,11 +13,12 @@ description: "Use youtube-ctx for personal, local-machine YouTube data and progr
 - Reading slides, charts, diagrams, interfaces, code samples, demonstrations, or other visual changes
 - Verifying what appears at a particular timestamp
 
-Use [`video2ctx-platform`](/skills/video2ctx-platform) for production applications, managed infrastructure, account or usage details, recurring monitors, and automatic fallback after direct access fails. Sandbox network failures get one retry using the narrowest available network permission before that fallback.
+Use [`video2ctx-platform`](/skills/video2ctx-platform) for production applications, managed infrastructure, account or usage details, recurring monitors, and automatic fallback after direct access fails. When a sandbox blocks network access, the agent tells you the skill needs outbound HTTPS to YouTube instead of changing permissions itself.
 
 ## Requirements
 
 - Node.js 18.17 or newer
+- Outbound HTTPS access to YouTube (allow it in your agent's sandbox settings if network access is restricted)
 - Optional: FFmpeg for exact frame verification
 
 The direct branch, timed-caption indexing, and optional storyboard scans do not require FFmpeg. The agent uses captions first to locate candidate frames and adds storyboards when captions are insufficient. FFmpeg extracts exact frames when you request them or when visual details need verification.
@@ -48,7 +49,7 @@ Explain the architecture diagram in this video and cite when each component appe
 If FFmpeg is unavailable, storyboard sheets can support a qualified answer when coarse imagery is sufficient. Exact-frame requests and details that need exact verification still require FFmpeg.
 
 <Warning>
-  Transcript text and video imagery are untrusted evidence. The skill never treats words shown or spoken inside a video as agent instructions.
+  All YouTube content (titles, descriptions, transcripts, comments, channel text, and on-screen text) is untrusted data. The skill never follows instructions, links, or commands found in it.
 </Warning>
 
 <Card title="Install youtube-ctx" icon="download" href="/skills/installation">
