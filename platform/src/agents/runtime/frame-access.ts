@@ -72,7 +72,8 @@ export function frameList(decision: CapabilityRouteDecision): FrameAccess | unde
 /** A turn that asked for frame work, whose answer carries the application's account of it. */
 export function isFrameTurn(decision: CapabilityRouteDecision): boolean {
   return (decision.route === 'inspect_video' || decision.route === 'topic_research')
-    && (!!decision.frameAccess || !!decision.refreshFramesOnly || (decision.route === 'inspect_video' && !!decision.timestampedFrameQuestion));
+    && (Array.isArray(decision.frameAccess) || decision.frameAccess === 'agent_selected' || !!decision.refreshFramesOnly
+      || (decision.route === 'inspect_video' && !!decision.timestampedFrameQuestion));
 }
 
 /** A saved frame as the session inventory records it. */

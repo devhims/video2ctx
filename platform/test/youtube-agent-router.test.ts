@@ -1170,6 +1170,49 @@ describe('YouTube agent capability router', () => {
     expect(tools).not.toContain('get_video_frames');
   });
 
+  it.each([
+    ['Capture only 0:45 of https://youtu.be/abcdefghijk and describe it. Do not retrieve any other images.', undefined, 0],
+    ['Use a storyboard overview of https://youtu.be/abcdefghijk to describe the scenery.', 'storyboard_only', 1],
+  ] as const)('enforces storyboard access through the provider for "%s"', async (message, frameAccess, expectedCalls) => {
+    const videoId = 'abcdefghijk';
+    const decision = await classifyCapabilityWithModel({ message, signal: new AbortController().signal,
+      model: classifierModel({ route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'], frameAccess }) });
+    if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
+    const context = inspectContext();
+    const storyboard = vi.fn(async () => { throw new Error('Storyboard unavailable'); });
+    context.provider.storyboard = storyboard;
+    const finalizer = finalizingModel();
+    let attempted = false;
+    const model = new MockLanguageModelV4({ doGenerate: async call => {
+      const result = await finalizer.doGenerate(call);
+      if (attempted) return result;
+      attempted = true;
+      return { ...result, content: [{ type: 'tool-call', toolName: 'get_video_storyboard', toolCallId: 'storyboard-at-90s',
+        input: JSON.stringify({ videoId, timestampsMs: [90000] }) }] };
+    } });
+    await runResearchAgentWithModel({ model, message, decision, context });
+    expect(storyboard).toHaveBeenCalledTimes(expectedCalls);
+    expect(model.doGenerateCalls[0]?.tools?.some(tool => tool.name === 'get_video_frames')).toBe(false);
+    expect(model.doGenerateCalls[0]?.tools?.some(tool => tool.name === 'get_video_storyboard')).toBe(expectedCalls > 0);
+  });
+
+  it('repairs a storyboard grant into the requested exact capture', async () => {
+    const videoId = 'abcdefghijk';
+    const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene at 0:45'] };
+    const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [45000] }];
+    const classifier = sequenceClassifier([{ ...route, frameAccess: 'storyboard_only' }, { ...route, frameAccess }]);
+    const message = `Capture only 0:45 of https://youtu.be/${videoId} and describe it. Do not retrieve any other images.`;
+    const decision = await classifyCapabilityWithModel({ model: classifier, message, signal: new AbortController().signal });
+    expect(classifier.doGenerateCalls).toHaveLength(2);
+    expect(decision).toMatchObject({ frameAccess });
+    if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
+    const model = finalizingModel();
+    await runResearchAgentWithModel({ model, message, decision, context: inspectContext() });
+    const names = model.doGenerateCalls[0]?.tools?.map(tool => tool.name);
+    expect(names).toContain('get_video_frames');
+    expect(names).not.toContain('get_video_storyboard');
+  });
+
   it('accepts a capture list that excludes a saved frame the user set aside', async () => {
     const videoId = 'abcdefghijk';
     const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
@@ -1353,8 +1396,8 @@ describe('YouTube agent capability router', () => {
     });
 
     const toolNames = model.doGenerateCalls[0]?.tools?.map((candidate) => candidate.name);
-    // The route granted no frame capture, so the capture tool is closed.
-    expect(toolNames).toEqual(INSPECT_VIDEO_TOOL_NAMES.filter(name => name !== 'get_video_frames'));
+    // Without a retrieval grant, only stored images can be analyzed.
+    expect(toolNames).toEqual(INSPECT_VIDEO_TOOL_NAMES.filter(name => name !== 'get_video_frames' && name !== 'get_video_storyboard'));
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Pinned video ID: abcdefghijk');
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Start with this video.');
     expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('I inspected its main argument.');
@@ -1397,7 +1440,7 @@ describe('YouTube agent capability router', () => {
   ] as const)('gates the %s storyboard tool using classifier choice %s', async (route, useStoryboard) => {
     const model = finalizingModel();
     await runResearchAgentWithModel({ model, message: 'Inspect the video',
-      decision: route === 'inspect_video' ? { route, videoId: 'abcdefghijk', useStoryboard } : { route, useStoryboard },
+      decision: route === 'inspect_video' ? { route, videoId: 'abcdefghijk', useStoryboard, frameAccess: 'storyboard_only' } : { route, useStoryboard, frameAccess: 'storyboard_only' },
       context: inspectContext(),
       // Even an explicit caller tool list cannot override the classifier's decision.
       toolNames: ['get_video_storyboard', 'finalize_answer'],

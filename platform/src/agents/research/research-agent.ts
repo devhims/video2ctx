@@ -461,9 +461,10 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const savedEvidenceSkill = usesSavedEvidenceSkill(options.decision);
   const playlistListing = options.decision.route === 'topic_research' && options.decision.playlistListing && !options.decision.savedOnly
     ? options.decision : undefined;
-  // Missing flags belong to legacy persisted routes, which retain their tool set.
+  // A storyboard sheet includes neighboring images, even when requested at one timestamp.
+  const storyboardAllowed = options.decision.frameAccess === 'storyboard_only' || options.decision.frameAccess === 'agent_selected';
   const toolNames = (options.toolNames ?? capability.toolNames)
-    .filter(name => !frameList(options.decision) || name !== 'get_video_storyboard')
+    .filter(name => name !== 'get_video_storyboard' || storyboardAllowed)
     // New captures are closed unless the route lists their positions or delegates them.
     .filter(name => name !== 'get_video_frames' || capturesAllowed(options.decision))
     .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)

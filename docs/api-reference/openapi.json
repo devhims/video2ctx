@@ -7702,6 +7702,7 @@
                               {
                                 "type": "string",
                                 "enum": [
+                                  "storyboard_only",
                                   "agent_selected"
                                 ]
                               }
@@ -7846,6 +7847,7 @@
                               {
                                 "type": "string",
                                 "enum": [
+                                  "storyboard_only",
                                   "agent_selected"
                                 ]
                               }
@@ -9588,6 +9590,7 @@
                           {
                             "type": "string",
                             "enum": [
+                              "storyboard_only",
                               "agent_selected"
                             ]
                           }
@@ -9732,6 +9735,7 @@
                           {
                             "type": "string",
                             "enum": [
+                              "storyboard_only",
                               "agent_selected"
                             ]
                           }

@@ -29,8 +29,9 @@ export const frameAccessSchema = z.preprocess(
   frameAccessListSchema,
 );
 export type FrameAccess = z.infer<typeof frameAccessSchema>;
-/** New captures are closed unless the route lists their positions or delegates them with agent_selected. */
-export const routeFrameAccessSchema = z.union([frameAccessSchema, z.literal('agent_selected')]);
+/** Storyboard sheets contain multiple positions. Only unrestricted image selection may retrieve them. */
+export const unscopedImageAccessSchema = z.enum(['storyboard_only', 'agent_selected']);
+export const routeFrameAccessSchema = z.union([frameAccessSchema, unscopedImageAccessSchema]);
 export type RouteFrameAccess = z.infer<typeof routeFrameAccessSchema>;
 
 /** Evidence the user explicitly asked to be read before answering. Research cannot complete until each is read or unavailable. */
