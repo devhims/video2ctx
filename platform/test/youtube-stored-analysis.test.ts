@@ -221,7 +221,7 @@ it('re-inspects a saved frame of one video while capturing only the other video'
     expect.anything(), expect.anything(), expect.anything());
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => [input.frames.videoId, input.frames.frames[0]!.timestampMs]))
     .toEqual([[videoId, 30000], [other, 60000]]);
-  expect(await answer()).toMatch(/\n\nI re-inspected the saved 0:30 frame of "[^"]+"\. I retrieved the 1:00 frame of "[^"]+" and inspected it\.$/);
+  expect(await answer()).toMatch(/\n\nI re-inspected the saved 0:30 frame of "[^"]+"\. I retrieved the 1:00 frame of "[^"]+" and inspected it\./);
 });
 
 it('keeps research open until a required capture is analyzed, without an exact-frame question', async () => {
@@ -341,7 +341,7 @@ describe('cross-video frame completion', () => {
 describe('application notes on frame turns', () => {
   const other = 'lmnopqrstuv';
   /** An earlier turn inspected the first video at 0:30; this turn's route listed only the second video. */
-  async function turns() {
+  async function turns(beforeTurn?: (put: (id: string, timestampMs: number) => void) => void) {
     const { context, store, frames, provider } = setup();
     const at = (id: string, timestampMs: number, width = 640) => ({ ...frames, videoId: id, frames: [{ ...frames.frames[0]!, timestampMs, width }] });
     context.analyzeFrames = vi.fn(async ({ frames }) => ({
@@ -349,6 +349,8 @@ describe('application notes on frame turns', () => {
     context.runId = crypto.randomUUID();
     const savedVersion = store.put('frame', videoId, at(videoId, 30000), { timestampMs: 30000 });
     const earlier = await analyze('frame', savedVersion, context, 'What is he wearing?');
+    // Older frames saved without a recorded position, before this turn starts.
+    beforeTurn?.((id, timestampMs) => { store.put('frame', id, at(id, timestampMs, 480)); });
     context.runId = crypto.randomUUID();
     let startedAt = store.runStart();
     context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
@@ -363,7 +365,7 @@ describe('application notes on frame turns', () => {
     return { context, store, at, savedVersion, earlier, current, answer, restart };
   }
   const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
-  const claimNote = 'No frame saved before this turn was re-inspected in this turn.';
+  const claimNote = 'No frame saved before this turn was re-inspected in this turn';
 
   it('states that a cited observation came from an earlier turn', async () => {
     const { earlier, current, answer } = await turns();
@@ -407,6 +409,13 @@ describe('application notes on frame turns', () => {
     const text = answer(`The saved frame shows a shirt [cite:${cited.id}] [cite:${current.excerpts[0]!.id}].`, [batch, current, again]);
     expect(text).not.toMatch(earlierNote);
     expect(text.includes('It is not recorded whether the cited 0:30 observation')).toBe(uncertain);
+  });
+
+  it('names saved frames whose position cannot be recovered instead of skipping them silently', async () => {
+    const { current, answer } = await turns(put => put(other, 30000));
+    const text = answer(`The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    expect(text).toContain(`Saved frames of "${other}" have no recorded position, so this turn could not match them to requested times or re-inspect them.`);
+    expect(text).toContain(`${claimNote}, because its plan included none.`);
   });
 
   it('judges each citation by its own image when an earlier batch held several', async () => {

@@ -116,7 +116,13 @@ export function frameTurnNotes(options: {
     if (frame.timestampMs !== undefined && !listed.has(`${frame.videoId}:${frame.timestampMs}`))
       notes.push(`I re-inspected the saved ${named(frame.videoId, frame.timestampMs)}.`);
   }
-  if (savedBefore.length && !reinspected.length) notes.push('No frame saved before this turn was re-inspected in this turn.');
+  // Say why a saved frame went unused, so a skipped inspection is never silent.
+  const plannedSaved = !!access?.some(entry => entry.savedTimestampsMs.length);
+  if (savedBefore.length && !reinspected.length) notes.push(plannedSaved
+    ? 'No frame saved before this turn was re-inspected in this turn.'
+    : 'No frame saved before this turn was re-inspected in this turn, because its plan included none.');
+  const unplaced = [...new Set(savedBefore.filter(frame => frame.timestampMs === undefined && !analyzed.has(frame.version)).map(frame => frame.videoId))];
+  for (const videoId of unplaced) notes.push(`Saved frames of "${title(videoId) ?? videoId}" have no recorded position, so this turn could not match them to requested times or re-inspect them.`);
 
   // Each citation is judged by the image behind it. When the record cannot tie the citation
   // to one image, the answer says so rather than guessing from the rest of the batch.

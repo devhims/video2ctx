@@ -616,9 +616,19 @@ const prohibitsRecapture = (message: string) => /\b(?:without|never|do not|don['
 /** Clock times, and durations introduced as a position ("at 90 seconds", "only 60 seconds"), not lengths ("a 10 minute video"). */
 const FRAME_POSITION = /\b\d+:\d{2}\b|\b\d+\s*ms\b|(?:\b(?:at|from|around|only|to|until)|@)\s*\d+(?:\.\d+)?\s*(?:milliseconds?|s|secs?|seconds?|mins?|minutes?)\b/i;
 const namesFramePositions = (message: string) => FRAME_POSITION.test(message);
-/** Clock times named in the message, in milliseconds. */
-const namedClockTimes = (message: string) => [...message.matchAll(/\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/g)]
-  .map(([, hours, minutes, seconds]) => ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000);
+const UNIT_MS: ReadonlyArray<[RegExp, number]> = [[/^(?:ms|milliseconds?)$/i, 1], [/^(?:s|secs?|seconds?)$/i, 1_000],
+  [/^(?:m|mins?|minutes?)$/i, 60_000], [/^(?:h|hrs?|hours?)$/i, 3_600_000]];
+const unitMs = (unit: string) => UNIT_MS.find(([pattern]) => pattern.test(unit))?.[1] ?? 0;
+/** A quantity of time, optionally followed by seconds ("1 minute 30 seconds", "1m30s"), not a length ("a 30 second clip"). */
+const TIME_QUANTITY = /\b(\d+(?:\.\d+)?)\s*-?\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])(?:\s*(?:and\s*)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b)?(?!\s*-?\s*(?:long|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\b)/gi;
+/** Times named in the message, in milliseconds: clock times and spoken quantities. The saved-frame
+ * check uses this generously, since a false match costs one more classification attempt. */
+const namedTimes = (message: string) => [
+  ...[...message.matchAll(/\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/g)]
+    .map(([, hours, minutes, seconds]) => ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000),
+  ...[...message.matchAll(TIME_QUANTITY)].map(([, amount, unit, extra]) =>
+    Math.round(Number(amount) * unitMs(unit!) + (extra ? Number(extra) * 1_000 : 0))),
+];
 
 function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
   // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
@@ -643,7 +653,7 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
   // Each saved frame at a time the user named is accounted for on its own video: inspected,
   // recaptured, or set aside. Otherwise a plan can drop it without the research ever being able to reach it.
   if (decision.route !== 'finalize' && (decision.frameAccess || decision.refreshFramesOnly || decision.timestampedFrameQuestion || decision.visualEvidence !== 'none')) {
-    const named = new Set(namedClockTimes(input.message));
+    const named = new Set(namedTimes(input.message));
     const accounted = (videoId: string, time: number) => (Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry =>
       entry.videoId === videoId && (entry.savedTimestampsMs.includes(time) || entry.captureTimestampsMs.includes(time))))
       || !!decision.setAsideFrames?.some(frame => frame.videoId === videoId && frame.timestampMs === time);

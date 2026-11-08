@@ -1195,6 +1195,7 @@ describe('YouTube agent capability router', () => {
   it.each([
     ['different times', 30000, 60000, 'Reuse the saved 0:30 frame and capture 1:00 of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
     ['the same time', 30000, 30000, 'Re-inspect the saved 0:30 frame and capture a new 0:30 frame of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
+    ['a time in seconds', 30000, 60000, 'Reuse the saved frame at 30 seconds and capture 1:00 of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
   ])('recovers both requested operations when a plan drops the saved video (%s)', async (_name, savedTime, captureTime, message) => {
     const [saved, linked] = ['abcdefghijk', 'lmnopqrstuv'];
     const visual = { visualEvidence: 'required', visualRequirements: ['outfits'] };

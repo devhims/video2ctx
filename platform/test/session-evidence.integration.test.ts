@@ -22,6 +22,14 @@ import { bicycleHistory, gcnCaptions, officialCaptions, gcnAnalysis, officialAna
 import { readSavedEvidence, searchSavedEvidence, SAVED_EVIDENCE_READ_LIMIT } from '../src/agents/runtime/saved-evidence-reader';
 import { annaId, kelogId, watercolorTranscript, watercolorCorrection, watercolorFollowup } from './fixtures/watercolor-session';
 
+test('the inventory recovers a saved frame position that older details omitted', async () =>
+  within('legacy-frame-position', async (store, reopen) => {
+    // Older rows stored no timestampMs; the frame's resource key still records it.
+    await store.retrieve('frame:abcdefghijk:640:1000', 'frame', id, false, async () => ({ value: oneFrame(id), cacheStatus: 'miss' as const }), () => ({}));
+    const frame = reopen().brief().assets.find(asset => asset.kind === 'frame')!;
+    expect(frame.details.timestampMs).toBe(1000);
+  }));
+
 test('saved original comments include positions 13 and 17 and long tails, with bounded pagination', async () =>
   within('original-comments', async (store, reopen) => {
     const value = { videoId: id, replyContinuations: [], meta: transcript().meta,

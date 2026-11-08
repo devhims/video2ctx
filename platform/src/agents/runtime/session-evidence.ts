@@ -42,6 +42,13 @@ export interface SessionAsset {
   current: boolean;
   details: Record<string, string | number | boolean | null>;
 }
+/** Stored details, with a frame's position recovered from its resource key when older rows omitted it. */
+function assetDetails(row: AssetRow): SessionAsset['details'] {
+  const details = JSON.parse(row.details_json) as SessionAsset['details'];
+  const position = row.kind === 'frame' && typeof details.timestampMs !== 'number'
+    ? /^frame:[\w-]{11}:\d+:(\d+)$/.exec(row.resource_key)?.[1] : undefined;
+  return position === undefined ? details : { ...details, timestampMs: Number(position) };
+}
 type AssetRow = {
   version: string;
   resource_key: string;
@@ -202,7 +209,7 @@ export class SessionEvidenceStore implements SessionAccess {
           videoId: row.video_id,
           collectedAt: row.created_at,
           current: current.has(row.version),
-          details: JSON.parse(row.details_json),
+          details: assetDetails(row),
         })),
       memories: this.sql
         .exec<{ memory_json: string }>('SELECT memory_json FROM session_memories ORDER BY updated_at DESC')
