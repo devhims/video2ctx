@@ -466,12 +466,14 @@ Check publishing copy for rendered Shorts against YouTube's limits and write a
 copy-paste sheet and cover frame per short. Prints one JSON value.
 
 Usage:
-  publish.mjs kit    --project <dir> [--ffmpeg-path <path>] [--pretty]
+  publish.mjs kit    --project <dir> [--variant <name>] [--ffmpeg-path <path>] [--pretty]
   publish.mjs upload --project <dir> --client-secret <file> [--only <id,...>]
                      [--privacy unlisted|private] [--variant <name>] [--dry-run] [--force]
 
 Reads <project>/video.json, <project>/edl.json, <project>/publish.json, and
-<project>/render/<id>-overlay.mp4 (or <id>.mp4). Writes <project>/publish/:
+each short's video: render/<id>-overlay.mp4, else <id>-captioned.mp4, else <id>.mp4
+(warned: no captions on screen), or render/<id>-<variant>.mp4 with --variant.
+Writes <project>/publish/:
 <id>.md (title, description, tags, related video, pinned comment, schedule),
 <id>-cover.jpg (the frame at coverSec), and README.md (the schedule).
 
@@ -480,8 +482,8 @@ unlisted by default, using publish.json's title, description, hashtags, and tags
 It needs a "Desktop app" OAuth client JSON (--client-secret, or the
 YOUTUBE_OAUTH_CLIENT environment variable) and asks for consent in the browser
 once; the refresh token is saved under ~/.config/youtube-shorts-publish (mode
-600). publish.json must declare "madeForKids". --variant uploads
-render/<id>-<variant>.mp4 instead of <id>-overlay.mp4. Finished uploads are
+600). publish.json must declare "madeForKids". It uploads the same file kit
+picks; --variant uploads render/<id>-<variant>.mp4 instead. Finished uploads are
 recorded in publish/uploads.json and skipped on later runs unless --force.
 Public posting stays in YouTube Studio.
 `;
@@ -492,7 +494,7 @@ var DependencyError = class extends Error {
   code = "DEPENDENCY_MISSING";
 };
 var COMMANDS = {
-  kit: ["project", "ffmpeg-path"],
+  kit: ["project", "variant", "ffmpeg-path"],
   upload: ["project", "client-secret", "only", "privacy", "variant", "ffmpeg-path"]
 };
 var BOOLEANS = /* @__PURE__ */ new Set(["pretty", "dry-run", "force"]);
@@ -531,6 +533,26 @@ async function readJson(path, what) {
   }
 }
 var exists = async (path) => (await stat2(path).catch(() => void 0))?.isFile() ?? false;
+async function pickVideo(project, id, variant) {
+  const choices = variant ? [[`${id}-${variant}.mp4`, "variant"]] : [[`${id}-overlay.mp4`, "overlay"], [`${id}-captioned.mp4`, "burned"], [`${id}.mp4`, "none"]];
+  const tried = choices.map(([name]) => join4(project, "render", name));
+  for (const [index, [, captions]] of choices.entries()) {
+    if (await exists(tried[index])) return { file: tried[index], captions, tried };
+  }
+  return { captions: choices[0][1], tried };
+}
+function noCaptionsWarning(id, file) {
+  return {
+    short: id,
+    level: "warning",
+    message: `${file} has no captions on screen (no overlay or captioned render was found). Most Shorts are watched muted: render the overlay, or add render/${id}.srt as the caption track in YouTube Studio.`
+  };
+}
+function variantFlag(flags) {
+  const variant = typeof flags.variant === "string" ? flags.variant : void 0;
+  if (variant !== void 0 && !/^[A-Za-z0-9_-]+$/.test(variant)) throw new InputError("--variant may use only letters, digits, - and _.");
+  return variant;
+}
 async function kit(flags, environment) {
   const project = resolve2(flags.project);
   const video = await readJson(join4(project, "video.json"), "video.json");
@@ -550,14 +572,14 @@ async function kit(flags, environment) {
   await mkdir4(directory, { recursive: true });
   const issues = [];
   const output = [];
+  const variant = variantFlag(flags);
   for (const short of plan.shorts) {
-    const overlay = join4(project, "render", `${short.id}-overlay.mp4`);
-    const plain = join4(project, "render", `${short.id}.mp4`);
-    const file = await exists(overlay) ? overlay : await exists(plain) ? plain : void 0;
+    const { file, captions, tried } = await pickVideo(project, short.id, variant);
     if (!file) {
-      issues.push({ short: short.id, level: "error", message: `No rendered video at ${overlay} or ${plain}.` });
+      issues.push({ short: short.id, level: "error", message: `No rendered video at ${tried.join(" or ")}.` });
       continue;
     }
+    if (captions === "none") issues.push(noCaptionsWarning(short.id, file));
     const facts = await probeMaster(ffmpeg, file);
     const firstCut = edl.shorts?.find((item) => item.id === short.id)?.cuts?.[0]?.startMs;
     const moment = firstCut === void 0 ? episodeUrl : momentUrl(video.videoId, firstCut);
@@ -600,8 +622,7 @@ async function upload(flags, environment, io, dependencies) {
   const privacy = flags.privacy ?? "unlisted";
   if (privacy !== "unlisted" && privacy !== "private") throw new InputError("--privacy must be unlisted or private. Publish publicly from YouTube Studio.");
   const only = typeof flags.only === "string" ? new Set(flags.only.split(",").map((id) => id.trim())) : void 0;
-  const variant = typeof flags.variant === "string" ? flags.variant : void 0;
-  if (variant !== void 0 && !/^[A-Za-z0-9_-]+$/.test(variant)) throw new InputError("--variant may use only letters, digits, - and _.");
+  const variant = variantFlag(flags);
   const shorts = plan.shorts.filter((short) => !only || only.has(short.id));
   if (only) {
     for (const id of only) if (!plan.shorts.some((short) => short.id === id)) throw new InputError(`publish.json has no short ${id}.`);
@@ -615,17 +636,14 @@ async function upload(flags, environment, io, dependencies) {
   const records = await readFile4(recordsPath, "utf8").then((text) => JSON.parse(text)).catch(() => ({}));
   const queue = [];
   const issues = [];
+  const warnings = [];
   for (const short of shorts) {
-    const candidates = variant ? [join4(project, "render", `${short.id}-${variant}.mp4`)] : [join4(project, "render", `${short.id}-overlay.mp4`), join4(project, "render", `${short.id}.mp4`)];
-    let file;
-    for (const candidate of candidates) if (await exists(candidate)) {
-      file = candidate;
-      break;
-    }
+    const { file, captions, tried } = await pickVideo(project, short.id, variant);
     if (!file) {
-      issues.push({ short: short.id, level: "error", message: `No video at ${candidates.join(" or ")}.` });
+      issues.push({ short: short.id, level: "error", message: `No video at ${tried.join(" or ")}.` });
       continue;
     }
+    if (captions === "none") warnings.push(noCaptionsWarning(short.id, file));
     const facts = await probeMaster(ffmpeg, file);
     const firstCut = edl.shorts?.find((item) => item.id === short.id)?.cuts?.[0]?.startMs;
     const description = composeDescription(short, episodeUrl, firstCut === void 0 ? episodeUrl : momentUrl(video.videoId, firstCut));
@@ -633,11 +651,11 @@ async function upload(flags, environment, io, dependencies) {
     const skipped = records[short.id] && flags.force !== true;
     queue.push({ short, file, description, skipped });
   }
-  if (issues.length) return { ok: false, uploaded: [], issues };
+  if (issues.length) return { ok: false, uploaded: [], issues: [...issues, ...warnings] };
   const planned = queue.map((item) => ({ id: item.short.id, title: item.short.title, file: item.file, privacy, skip: item.skipped ? `already uploaded: ${records[item.short.id].url}` : void 0 }));
-  if (flags["dry-run"] === true) return { ok: true, dryRun: true, planned, issues };
+  if (flags["dry-run"] === true) return { ok: true, dryRun: true, planned, issues: warnings };
   if (queue.every((item) => item.skipped)) {
-    return { ok: true, uploaded: [], skipped: planned.filter((item) => item.skip), issues };
+    return { ok: true, uploaded: [], skipped: planned.filter((item) => item.skip), issues: warnings };
   }
   const secretPath = (typeof flags["client-secret"] === "string" ? flags["client-secret"] : void 0) ?? environment.YOUTUBE_OAUTH_CLIENT;
   if (!secretPath) throw new InputError("--client-secret (or YOUTUBE_OAUTH_CLIENT) must point to the Desktop app OAuth client JSON.");
@@ -672,7 +690,7 @@ async function upload(flags, environment, io, dependencies) {
     uploaded,
     skipped: planned.filter((item) => item.skip),
     next: "In YouTube Studio: pick each cover frame, set the related video, and post and pin the pinned comment.",
-    issues
+    issues: warnings
   };
 }
 function errorPayload(error) {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 
-import { runPublishCli } from './cli';
+import { pickVideo, runPublishCli } from './cli';
 
 const directories: string[] = [];
 afterAll(async () => { await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true }))); });
@@ -26,6 +26,31 @@ async function project(publish: Record<string, unknown>): Promise<string> {
 
 const short = { id: 'S1', title: 'AI agents are like the Minions', description: 'Full: {episode}', hashtags: ['#Shorts'], tags: ['AI'] };
 
+describe('pickVideo', () => {
+  async function renders(names: string[]): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), 'publish-pick-'));
+    directories.push(directory);
+    await mkdir(join(directory, 'render'));
+    await Promise.all(names.map((name) => writeFile(join(directory, 'render', name), '')));
+    return directory;
+  }
+
+  test('prefers the overlay, then the burned-caption render, then the plain cut', async () => {
+    const all = await renders(['S1.mp4', 'S1-captioned.mp4', 'S1-overlay.mp4']);
+    expect(await pickVideo(all, 'S1')).toMatchObject({ file: join(all, 'render', 'S1-overlay.mp4'), captions: 'overlay' });
+    const captioned = await renders(['S1.mp4', 'S1-captioned.mp4']);
+    expect(await pickVideo(captioned, 'S1')).toMatchObject({ file: join(captioned, 'render', 'S1-captioned.mp4'), captions: 'burned' });
+    const plain = await renders(['S1.mp4']);
+    expect(await pickVideo(plain, 'S1')).toMatchObject({ file: join(plain, 'render', 'S1.mp4'), captions: 'none' });
+  });
+
+  test('uses only the named variant when one is given', async () => {
+    const directory = await renders(['S1-overlay.mp4', 'S1-no-cards.mp4']);
+    expect(await pickVideo(directory, 'S1', 'no-cards')).toMatchObject({ file: join(directory, 'render', 'S1-no-cards.mp4'), captions: 'variant' });
+    expect((await pickVideo(directory, 'S1', 'captioned')).file).toBeUndefined();
+  });
+});
+
 describe('publish upload', () => {
   test('refuses to upload until publish.json declares madeForKids', async () => {
     const directory = await project({ shorts: [short] });
@@ -43,6 +68,56 @@ describe('publish upload', () => {
 });
 
 const describeFfmpeg = process.env.SHORTS_FFMPEG_TEST === '1' ? describe : describe.skip;
+
+describeFfmpeg('publish file selection with real video files', () => {
+  async function withRenders(names: string[]): Promise<string> {
+    const directory = await project({ madeForKids: false, shorts: [short] });
+    await mkdir(join(directory, 'render'), { recursive: true });
+    const first = join(directory, 'render', names[0]!);
+    const made = spawnSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1080x1920:rate=25',
+      '-f', 'lavfi', '-i', 'sine=frequency=330', '-t', '1', '-c:a', 'aac', first]);
+    expect(made.status).toBe(0);
+    for (const name of names.slice(1)) await writeFile(join(directory, 'render', name), await readFile(first));
+    return directory;
+  }
+
+  async function run(argv: string[]) {
+    const capture = io();
+    const code = await runPublishCli(argv, capture, { PATH: process.env.PATH, FFMPEG_PATH: process.env.FFMPEG_PATH });
+    return { code, result: JSON.parse(capture.output.join('') || capture.errors.join('')) };
+  }
+
+  test('kit and upload both pick the burned-caption render over the plain cut', async () => {
+    const directory = await withRenders(['S1.mp4', 'S1-captioned.mp4']);
+    const kit = await run(['kit', '--project', directory]);
+    expect(kit.result).toMatchObject({ ok: true, shorts: [{ video: join(directory, 'render', 'S1-captioned.mp4') }] });
+    expect(kit.result.issues.some((issue: { message: string }) => /no captions on screen/.test(issue.message))).toBe(false);
+    expect(await readFile(join(directory, 'publish', 'S1.md'), 'utf8')).toContain(`Video: ${join(directory, 'render', 'S1-captioned.mp4')}`);
+    const upload = await run(['upload', '--project', directory, '--dry-run']);
+    expect(upload.result).toMatchObject({ ok: true, planned: [{ file: join(directory, 'render', 'S1-captioned.mp4') }] });
+  }, 60_000);
+
+  test('both prefer the overlay when it exists', async () => {
+    const directory = await withRenders(['S1.mp4', 'S1-captioned.mp4', 'S1-overlay.mp4']);
+    expect((await run(['kit', '--project', directory])).result.shorts[0].video).toBe(join(directory, 'render', 'S1-overlay.mp4'));
+    expect((await run(['upload', '--project', directory, '--dry-run'])).result.planned[0].file).toBe(join(directory, 'render', 'S1-overlay.mp4'));
+  }, 60_000);
+
+  test('both warn when only the uncaptioned cut exists, without blocking', async () => {
+    const directory = await withRenders(['S1.mp4']);
+    const kit = await run(['kit', '--project', directory]);
+    expect(kit.result.ok).toBe(true);
+    expect(kit.result.issues).toContainEqual(expect.objectContaining({ level: 'warning', message: expect.stringMatching(/no captions on screen/) }));
+    const upload = await run(['upload', '--project', directory, '--dry-run']);
+    expect(upload.result).toMatchObject({ ok: true, planned: [{ file: join(directory, 'render', 'S1.mp4') }] });
+    expect(upload.result.issues).toContainEqual(expect.objectContaining({ message: expect.stringMatching(/no captions on screen/) }));
+  }, 60_000);
+
+  test('kit takes --variant so the sheet and cover match the uploaded file', async () => {
+    const directory = await withRenders(['S1-overlay.mp4', 'S1-no-cards.mp4']);
+    expect((await run(['kit', '--project', directory, '--variant', 'no-cards'])).result.shorts[0].video).toBe(join(directory, 'render', 'S1-no-cards.mp4'));
+  }, 60_000);
+});
 
 describeFfmpeg('publish upload with a real video file', () => {
   test('dry-runs, uploads unlisted with mocked Google endpoints, then skips it on rerun', async () => {
