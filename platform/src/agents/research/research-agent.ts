@@ -140,6 +140,7 @@ async function executeResearchRunWithAssets(options: {
   env: Env;
   modelFailover?: ModelFailoverState;
   runId: string;
+  startedAt?: number;
   message: string;
   /** Trusted line naming the run's date, from its admission time and the user's time zone. */
   currentDate?: string;
@@ -188,6 +189,9 @@ async function executeResearchRunWithAssets(options: {
   if (!options.persistedRoute) await options.onClassifying?.(classificationDeadlineAt);
   const decision = await resolveCapabilityRoute({
     persisted: options.persistedRoute,
+    message: options.message,
+    priorAssets: options.persistedRoute && 'frameAccess' in options.persistedRoute
+      ? options.session?.brief().assets.filter(asset => asset.collectedAt < (options.startedAt ?? Infinity)) : undefined,
     classify: () => withRunDeadline(classificationDeadlineAt, options.signal, signal => classifyCapabilityWithModel({
       message: options.message,
       conversationHistory: options.conversationHistory,
@@ -462,11 +466,16 @@ async function runResearchAgentWithModelWithinDeadline(options: {
   const playlistListing = options.decision.route === 'topic_research' && options.decision.playlistListing && !options.decision.savedOnly
     ? options.decision : undefined;
   // A storyboard sheet includes neighboring images, even when requested at one timestamp.
-  const storyboardAllowed = options.decision.frameAccess === 'storyboard_only' || options.decision.frameAccess === 'agent_selected';
+  const frameScope = frameList(options.decision);
+  const access = options.decision.frameAccess;
+  const storyboardSelection = options.decision.route === 'inspect_video' && access && typeof access === 'object' && 'storyboardTimestampsMs' in access
+    ? { videoId: options.decision.videoId, timestampsMs: access.storyboardTimestampsMs } : undefined;
+  const canCapture = access === 'agent_selected' || frameScope?.some(entry => entry.captureTimestampsMs.length);
+  const storyboardAllowed = access === 'storyboard_only' || access === 'agent_selected' || !!storyboardSelection;
   const toolNames = (options.toolNames ?? capability.toolNames)
     .filter(name => name !== 'get_video_storyboard' || storyboardAllowed)
     // New captures are closed unless the route lists their positions or delegates them.
-    .filter(name => name !== 'get_video_frames' || capturesAllowed(options.decision))
+    .filter(name => name !== 'get_video_frames' || canCapture)
     .filter(name => !playlistListing || (!playlistListing.playlistId && name === 'get_playlist') || name === FINALIZE_ANSWER_TOOL_NAME)
     .filter(name => !verifySaved || name === FINALIZE_ANSWER_TOOL_NAME
       || (!options.decision.savedOnly && (SAVED_VERIFICATION_RETRIEVAL_TOOLS as readonly string[]).includes(name)))
@@ -630,7 +639,6 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     }
     return pending;
   };
-  const frameScope = frameList(options.decision);
   const failedFrameVersions = new Set<string>();
   const failedCaptures = new Set<string>();
   const trackedContext: AgentToolContext = {
@@ -640,6 +648,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
     refreshEvidence: options.decision.refreshEvidence,
     refreshFramesOnly: options.decision.refreshFramesOnly,
     frameAccess: frameScope,
+    storyboardSelection,
     timestampedFrameQuestion: options.decision.route === 'inspect_video' && !options.decision.savedOnly
       ? options.decision.timestampedFrameQuestion : undefined,
     pinnedVideoId: options.decision.route === 'inspect_video' ? options.decision.videoId : undefined,
@@ -1500,12 +1509,6 @@ function toolFailureWarnings(failures: EvidenceToolFailure[]): AgentWarning[] {
     code: 'EVIDENCE_TOOL_FAILED',
     message: `${failure.toolName} failed ${failure.count} ${failure.count === 1 ? 'time' : 'times'}: ${failure.message}`.slice(0, 1_000),
   }))];
-}
-
-/** Whether this route may capture new frames: at listed positions, or anywhere when delegated. */
-function capturesAllowed(decision: CapabilityRouteDecision): boolean {
-  return 'frameAccess' in decision && (decision.frameAccess === 'agent_selected'
-    || !!frameList(decision)?.some(entry => entry.captureTimestampsMs.length));
 }
 
 function mergeWarnings(modelWarnings: AgentWarning[], failureWarnings: AgentWarning[]): AgentWarning[] {

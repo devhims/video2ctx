@@ -7705,6 +7705,25 @@
                                   "storyboard_only",
                                   "agent_selected"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "storyboardTimestampsMs": {
+                                    "minItems": 1,
+                                    "maxItems": 24,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "storyboardTimestampsMs"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -7850,6 +7869,25 @@
                                   "storyboard_only",
                                   "agent_selected"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "storyboardTimestampsMs": {
+                                    "minItems": 1,
+                                    "maxItems": 24,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "storyboardTimestampsMs"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -9593,6 +9631,25 @@
                               "storyboard_only",
                               "agent_selected"
                             ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "storyboardTimestampsMs": {
+                                "minItems": 1,
+                                "maxItems": 24,
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              }
+                            },
+                            "required": [
+                              "storyboardTimestampsMs"
+                            ],
+                            "additionalProperties": false
                           }
                         ]
                       },
@@ -9738,6 +9795,25 @@
                               "storyboard_only",
                               "agent_selected"
                             ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "storyboardTimestampsMs": {
+                                "minItems": 1,
+                                "maxItems": 24,
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              }
+                            },
+                            "required": [
+                              "storyboardTimestampsMs"
+                            ],
+                            "additionalProperties": false
                           }
                         ]
                       },

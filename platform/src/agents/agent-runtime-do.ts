@@ -709,6 +709,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         },
         onExtractionDiagnostic: event => this.recordExtractionDiagnostic(runId, event),
         onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
+        startedAt: row.created_at,
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
           this.persistRoute(runId, selected);

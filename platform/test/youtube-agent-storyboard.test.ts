@@ -52,6 +52,19 @@ async function retrieveAndAnalyze(input: Parameters<typeof executeGetVideoStoryb
 }
 describe('storyboard agent tool', () => {
   it.each([
+    { videoId: storyboard.videoId }, { videoId: storyboard.videoId, maxSheets: 3 },
+    { videoId: storyboard.videoId, sheetIndexes: [0] }, { videoId: storyboard.videoId, timestampsMs: [55000, 50000] },
+    { videoId: 'abcdefghijk', timestampsMs: [55000] },
+  ])('rejects out-of-scope sheet requests before evidence lookup or billing: %j', input => {
+    const ctx = context();
+    ctx.storyboardSelection = { videoId: storyboard.videoId, timestampsMs: [55000] };
+    ctx.executeEvidenceTool = vi.fn();
+    expect(() => executeGetVideoStoryboard(input, ctx, 'denied')).toThrow();
+    expect(ctx.executeEvidenceTool).not.toHaveBeenCalled();
+    expect(ctx.provider.storyboard).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { sheetIndexes: [6] }, { sheetIndexes: [5, 6, 7] },
     { timestampsMs: [60000] },
   ])('rejects unavailable selections before provider and vision calls: %j', async selection => {

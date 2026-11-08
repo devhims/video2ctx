@@ -1,0 +1,161 @@
+import type { RouteFrameAccess } from '../contracts';
+import { clockTime } from '../runtime/clock-time';
+import { extractYouTubeVideoIds, urlCandidates } from './youtube-references';
+import type { SessionBrief } from '../runtime/session-evidence';
+
+const UNIT_MS: ReadonlyArray<[RegExp, number]> = [[/^(?:ms|milliseconds?)$/i, 1], [/^(?:s|secs?|seconds?)$/i, 1_000],
+  [/^(?:m|mins?|minutes?)$/i, 60_000], [/^(?:h|hrs?|hours?)$/i, 3_600_000]];
+const unitMs = (unit: string) => UNIT_MS.find(([pattern]) => pattern.test(unit))?.[1] ?? 0;
+const CLOCK_TIME = /\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/gi;
+const TIME_QUANTITY = /\b(\d+(?:\.\d+)?)\s*-?\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])(?:\s*(?:and\s*)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b)?/gi;
+
+// A comparison such as "within" or "at most" can limit either video length or capture position.
+// Exclude a time when the surrounding words describe duration ("videos under 5 minutes", "5 minutes long").
+const COMPARISON = /\b(?:under|over|within|up to|at (?:least|most)|(?:no )?(?:longer|shorter|less|more) than)\s*$/i;
+const DURATION_SUBJECT = /\b(?:duration|length|runtime)(?:\s+(?:of|is|must be|should be))?\s*$/i;
+const SOURCE_SELECTION = /\b(?:find|search|recommend|list|videos?|clips?|tutorials?|lectures?|recordings?|episodes?)\b/i;
+const FRAME_ACTION = /\b(?:frames?|stills?|timestamps?|capture|capturing|inspect|sample|extract)\b/i;
+const VIDEO_LENGTH_SUFFIX = /^\s*-?\s*(?:long|in (?:length|duration)|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\b/i;
+const START_WINDOW = /\b(?:within(?: the first)?|up to|no later than|in the first|during the first)\s*$/i;
+const START_ANCHOR = /^\s+(?:of|from)\s+(?:the\s+)?(?:(?:video|clip)(?:'s|’s)\s+)?(?:start|beginning)\b/i;
+const RELATIVE_ANCHOR = /^\s+(?:of|from|after|before)\b/i;
+
+function isVideoLength(before: string, after: string): boolean {
+  if (VIDEO_LENGTH_SUFFIX.test(after)) return true;
+  const comparison = COMPARISON.exec(before);
+  if (!comparison) return false;
+  const subject = before.slice(0, comparison.index);
+  if (DURATION_SUBJECT.test(subject)) return true;
+  if (!START_WINDOW.test(before) && /\b(?:video|clip|tutorial|lecture|recording|episode)s?\s*$/i.test(subject)) return true;
+  const clause = subject.split(/[.!?;,\n]|\b(?:and|but|then)\b/i).at(-1) ?? '';
+  return SOURCE_SELECTION.test(clause) && !FRAME_ACTION.test(clause);
+}
+
+// A list continues the preceding operation ("capture 0:30, 0:45 and 1:00").
+// A new clause can change it ("reuse 0:30, then capture 1:00").
+const CLAUSE = /[:;.!?]\s+|\n|(?:,\s*|\b(?:then|and|but)\s+)(?=[a-z])/i;
+function positionRole(clause: string, after: string) {
+  if (/\b(?:no|not|never|without|don['’]t|except|instead of|rather than|exclude|ignore|skip)\b/i.test(clause)) return 'excluded';
+  if (/\bstoryboards?\b/i.test(clause) || /^\s+storyboard sheet\b/i.test(after)) return 'sheet';
+  if (/\b(?:re-?capture|capture|refresh|new (?:image|still|frame))\b/i.test(clause)) return 'capture';
+  if (/\b(?:transcript|caption|comment)s?\b/i.test(clause)) return;
+  if (/\b(?:reuse|re-?inspect|saved|previous|prior)\b/i.test(clause) || /^\s+saved (?:frame|image)\b/i.test(after)) return 'saved';
+}
+
+// The classifier resolves the subject. The user's named positions bound what the classifier may grant.
+export function readFrameRequest(message: string) {
+  const positions: { time: number; role: ReturnType<typeof positionRole>; videoIds: string[] }[] = [];
+  let captureEndMs: number | undefined;
+  function add(match: RegExpExecArray, time: number) {
+    const before = message.slice(0, match.index);
+    const after = message.slice(match.index + match[0].length);
+    const fromStart = START_ANCHOR.test(after);
+    if (!fromStart && isVideoLength(before, after)) return;
+    // A window end limits new captures. It does not request inspection of a saved frame at the endpoint.
+    if (START_WINDOW.test(before) && (fromStart || !RELATIVE_ANCHOR.test(after) || /\bthe first\s*$/i.test(before))) {
+      captureEndMs = Math.min(captureEndMs ?? time, time);
+    } else {
+      const prefix = before.split(CLAUSE).at(-1) ?? '';
+      const suffix = after.split(CLAUSE, 1)[0] ?? '';
+      positions.push({ time, role: positionRole(prefix, suffix), videoIds: extractYouTubeVideoIds(prefix + match[0] + suffix) });
+    }
+  }
+  // A link can open at a different time than the requested capture. Its seek position is
+  // relevant only when the user supplies no position or capture window in the surrounding text.
+  const urls = [...message.matchAll(urlCandidates)];
+  const linked: [RegExpExecArray, number][] = [];
+  function record(match: RegExpExecArray, time: number) {
+    if (urls.some(url => match.index >= url.index && match.index < url.index + url[0].length)) linked.push([match, time]);
+    else add(match, time);
+  }
+  for (const match of message.matchAll(CLOCK_TIME)) {
+    const [, hours, minutes, seconds] = match;
+    record(match, ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1_000);
+  }
+  for (const match of message.matchAll(TIME_QUANTITY)) {
+    const [, amount, unit, extra] = match;
+    record(match, Math.round(Number(amount) * unitMs(unit!) + Number(extra ?? 0) * 1_000));
+  }
+  if (!positions.length && captureEndMs === undefined) for (const [match, time] of linked) add(match, time);
+  const noRecapture = /\b(?:without|never|do not|don['’]t)\s+re-?captur(?:e|ing)\b/i.test(message);
+  const noCapture = /\b(?:never|do not|don['’]t)\s+capture\s+(?:any\s+)?(?:new |exact )?(?:frames?|images?|stills?)\b/i.test(message);
+  const sheetTimes = positions.every(position => position.role === 'sheet') && captureEndMs === undefined
+    ? [...new Set(positions.map(position => position.time))] : [];
+  return { positions, sheetTimes, captureEndMs, noRecapture, noCapture };
+}
+
+export type FrameRequest = ReturnType<typeof readFrameRequest>;
+interface FramePlan {
+  route: string;
+  videoId?: string;
+  frameAccess?: RouteFrameAccess;
+  savedOnly?: boolean;
+  timestampedFrameQuestion?: string;
+  refreshFramesOnly?: boolean;
+  visualEvidence?: string;
+  setAsideFrames?: { videoId: string; timestampMs: number }[];
+}
+
+/** Bound the classifier's grant to operations named in the request, including on resume. */
+export function frameRequestIssue(plan: FramePlan, request: FrameRequest, assets: SessionBrief['assets'] = [], resumed = false): string | undefined {
+  const access = plan.frameAccess;
+  const { positions, sheetTimes, captureEndMs, noRecapture, noCapture } = request;
+  const limited = positions.length > 0 || captureEndMs !== undefined || noRecapture || noCapture;
+  const sameSubject = (ids: string[], videoId?: string) => !ids.length || (videoId !== undefined && ids.includes(videoId));
+  const targetedSheets = sheetTimes.length > 0 && sheetTimes.length <= 24 && plan.route === 'inspect_video'
+    && positions.every(position => sameSubject(position.videoIds, plan.videoId));
+  if (access && typeof access === 'object' && !Array.isArray(access)) {
+    // A previously persisted targeted sheet cannot widen during recovery.
+    if (!targetedSheets || new Set(access.storyboardTimestampsMs).size !== sheetTimes.length
+      || access.storyboardTimestampsMs.some(time => !sheetTimes.includes(time))) return 'Clarify the requested storyboard sheet positions.';
+    return;
+  }
+
+  const captures = positions.filter(position => position.role === 'capture');
+  const matches = (time: number, videoId?: string) => positions.filter(pos => pos.time === time && sameSubject(pos.videoIds, videoId));
+  if (Array.isArray(access)) {
+    for (const entry of access) {
+      for (const time of entry.captureTimestampsMs) {
+        const named = matches(time, entry.videoId);
+        if (captureEndMs !== undefined && time > captureEndMs)
+          return `Select capture positions within the requested window ending at ${captureEndMs} ms.`;
+        const explicit = named.find(pos => pos.role === 'capture');
+        const inRequestedRange = captureEndMs !== undefined || !positions.length || named.length > 0;
+        const authorized = captures.length ? !!explicit : inRequestedRange;
+        const stored = assets.some(asset => asset.kind === 'frame' && asset.videoId === entry.videoId && asset.details.timestampMs === time);
+        // Two videos may share a timestamp. An explicit capture on B can coexist with a saved inspection on A.
+        const savedHere = named.some(pos => pos.role === 'saved') && (!explicit || (stored && !explicit.videoIds.length));
+        const forbidden = noCapture || savedHere || named.some(pos => pos.role === 'excluded' || pos.role === 'sheet');
+        if (!authorized || forbidden || (noRecapture && !explicit && (stored || captureEndMs === undefined)))
+          return `The user did not authorize a new exact capture at ${clockTime(time)} on this video. List only the authorized capture positions.`;
+      }
+    }
+    for (const pos of captures) {
+      if (!access.some(entry => sameSubject(pos.videoIds, entry.videoId) && entry.captureTimestampsMs.includes(pos.time)))
+        return `Include the requested new capture at ${clockTime(pos.time)} on its video.`;
+    }
+  } else {
+    if (access === 'storyboard_only' && !plan.refreshFramesOnly && (targetedSheets || (!positions.length && captureEndMs === undefined && !noRecapture))) return;
+    if (!plan.savedOnly && (plan.timestampedFrameQuestion || (access && limited)))
+      return 'The user fixed the frame positions. List the saved inspection positions and the permitted capture positions in frameAccess, one entry per video.';
+    if (plan.refreshFramesOnly && access !== 'agent_selected') return 'A frame refresh needs capture permission. List the positions in frameAccess, or set agent_selected if the user left them to you.';
+  }
+
+  // Classification can set aside named inventory from an unrelated video. That choice
+  // has already been validated and is not part of the persisted execution grant.
+  if (!access && !plan.refreshFramesOnly && !plan.timestampedFrameQuestion && plan.visualEvidence === 'none') return;
+  if (!resumed) {
+    for (const asset of assets) {
+      const time = asset.details.timestampMs;
+      if (asset.kind !== 'frame' || typeof time !== 'number' || !positions.some(pos => pos.time === time)) continue;
+      const entry = Array.isArray(access) && access.find(entry => entry.videoId === asset.videoId);
+      if (entry && (entry.savedTimestampsMs.includes(time) || entry.captureTimestampsMs.includes(time))) continue;
+      if (plan.setAsideFrames?.some(frame => frame.videoId === asset.videoId && frame.timestampMs === time)) continue;
+      return `The session holds a saved ${clockTime(time)} frame of ${asset.videoId}. Include its requested operation in frameAccess, or in setAsideFrames if the user excluded it or meant another video.`;
+    }
+  }
+  for (const pos of positions.filter(pos => pos.role === 'saved')) {
+    if (!Array.isArray(access) || !access.some(entry => sameSubject(pos.videoIds, entry.videoId) && entry.savedTimestampsMs.includes(pos.time)))
+      return `List the requested saved ${clockTime(pos.time)} inspection even if its image is unavailable.`;
+  }
+}

@@ -36,10 +36,19 @@ function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementC
   if (input.sheetIndexes && input.timestampsMs) ctx.addIssue({ code: 'custom', message: 'Choose sheetIndexes or timestampsMs, not both.' });
 }
 export const getVideoStoryboardInputSchema = retrievalInput.superRefine(validateInput);
+// Apply the same selection before advertising the tool and before any evidence lookup or billing.
+function storyboardInput(context: AgentToolContext) {
+  const selection = context.storyboardSelection;
+  return selection ? retrievalInput.extend({
+    videoId: z.literal(selection.videoId),
+    timestampsMs: z.array(z.literal(selection.timestampsMs)).min(1).max(MAX_STORYBOARD_SHEETS),
+    sheetIndexes: z.never().optional(),
+  }) : retrievalInput;
+}
 export function createGetVideoStoryboardTool(context: AgentToolContext) {
   return tool({
     description: 'Retrieve storyboard images and metadata. Supply analysis with a visual question to analyze immediately while saving; omit it for retrieval only. With videoId alone, retrieve up to 3 sheets spread across the video. Use maxSheets, sheetIndexes or timestampsMs to select other coverage. No preliminary metadata call is needed. maxSheets gives a spread overview; use transcript findings to choose timestamps for targeted inspection. Returns saved assetVersions and sampled coverage, without image bytes. Use analyze_video_storyboard for questions about versions already in session inventory. Up to 20 sheets and 8 MiB per selection. Metadata alone is not visual evidence.',
-    inputSchema: retrievalInput.omit({focus:true}).superRefine(validateInput),
+    inputSchema: storyboardInput(context).omit({focus:true}).superRefine(validateInput),
     outputSchema: evidencePacketSchema,
     // Previews are dashboard images with random IDs. Hidden from the model, which otherwise
     // mistakes their per-sheet assetId for the analysisAssetVersions analysis needs.
@@ -53,7 +62,7 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
   });
 }
 export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string) {
-  const requested = getVideoStoryboardInputSchema.parse(input);
+  const requested = storyboardInput(context).superRefine(validateInput).parse(input);
   // Only the old metadata-only shape needs a new key. Preserve existing keys
   // for explicit selections, and use schema order for the default overview.
   const parsed = requested.maxSheets === undefined && !requested.sheetIndexes && !requested.timestampsMs

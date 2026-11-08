@@ -1181,15 +1181,7 @@ describe('YouTube agent capability router', () => {
     const context = inspectContext();
     const storyboard = vi.fn(async () => { throw new Error('Storyboard unavailable'); });
     context.provider.storyboard = storyboard;
-    const finalizer = finalizingModel();
-    let attempted = false;
-    const model = new MockLanguageModelV4({ doGenerate: async call => {
-      const result = await finalizer.doGenerate(call);
-      if (attempted) return result;
-      attempted = true;
-      return { ...result, content: [{ type: 'tool-call', toolName: 'get_video_storyboard', toolCallId: 'storyboard-at-90s',
-        input: JSON.stringify({ videoId, timestampsMs: [90000] }) }] };
-    } });
+    const model = finalizingModel([{ name: 'get_video_storyboard', input: { videoId, timestampsMs: [90000] } }]);
     await runResearchAgentWithModel({ model, message, decision, context });
     expect(storyboard).toHaveBeenCalledTimes(expectedCalls);
     expect(model.doGenerateCalls[0]?.tools?.some(tool => tool.name === 'get_video_frames')).toBe(false);
@@ -1211,6 +1203,84 @@ describe('YouTube agent capability router', () => {
     const names = model.doGenerateCalls[0]?.tools?.map(tool => tool.name);
     expect(names).toContain('get_video_frames');
     expect(names).not.toContain('get_video_storyboard');
+  });
+
+  it.each([
+    ['Capture only 0:45 of https://youtu.be/abcdefghijk.', [], 45000, 90000],
+    ['Capture only 0:45 of https://youtu.be/abcdefghijk?t=90s.', [], 45000, 90000],
+    ['Re-inspect the saved 0:30 frame of https://youtu.be/abcdefghijk. Do not recapture it if reuse fails. Capture only 1:00.', [30000], 60000, 30000],
+  ] as const)('repairs an unauthorized capture before the provider can receive it: %s', async (message, saved, fresh, forbidden) => {
+    const videoId = 'abcdefghijk';
+    const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
+    const valid = [{ videoId, savedTimestampsMs: [...saved], captureTimestampsMs: [fresh] }];
+    const invalid = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [fresh, forbidden] }];
+    const model = sequenceClassifier([{ ...route, frameAccess: invalid }, { ...route, frameAccess: valid }]);
+    const assets = saved.map(time => ({ kind: 'frame' as const, version: 'a'.repeat(64), videoId, current: true, collectedAt: 1, details: { timestampMs: time } }));
+    const decision = await classifyCapabilityWithModel({ model, message, sessionBrief: { assets, memories: [] }, signal: new AbortController().signal });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(decision).toMatchObject({ frameAccess: valid });
+    if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
+    const context = inspectContext();
+    const frames = vi.fn<NonNullable<typeof context.provider.frames>>().mockResolvedValue({ value: { videoId,
+      frames: [{ timestampMs: fresh, width: 1, height: 1, mimeType: 'image/jpeg', imageBase64: '/9j/2Q==' }],
+      failures: [], meta: { partial: false, warnings: [] } }, cacheStatus: 'miss' });
+    context.provider.frames = frames;
+    await runResearchAgentWithModel({ message, decision, context, model: finalizingModel([
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [fresh, forbidden] } },
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [fresh] } },
+    ]) });
+    expect(frames.mock.calls.map(([request]) => request.timestampsMs)).toEqual([[fresh]]);
+
+    // A pre-upgrade turn being resumed must also close this path.
+    await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: invalid }, message, priorAssets: assets,
+      classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it('keeps exact capture permissions paired with each linked video', async () => {
+    const [a, b] = ['abcdefghijk', 'lmnopqrstuv'] as const;
+    const at = (videoId: string, time: number) => ({ videoId, savedTimestampsMs: [], captureTimestampsMs: [time] });
+    const route = { route: 'topic_research', comparisonVideoIds: [a, b], visualEvidence: 'required', visualRequirements: ['compare scenes'] };
+    const valid = [at(a, 30000), at(b, 60000)];
+    const model = sequenceClassifier([{ ...route, frameAccess: [at(a, 60000), at(b, 30000)] }, { ...route, frameAccess: valid }]);
+    const message = `Capture only 0:30 of https://youtu.be/${a} and capture 1:00 of https://youtu.be/${b}. Compare the scenes.`;
+    await expect(classifyCapabilityWithModel({ model, message, signal: new AbortController().signal })).resolves.toMatchObject({ frameAccess: valid });
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('closes a bad capture list when every classification attempt repeats it', async () => {
+    const videoId = 'abcdefghijk';
+    const model = classifierModel({ route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'],
+      frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [45000, 90000] }] });
+    await expect(classifyCapabilityWithModel({ message: `Capture only 0:45 of https://youtu.be/${videoId}.`, model,
+      signal: new AbortController().signal })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it('retrieves only the requested storyboard sheet while exact capture remains closed', async () => {
+    const videoId = 'abcdefghijk';
+    const message = `Retrieve the storyboard sheet containing 1:30 of https://youtu.be/${videoId}. Do not capture any exact frames.`;
+    const classifier = classifierModel({ route: 'inspect_video', videoId, frameAccess: 'storyboard_only',
+      visualEvidence: 'required', visualRequirements: ['scene'] });
+    const decision = await classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
+    expect(classifier.doGenerateCalls).toHaveLength(1);
+    expect(decision).toMatchObject({ frameAccess: { storyboardTimestampsMs: [90000] } });
+    if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
+    const resume = (persisted: unknown) => resolveCapabilityRoute({ persisted, message, classify: vi.fn(), persist: vi.fn() });
+    await expect(resume(JSON.parse(JSON.stringify(decision)))).resolves.toEqual(decision);
+    await expect(resume({ ...decision, frameAccess: { storyboardTimestampsMs: [90000, 120000] } }))
+      .resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+    const context = inspectContext();
+    const storyboard = vi.fn<NonNullable<typeof context.provider.storyboard>>().mockResolvedValue({ cacheStatus: 'miss',
+      value: { videoId, frameCount: 20, intervalMs: 5000, sheets: [{ imageBase64: '/9j/2Q==', tileWidth: 100, tileHeight: 100,
+        columns: 2, rows: 1, firstFrameIndex: 18, frameCount: 2, intervalMs: 5000 }], meta: { partial: false, warnings: [] } } });
+    context.provider.storyboard = storyboard;
+    const model = finalizingModel([
+      { name: 'get_video_storyboard', input: { videoId, sheetIndexes: [0] } },
+      { name: 'get_video_storyboard', input: { videoId, timestampsMs: [90000, 120000] } },
+      { name: 'get_video_storyboard', input: { videoId, timestampsMs: [90000] } },
+    ]);
+    await runResearchAgentWithModel({ model, message, decision, context });
+    expect(storyboard.mock.calls.map(([id, times]) => [id, times])).toEqual([[videoId, [90000]]]);
+    expect(model.doGenerateCalls[0]?.tools?.map(tool => tool.name)).not.toContain('get_video_frames');
   });
 
   it('accepts a capture list that excludes a saved frame the user set aside', async () => {
@@ -1509,29 +1579,28 @@ function conversationTurn(overrides: Pick<ConversationTurn, 'user' | 'assistant'
   };
 }
 
-function finalizingModel(): MockLanguageModelV4 {
+function finalizingModel(calls: { name: string; input: object }[] = []): MockLanguageModelV4 {
+  const finish = { name: 'finalize_answer', input: {
+    blocks: [{ text: 'A supported finding from the video.', evidenceIds: ['ref_1'] }],
+    intent: 'inspect_video', confidence: 'low', citations: [], artifacts: [], warnings: [],
+  } };
+  let step = 0;
   return new MockLanguageModelV4({
-    doGenerate: async () => ({
-      content: [{
-        type: 'tool-call',
-        toolCallId: 'finalize-inspect',
-        toolName: 'finalize_answer',
-        input: JSON.stringify({
-          blocks: [{ text: 'A supported finding from the video.', evidenceIds: ['ref_1'] }],
-          intent: 'inspect_video',
-          confidence: 'low',
-          citations: [],
-          artifacts: [],
-          warnings: [],
-        }),
-      }],
-      finishReason: { unified: 'tool-calls', raw: undefined },
-      usage: {
-        inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 20, text: 20, reasoning: undefined },
-      },
-      warnings: [],
-    }),
+    doGenerate: async request => {
+      // Invalid calls stay invalid during argument repair. Research can then try the next call.
+      const repair = request.responseFormat?.type === 'json';
+      const call = repair ? finish : calls[step++] ?? finish;
+      return {
+        content: repair ? [{ type: 'text', text: '{}' }] : [{ type: 'tool-call', toolCallId: `inspect-${step}`,
+          toolName: call.name, input: JSON.stringify(call.input) }],
+        finishReason: { unified: repair ? 'stop' : 'tool-calls', raw: undefined },
+        usage: {
+          inputTokens: { total: 50, noCache: 50, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 20, text: 20, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
   });
 }
 
