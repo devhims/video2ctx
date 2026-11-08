@@ -17,6 +17,10 @@ export interface PublishShort {
 
 export interface PublishPlan {
   episodeUrl?: string;
+  /** Required for upload: the legal made-for-kids declaration for every short. */
+  madeForKids?: boolean;
+  /** YouTube category for upload; 22 is People & Blogs. */
+  categoryId?: string;
   shorts: PublishShort[];
 }
 

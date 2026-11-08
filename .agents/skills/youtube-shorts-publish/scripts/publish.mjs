@@ -3,8 +3,8 @@ import { createRequire as __createRequire } from 'node:module';
 const require = __createRequire(import.meta.url);
 
 // src/publish/cli.ts
-import { mkdir as mkdir3, readFile as readFile2, stat as stat2, writeFile as writeFile2 } from "node:fs/promises";
-import { join as join3, resolve as resolve2 } from "node:path";
+import { mkdir as mkdir4, readFile as readFile4, stat as stat2, writeFile as writeFile3 } from "node:fs/promises";
+import { join as join4, resolve as resolve2 } from "node:path";
 
 // src/watch/ffmpeg.ts
 import { constants } from "node:fs";
@@ -248,6 +248,217 @@ function publishSheet(short, description, related, cover, video) {
   ].join("\n");
 }
 
+// src/publish/auth.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { chmod, mkdir as mkdir3, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
+import { createServer } from "node:http";
+import { homedir } from "node:os";
+import { dirname as dirname2, join as join3 } from "node:path";
+var UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+var AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth";
+var TOKEN_URI = "https://oauth2.googleapis.com/token";
+var CONSENT_TIMEOUT_MS = 5 * 6e4;
+var AuthError = class extends Error {
+  code = "AUTH_REQUIRED";
+};
+function parseClientSecret(value) {
+  const installed = value?.installed;
+  if (!installed || typeof installed.client_id !== "string" || typeof installed.client_secret !== "string") {
+    throw new AuthError('The OAuth client file must be a "Desktop app" client JSON from Google Cloud Console (it has an "installed" section).');
+  }
+  return { clientId: installed.client_id, clientSecret: installed.client_secret };
+}
+function tokenPath(client, environment = process.env) {
+  const base = environment.XDG_CONFIG_HOME ?? join3(environment.HOME ?? homedir(), ".config");
+  const id = createHash("sha256").update(client.clientId).digest("hex").slice(0, 12);
+  return join3(base, "youtube-shorts-publish", `token-${id}.json`);
+}
+function openInBrowser(url) {
+  const [command, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  const child = spawn2(command, args, { stdio: "ignore", detached: true });
+  child.on("error", () => void 0);
+  child.unref();
+}
+async function exchange(fetchImpl, body) {
+  const response = await fetchImpl(TOKEN_URI, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(body).toString()
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || !json.access_token) {
+    throw new AuthError(`Google refused the token request: ${json.error ?? response.status}${json.error_description ? ` (${json.error_description})` : ""}.`);
+  }
+  return json;
+}
+async function consent(client, fetchImpl, dependencies) {
+  const verifier = randomBytes(48).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const state = randomBytes(16).toString("hex");
+  const server = createServer();
+  await new Promise((resolve3) => server.listen(0, "127.0.0.1", resolve3));
+  const redirectUri = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const code = await new Promise((resolve3, reject) => {
+      const timer = setTimeout(() => reject(new AuthError("Timed out waiting for YouTube consent in the browser.")), CONSENT_TIMEOUT_MS);
+      server.on("request", (request, response) => {
+        const url2 = new URL(request.url ?? "/", redirectUri);
+        const error = url2.searchParams.get("error");
+        const returned = url2.searchParams.get("code");
+        if (url2.searchParams.get("state") !== state || !returned && !error) {
+          response.writeHead(400).end("Unexpected request.");
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(error ? "Access was not granted. You can close this tab." : "Upload access granted. You can close this tab.");
+        clearTimeout(timer);
+        if (error) reject(new AuthError(`Consent was not granted: ${error}.`));
+        else resolve3(returned);
+      });
+      const url = new URL(AUTH_URI);
+      url.search = new URLSearchParams({
+        client_id: client.clientId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: UPLOAD_SCOPE,
+        access_type: "offline",
+        prompt: "consent",
+        state,
+        code_challenge: challenge,
+        code_challenge_method: "S256"
+      }).toString();
+      dependencies.notify?.(`Grant upload access in your browser. If it did not open, visit:
+${url.toString()}
+`);
+      (dependencies.openUrl ?? openInBrowser)(url.toString());
+    });
+    const tokens = await exchange(fetchImpl, {
+      code,
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+      code_verifier: verifier
+    });
+    if (!tokens.refresh_token) throw new AuthError("Google did not return a refresh token; remove the app under myaccount.google.com/permissions and try again.");
+    return { stored: { refresh_token: tokens.refresh_token, scope: tokens.scope }, accessToken: tokens.access_token };
+  } finally {
+    server.close();
+  }
+}
+async function getAccessToken(client, path, dependencies = {}) {
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const saved = await readFile2(path, "utf8").then((text) => JSON.parse(text)).catch(() => void 0);
+  if (saved?.refresh_token) {
+    try {
+      const tokens = await exchange(fetchImpl, {
+        refresh_token: saved.refresh_token,
+        client_id: client.clientId,
+        client_secret: client.clientSecret,
+        grant_type: "refresh_token"
+      });
+      return tokens.access_token;
+    } catch (error) {
+      if (!(error instanceof AuthError) || !/invalid_grant/.test(error.message)) throw error;
+    }
+  }
+  const { stored, accessToken } = await consent(client, fetchImpl, dependencies);
+  await mkdir3(dirname2(path), { recursive: true, mode: 448 });
+  await writeFile2(path, `${JSON.stringify(stored)}
+`, { mode: 384 });
+  await chmod(path, 384);
+  return accessToken;
+}
+
+// src/publish/upload.ts
+import { readFile as readFile3 } from "node:fs/promises";
+var UPLOAD_URI = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status";
+var MAX_ATTEMPTS = 4;
+var UploadError = class extends Error {
+  constructor(code, message, retryable = false) {
+    super(message);
+    this.code = code;
+    this.retryable = retryable;
+  }
+  code;
+  retryable;
+};
+function videoResource(metadata) {
+  return {
+    snippet: {
+      title: metadata.title,
+      description: metadata.description,
+      tags: metadata.tags,
+      categoryId: metadata.categoryId
+    },
+    status: {
+      privacyStatus: metadata.privacy,
+      selfDeclaredMadeForKids: metadata.madeForKids
+    }
+  };
+}
+async function apiError(response) {
+  const json = await response.json().catch(() => ({}));
+  const reason = json.error?.errors?.[0]?.reason ?? String(response.status);
+  const message = json.error?.message ?? response.statusText;
+  if (reason === "quotaExceeded" || reason === "uploadLimitExceeded") {
+    return new UploadError("RATE_LIMITED", `YouTube upload limit reached (${reason}): ${message}`);
+  }
+  if (response.status === 401) return new UploadError("AUTH_REQUIRED", `YouTube rejected the access token: ${message}`);
+  return new UploadError("UPSTREAM_ERROR", `YouTube refused the upload (${reason}): ${message}`, response.status >= 500);
+}
+async function uploadVideo(fetchImpl, accessToken, file, metadata, wait = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms))) {
+  const bytes = await readFile3(file);
+  const auth = { authorization: `Bearer ${accessToken}` };
+  const start = await fetchImpl(UPLOAD_URI, {
+    method: "POST",
+    headers: {
+      ...auth,
+      "content-type": "application/json; charset=UTF-8",
+      "x-upload-content-type": "video/mp4",
+      "x-upload-content-length": String(bytes.length)
+    },
+    body: JSON.stringify(videoResource(metadata))
+  });
+  if (!start.ok) throw await apiError(start);
+  const session = start.headers.get("location");
+  if (!session) throw new UploadError("INVALID_RESPONSE", "YouTube did not return an upload session.");
+  let offset = 0;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    let response;
+    try {
+      const body = bytes.subarray(offset);
+      response = await fetchImpl(session, {
+        method: "PUT",
+        headers: {
+          ...auth,
+          "content-type": "video/mp4",
+          ...offset > 0 ? { "content-range": `bytes ${offset}-${bytes.length - 1}/${bytes.length}` } : {}
+        },
+        body
+      });
+    } catch {
+      response = void 0;
+    }
+    if (response && (response.status === 200 || response.status === 201)) {
+      const json = await response.json();
+      if (!json.id) throw new UploadError("INVALID_RESPONSE", "YouTube finished the upload without a video id.");
+      return { videoId: json.id };
+    }
+    if (response && response.status < 500 && response.status !== 308) throw await apiError(response);
+    if (attempt === MAX_ATTEMPTS) break;
+    await wait(1e3 * 2 ** (attempt - 1));
+    const probe = await fetchImpl(session, { method: "PUT", headers: { ...auth, "content-range": `bytes */${bytes.length}` } }).catch(() => void 0);
+    if (probe && (probe.status === 200 || probe.status === 201)) {
+      const json = await probe.json();
+      if (json.id) return { videoId: json.id };
+    }
+    const range = probe?.status === 308 ? /bytes=0-(\d+)/.exec(probe.headers.get("range") ?? "") : null;
+    offset = range ? Number(range[1]) + 1 : 0;
+  }
+  throw new UploadError("UPSTREAM_ERROR", `Upload of ${file} did not finish after ${MAX_ATTEMPTS} attempts.`, true);
+}
+
 // src/publish/cli.ts
 var HELP = `youtube-shorts-publish
 
@@ -255,12 +466,24 @@ Check publishing copy for rendered Shorts against YouTube's limits and write a
 copy-paste sheet and cover frame per short. Prints one JSON value.
 
 Usage:
-  publish.mjs kit --project <dir> [--ffmpeg-path <path>] [--pretty]
+  publish.mjs kit    --project <dir> [--ffmpeg-path <path>] [--pretty]
+  publish.mjs upload --project <dir> --client-secret <file> [--only <id,...>]
+                     [--privacy unlisted|private] [--variant <name>] [--dry-run] [--force]
 
 Reads <project>/video.json, <project>/edl.json, <project>/publish.json, and
 <project>/render/<id>-overlay.mp4 (or <id>.mp4). Writes <project>/publish/:
 <id>.md (title, description, tags, related video, pinned comment, schedule),
 <id>-cover.jpg (the frame at coverSec), and README.md (the schedule).
+
+upload sends each short to YouTube with the Data API (videos.insert, resumable),
+unlisted by default, using publish.json's title, description, hashtags, and tags.
+It needs a "Desktop app" OAuth client JSON (--client-secret, or the
+YOUTUBE_OAUTH_CLIENT environment variable) and asks for consent in the browser
+once; the refresh token is saved under ~/.config/youtube-shorts-publish (mode
+600). publish.json must declare "madeForKids". --variant uploads
+render/<id>-<variant>.mp4 instead of <id>-overlay.mp4. Finished uploads are
+recorded in publish/uploads.json and skipped on later runs unless --force.
+Public posting stays in YouTube Studio.
 `;
 var InputError = class extends Error {
   code = "INVALID_INPUT";
@@ -268,16 +491,25 @@ var InputError = class extends Error {
 var DependencyError = class extends Error {
   code = "DEPENDENCY_MISSING";
 };
+var COMMANDS = {
+  kit: ["project", "ffmpeg-path"],
+  upload: ["project", "client-secret", "only", "privacy", "variant", "ffmpeg-path"]
+};
+var BOOLEANS = /* @__PURE__ */ new Set(["pretty", "dry-run", "force"]);
 function parse(argv) {
-  if (argv[0] !== "kit") throw new InputError(argv[0] ? `Unknown command: ${argv[0]}. Run with --help.` : "Missing command. Run with --help.");
+  const command = argv[0];
+  if (!command || !Object.hasOwn(COMMANDS, command)) {
+    throw new InputError(command ? `Unknown command: ${command}. Run with --help.` : "Missing command. Run with --help.");
+  }
+  const allowed = /* @__PURE__ */ new Set([...COMMANDS[command], "pretty", ...command === "upload" ? ["dry-run", "force"] : []]);
   const flags = {};
   for (let index = 1; index < argv.length; index += 1) {
     const name = argv[index].replace(/^--/, "");
-    if (!argv[index].startsWith("--") || !["project", "ffmpeg-path", "pretty"].includes(name)) {
+    if (!argv[index].startsWith("--") || !allowed.has(name)) {
       throw new InputError(`Unexpected argument: ${argv[index]}. Run with --help.`);
     }
-    if (name === "pretty") {
-      flags.pretty = true;
+    if (BOOLEANS.has(name)) {
+      flags[name] = true;
       continue;
     }
     const value = argv[index + 1];
@@ -286,10 +518,10 @@ function parse(argv) {
     index += 1;
   }
   if (typeof flags.project !== "string") throw new InputError("--project is required.");
-  return flags;
+  return { command, flags };
 }
 async function readJson(path, what) {
-  const text = await readFile2(path, "utf8").catch(() => {
+  const text = await readFile4(path, "utf8").catch(() => {
     throw new InputError(`${what} not found at ${path}.`);
   });
   try {
@@ -301,11 +533,11 @@ async function readJson(path, what) {
 var exists = async (path) => (await stat2(path).catch(() => void 0))?.isFile() ?? false;
 async function kit(flags, environment) {
   const project = resolve2(flags.project);
-  const video = await readJson(join3(project, "video.json"), "video.json");
-  const edl = await readJson(join3(project, "edl.json"), "edl.json");
+  const video = await readJson(join4(project, "video.json"), "video.json");
+  const edl = await readJson(join4(project, "edl.json"), "edl.json");
   let plan;
   try {
-    plan = parsePublishPlan(await readJson(join3(project, "publish.json"), "publish.json"));
+    plan = parsePublishPlan(await readJson(join4(project, "publish.json"), "publish.json"));
   } catch (error) {
     throw error instanceof InputError ? error : new InputError(error.message);
   }
@@ -314,13 +546,13 @@ async function kit(flags, environment) {
     throw new DependencyError("FFmpeg is required for cover frames. Install FFmpeg, set FFMPEG_PATH, or pass --ffmpeg-path.");
   });
   const episodeUrl = plan.episodeUrl ?? `https://youtu.be/${video.videoId}`;
-  const directory = join3(project, "publish");
-  await mkdir3(directory, { recursive: true });
+  const directory = join4(project, "publish");
+  await mkdir4(directory, { recursive: true });
   const issues = [];
   const output = [];
   for (const short of plan.shorts) {
-    const overlay = join3(project, "render", `${short.id}-overlay.mp4`);
-    const plain = join3(project, "render", `${short.id}.mp4`);
+    const overlay = join4(project, "render", `${short.id}-overlay.mp4`);
+    const plain = join4(project, "render", `${short.id}.mp4`);
     const file = await exists(overlay) ? overlay : await exists(plain) ? plain : void 0;
     if (!file) {
       issues.push({ short: short.id, level: "error", message: `No rendered video at ${overlay} or ${plain}.` });
@@ -332,15 +564,15 @@ async function kit(flags, environment) {
     const description = composeDescription(short, episodeUrl, moment);
     issues.push(...checkShort(short, description, video.videoId, facts));
     const coverSec = Math.min(Math.max(short.coverSec ?? 1, 0), Math.max(facts.durationSec - 0.1, 0));
-    const cover = join3(directory, `${short.id}-cover.jpg`);
+    const cover = join4(directory, `${short.id}-cover.jpg`);
     await extractThumbnail(ffmpeg, file, Math.round(coverSec * 1e3), cover, facts.width);
     const related = short.relatedVideo ?? episodeUrl;
-    const sheet = join3(directory, `${short.id}.md`);
-    await writeFile2(sheet, publishSheet(short, description, related, cover, file));
+    const sheet = join4(directory, `${short.id}.md`);
+    await writeFile3(sheet, publishSheet(short, description, related, cover, file));
     output.push({ id: short.id, title: short.title, video: file, cover, sheet, publishAt: short.publishAt, durationSec: Number(facts.durationSec.toFixed(1)) });
   }
   const schedule = [...output].sort((a, b) => (a.publishAt ?? "~").localeCompare(b.publishAt ?? "~"));
-  await writeFile2(join3(directory, "README.md"), [
+  await writeFile3(join4(directory, "README.md"), [
     "# Publishing schedule",
     "",
     "| When | Short | Title | Length |",
@@ -352,20 +584,114 @@ async function kit(flags, environment) {
   ].join("\n"));
   return { ok: !issues.some((issue) => issue.level === "error"), directory, shorts: output, issues };
 }
+async function upload(flags, environment, io, dependencies) {
+  const project = resolve2(flags.project);
+  const video = await readJson(join4(project, "video.json"), "video.json");
+  const edl = await readJson(join4(project, "edl.json"), "edl.json");
+  let plan;
+  try {
+    plan = parsePublishPlan(await readJson(join4(project, "publish.json"), "publish.json"));
+  } catch (error) {
+    throw error instanceof InputError ? error : new InputError(error.message);
+  }
+  if (typeof plan.madeForKids !== "boolean") {
+    throw new InputError('publish.json must set "madeForKids" to true or false before uploading; it is a legal declaration YouTube requires, so ask the user.');
+  }
+  const privacy = flags.privacy ?? "unlisted";
+  if (privacy !== "unlisted" && privacy !== "private") throw new InputError("--privacy must be unlisted or private. Publish publicly from YouTube Studio.");
+  const only = typeof flags.only === "string" ? new Set(flags.only.split(",").map((id) => id.trim())) : void 0;
+  const variant = typeof flags.variant === "string" ? flags.variant : void 0;
+  if (variant !== void 0 && !/^[A-Za-z0-9_-]+$/.test(variant)) throw new InputError("--variant may use only letters, digits, - and _.");
+  const shorts = plan.shorts.filter((short) => !only || only.has(short.id));
+  if (only) {
+    for (const id of only) if (!plan.shorts.some((short) => short.id === id)) throw new InputError(`publish.json has no short ${id}.`);
+  }
+  const command = (typeof flags["ffmpeg-path"] === "string" ? flags["ffmpeg-path"] : void 0) ?? environment.FFMPEG_PATH ?? "ffmpeg";
+  const ffmpeg = await resolveFfmpegExecutable(command, environment).catch(() => {
+    throw new DependencyError("FFmpeg is required to check each video before upload. Install FFmpeg, set FFMPEG_PATH, or pass --ffmpeg-path.");
+  });
+  const episodeUrl = plan.episodeUrl ?? `https://youtu.be/${video.videoId}`;
+  const recordsPath = join4(project, "publish", "uploads.json");
+  const records = await readFile4(recordsPath, "utf8").then((text) => JSON.parse(text)).catch(() => ({}));
+  const queue = [];
+  const issues = [];
+  for (const short of shorts) {
+    const candidates = variant ? [join4(project, "render", `${short.id}-${variant}.mp4`)] : [join4(project, "render", `${short.id}-overlay.mp4`), join4(project, "render", `${short.id}.mp4`)];
+    let file;
+    for (const candidate of candidates) if (await exists(candidate)) {
+      file = candidate;
+      break;
+    }
+    if (!file) {
+      issues.push({ short: short.id, level: "error", message: `No video at ${candidates.join(" or ")}.` });
+      continue;
+    }
+    const facts = await probeMaster(ffmpeg, file);
+    const firstCut = edl.shorts?.find((item) => item.id === short.id)?.cuts?.[0]?.startMs;
+    const description = composeDescription(short, episodeUrl, firstCut === void 0 ? episodeUrl : momentUrl(video.videoId, firstCut));
+    issues.push(...checkShort(short, description, video.videoId, facts).filter((issue) => issue.level === "error"));
+    const skipped = records[short.id] && flags.force !== true;
+    queue.push({ short, file, description, skipped });
+  }
+  if (issues.length) return { ok: false, uploaded: [], issues };
+  const planned = queue.map((item) => ({ id: item.short.id, title: item.short.title, file: item.file, privacy, skip: item.skipped ? `already uploaded: ${records[item.short.id].url}` : void 0 }));
+  if (flags["dry-run"] === true) return { ok: true, dryRun: true, planned, issues };
+  if (queue.every((item) => item.skipped)) {
+    return { ok: true, uploaded: [], skipped: planned.filter((item) => item.skip), issues };
+  }
+  const secretPath = (typeof flags["client-secret"] === "string" ? flags["client-secret"] : void 0) ?? environment.YOUTUBE_OAUTH_CLIENT;
+  if (!secretPath) throw new InputError("--client-secret (or YOUTUBE_OAUTH_CLIENT) must point to the Desktop app OAuth client JSON.");
+  let client;
+  try {
+    client = parseClientSecret(await readJson(resolve2(secretPath), "OAuth client file"));
+  } catch (error) {
+    throw error instanceof AuthError || error instanceof InputError ? error : new InputError(error.message);
+  }
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const accessToken = await getAccessToken(client, tokenPath(client, environment), { fetch: fetchImpl, openUrl: dependencies.openUrl, notify: io.stderr });
+  const uploaded = [];
+  for (const item of queue) {
+    if (item.skipped) continue;
+    const { videoId } = await uploadVideo(fetchImpl, accessToken, item.file, {
+      title: item.short.title.trim(),
+      description: item.description,
+      tags: item.short.tags ?? [],
+      categoryId: plan.categoryId ?? "22",
+      privacy,
+      madeForKids: plan.madeForKids
+    });
+    const record = { videoId, url: `https://youtube.com/shorts/${videoId}`, privacy, file: item.file, uploadedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    records[item.short.id] = record;
+    await mkdir4(join4(project, "publish"), { recursive: true });
+    await writeFile3(recordsPath, `${JSON.stringify(records, null, 2)}
+`);
+    uploaded.push({ id: item.short.id, ...record });
+  }
+  return {
+    ok: true,
+    uploaded,
+    skipped: planned.filter((item) => item.skip),
+    next: "In YouTube Studio: pick each cover frame, set the related video, and post and pin the pinned comment.",
+    issues
+  };
+}
 function errorPayload(error) {
+  if (error instanceof UploadError || error instanceof AuthError) {
+    return { error: { code: error.code, message: error.message, retryable: error instanceof UploadError ? error.retryable : false } };
+  }
   if (error instanceof InputError || error instanceof DependencyError || error instanceof MediaError) {
     return { error: { code: error.code, message: error.message, retryable: false } };
   }
   return { error: { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : "Unexpected failure.", retryable: false } };
 }
-async function runPublishCli(argv, io, environment = process.env) {
+async function runPublishCli(argv, io, environment = process.env, dependencies = {}) {
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
     io.stdout(HELP);
     return 0;
   }
   try {
-    const flags = parse(argv);
-    const result = await kit(flags, environment);
+    const { command, flags } = parse(argv);
+    const result = command === "kit" ? await kit(flags, environment) : await upload(flags, environment, io, dependencies);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
     return 0;
