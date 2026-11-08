@@ -31,7 +31,7 @@ export function buildAgentTurnResult(
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
   /** Present when the route asked for frame work: its exact access, and the session's saved frames. */
-  frameTurn?: { access?: FrameAccess; inventory: readonly InventoryFrame[]; startedAt: number },
+  frameTurn?: { requestedSaved?: boolean; access?: FrameAccess; inventory: readonly InventoryFrame[]; startedAt: number },
 ): AgentTurnResult {
   const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
@@ -83,8 +83,8 @@ export function buildAgentTurnResult(
   const playlistCoverage = playlistCoverageDisclosures(packets, citations.map(citation => citation.id));
   const notes = [...playlistCoverage.notes];
   // The application, not the model, states which frames this turn actually inspected.
-  if (frameTurn && input.intent !== 'clarification' && input.intent !== 'rejected') {
-    notes.push(...frameTurnNotes({ runId: identity.runId, startedAt: frameTurn.startedAt, access: frameTurn.access, inventory: frameTurn.inventory, packets, cited: citedObservations }));
+  if (citedObservations.length || (frameTurn && input.intent !== 'clarification' && input.intent !== 'rejected')) {
+    notes.push(...frameTurnNotes({ runId: identity.runId, startedAt: frameTurn?.startedAt ?? 0, requestedSaved: frameTurn?.requestedSaved, access: frameTurn?.access, inventory: frameTurn?.inventory ?? [], packets, cited: citedObservations }));
   }
   const disclosedAnswer = appendNotices(answer, notes);
 

@@ -51,13 +51,21 @@ async function retrieveAndAnalyze(input: Parameters<typeof executeGetVideoStoryb
   return executeAnalyzeVideoStoryboard({assetVersions:packet.assetVersions!,focus:input.focus!},ctx,id);
 }
 describe('storyboard agent tool', () => {
+  it('refuses a timestamp permitted only for the other comparison video before lookup', () => {
+    const ctx = context();
+    ctx.storyboardSelections = [{ videoId: storyboard.videoId, timestampsMs: [10000] }, { videoId: 'abcdefghijk', timestampsMs: [55000] }];
+    ctx.executeEvidenceTool = vi.fn();
+    expect(() => executeGetVideoStoryboard({ videoId: storyboard.videoId, timestampsMs: [55000] }, ctx, 'swapped')).toThrow('outside the grant');
+    expect(ctx.executeEvidenceTool).not.toHaveBeenCalled();
+  });
+
   it.each([
     { videoId: storyboard.videoId }, { videoId: storyboard.videoId, maxSheets: 3 },
     { videoId: storyboard.videoId, sheetIndexes: [0] }, { videoId: storyboard.videoId, timestampsMs: [55000, 50000] },
     { videoId: 'abcdefghijk', timestampsMs: [55000] },
   ])('rejects out-of-scope sheet requests before evidence lookup or billing: %j', input => {
     const ctx = context();
-    ctx.storyboardSelection = { videoId: storyboard.videoId, timestampsMs: [55000] };
+    ctx.storyboardSelections = [{ videoId: storyboard.videoId, timestampsMs: [55000] }];
     ctx.executeEvidenceTool = vi.fn();
     expect(() => executeGetVideoStoryboard(input, ctx, 'denied')).toThrow();
     expect(ctx.executeEvidenceTool).not.toHaveBeenCalled();

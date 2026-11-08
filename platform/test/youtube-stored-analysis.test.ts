@@ -356,16 +356,35 @@ describe('application notes on frame turns', () => {
     context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
     provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
     const current = await executeGetVideoFrames({ videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' }, context, 'capture');
-    const answer = (text: string, packets: EvidencePacket[]) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
+    const answer = (text: string, packets: EvidencePacket[], requestedSaved = false) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 },
       { answer: text, intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [] },
-      [earlier, ...packets], 0, undefined, { access: context.frameAccess, inventory: inventoryOf(context), startedAt }).answer;
+      [earlier, ...packets], 0, undefined, { requestedSaved, access: context.frameAccess, inventory: inventoryOf(context), startedAt }).answer;
     /** Moves this turn's start after saves made by a test's own earlier turn. */
     const restart = () => { startedAt = store.runStart(); };
     return { context, store, at, savedVersion, earlier, current, answer, restart };
   }
   const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
   const claimNote = 'No frame saved before this turn was re-inspected in this turn';
+
+  it('labels an earlier frame citation on a history answer with no frame route or inventory', async () => {
+    const { context, earlier } = await turns();
+    const result = buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() },
+      { userId: 'user', creditsRemaining: 100 }, { answer: `I re-inspected it [cite:${earlier.excerpts[0]!.id}].`,
+        intent: 'context_answer', confidence: 'medium', citations: [], artifacts: [], warnings: [] }, [earlier], 0);
+    expect(result.answer).toMatch(earlierNote);
+  });
+
+  it('summarizes several saved versions inspected in an open capture', async () => {
+    const { context, store, at, current, answer, restart } = await turns();
+    context.frameAccess = undefined;
+    const versions = [30000, 40000, 50000].map(time => store.put('frame', videoId, at(videoId, time, 480), { timestampMs: time }));
+    restart();
+    const analysis = await executeAnalyzeVideoFrames({ assetVersions: versions, focus: 'Describe the shirt' }, context, 'batch');
+    const text = answer(`A shirt [cite:${current.excerpts[0]!.id}].`, [analysis, current]);
+    expect(text).toMatch(/I re-inspected \d+ saved frames in this turn/);
+    expect(text.match(/I re-inspected/g)).toHaveLength(1);
+  });
 
   it('states that a cited observation came from an earlier turn', async () => {
     const { earlier, current, answer } = await turns();
@@ -379,7 +398,7 @@ describe('application notes on frame turns', () => {
     'Both frames show shirts.',
   ])('states that no saved frame was re-inspected, whatever the answer says: %s', async claim => {
     const { current, answer } = await turns();
-    const text = answer(`${claim} The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    const text = answer(`${claim} The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current], true);
     expect(text).toContain(claimNote);
     expect(text).toContain('I retrieved the 1:00 frame and inspected it.');
   });
@@ -411,11 +430,11 @@ describe('application notes on frame turns', () => {
     expect(text.includes('It is not recorded whether the cited 0:30 observation')).toBe(uncertain);
   });
 
-  it('names saved frames whose position cannot be recovered instead of skipping them silently', async () => {
+  it('omits unrelated saved inventory from a capture-only answer', async () => {
     const { current, answer } = await turns(put => put(other, 30000));
     const text = answer(`The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
-    expect(text).toContain(`Saved frames of "${other}" have no recorded position, so this turn could not match them to requested times or re-inspect them.`);
-    expect(text).toContain(`${claimNote}, because its plan included none.`);
+    expect(text).not.toContain('no recorded position');
+    expect(text).not.toContain(claimNote);
   });
 
   it('judges each citation by its own image when an earlier batch held several', async () => {

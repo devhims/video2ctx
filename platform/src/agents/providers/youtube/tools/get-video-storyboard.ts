@@ -38,10 +38,10 @@ function validateInput(input: z.infer<typeof retrievalInput>, ctx: z.RefinementC
 export const getVideoStoryboardInputSchema = retrievalInput.superRefine(validateInput);
 // Apply the same selection before advertising the tool and before any evidence lookup or billing.
 function storyboardInput(context: AgentToolContext) {
-  const selection = context.storyboardSelection;
-  return selection ? retrievalInput.extend({
-    videoId: z.literal(selection.videoId),
-    timestampsMs: z.array(z.literal(selection.timestampsMs)).min(1).max(MAX_STORYBOARD_SHEETS),
+  const selections = context.storyboardSelections;
+  return selections ? retrievalInput.extend({
+    videoId: z.literal(selections.map(item => item.videoId)),
+    timestampsMs: z.array(z.literal([...new Set(selections.flatMap(item => item.timestampsMs))])).min(1).max(MAX_STORYBOARD_SHEETS),
     sheetIndexes: z.never().optional(),
   }) : retrievalInput;
 }
@@ -63,6 +63,10 @@ export function createGetVideoStoryboardTool(context: AgentToolContext) {
 }
 export function executeGetVideoStoryboard(input: z.infer<typeof getVideoStoryboardInputSchema>, context: AgentToolContext, toolCallId: string) {
   const requested = storyboardInput(context).superRefine(validateInput).parse(input);
+  if (context.storyboardSelections) {
+    const allowed = context.storyboardSelections.find(item => item.videoId === requested.videoId)?.timestampsMs;
+    if (!allowed || !requested.timestampsMs?.every(time => allowed.includes(time))) throw new Error('Storyboard position is outside the grant for this video.');
+  }
   // Only the old metadata-only shape needs a new key. Preserve existing keys
   // for explicit selections, and use schema order for the default overview.
   const parsed = requested.maxSheets === undefined && !requested.sheetIndexes && !requested.timestampsMs
@@ -111,6 +115,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
   } : undefined, onReady => withRunDeadline(deadlineAt, context.signal, signal => timeStoryboardStage(parsed.videoId, 'retrieval', () => context.provider.storyboard!(parsed.videoId, parsed.timestampsMs, {
     maxSheets: parsed.maxSheets ?? MAX_STORYBOARD_SHEETS, sheetIndexes: parsed.sheetIndexes, metadataOnly: false,
     resolution: requestedResolution(parsed), signal, deadlineAt,
+    ...(!context.session && (context.refreshEvidence || context.refreshFramesOnly) ? { refresh: true } : {}),
   }, event => context.onExtractionDiagnostic?.({ ...event, toolCallId }), ...(onReady ? [onReady] : [])), { runId: context.runId, toolCallId }),
     'Storyboard retrieval exceeded its budget.'), async (response, signal) => {
     const storyboard = storyboardSchema.parse(response.value);
@@ -140,7 +145,7 @@ async function retrieveVideoStoryboard(parsed: z.infer<typeof getVideoStoryboard
     excerpts: [],
     artifacts: [{ type: 'youtube_storyboard_retrieval', title: `Sampled visual evidence for ${parsed.videoId}`,
       data: { timingsMs, analysisAssetVersions: response.assetVersions?.filter(version => context.session?.brief().assets.some(asset => asset.version === version && asset.kind === 'storyboard_sheet')),
-        videoId: parsed.videoId, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
+        videoId: parsed.videoId, requestedTimestampsMs: parsed.timestampsMs, sessionReused: response.sessionReused === true, selection: storyboard.selection, manifest: storyboard.manifest,
         resolution: servedResolution(storyboard),
         sampledRanges: storyboard.sheets.map(sheet => ({ startMs: sheet.firstFrameIndex * sheet.intervalMs,
           endMs: (sheet.firstFrameIndex + sheet.frameCount - 1) * sheet.intervalMs })), totalFrames: storyboard.frameCount,

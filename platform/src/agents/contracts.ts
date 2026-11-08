@@ -32,7 +32,8 @@ export type FrameAccess = z.infer<typeof frameAccessSchema>;
 /** Model choices for visual retrieval without a per-video exact-frame list. */
 export const unscopedImageAccessSchema = z.enum(['storyboard_only', 'agent_selected']);
 export const routeFrameAccessSchema = z.union([frameAccessSchema, unscopedImageAccessSchema,
-  z.object({ storyboardTimestampsMs: frameTimes.min(1) })]);
+  z.object({ storyboardTimestampsMs: frameTimes.min(1) }),
+  z.object({ storyboardSelections: z.array(z.object({ videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/), timestampsMs: frameTimes.min(1) })).min(1).max(8) })]);
 export type RouteFrameAccess = z.infer<typeof routeFrameAccessSchema>;
 
 /** Evidence the user explicitly asked to be read before answering. Research cannot complete until each is read or unavailable. */

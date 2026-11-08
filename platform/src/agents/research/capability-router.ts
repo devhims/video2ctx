@@ -21,7 +21,7 @@ import {
 import { sessionBriefForModel, type SessionBrief } from '../runtime/session-evidence';
 import { extractYouTubeVideoIds, youTubeUrls } from './youtube-references';
 export { extractYouTubeVideoIds } from './youtube-references';
-import { frameRequestIssue, readFrameRequest, type FrameRequest } from './frame-request';
+import { frameRequestIssue, readFrameRequest, requestedSheets, type FrameRequest } from './frame-request';
 import { conversationAssistantMessage, type ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
@@ -53,7 +53,7 @@ const classifierDecisionSchema = z.object({
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
-  visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable visual analysis. New image retrieval also needs frameAccess.'),
+  visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable visual analysis. Required visuals need an explicit image grant unless the turn is saved-only. Use agent_selected for an ordinary visual question with delegated positions, or storyboard_only when only sheets are permitted.'),
   visualRequirements: visualRequirementsSchema.optional().describe('Only when visualEvidence is required: each requested fact that needs images, such as "presenter clothing".'),
 });
 
@@ -615,6 +615,10 @@ function candidateObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
+function pinnedFrameAccess<T extends { videoId?: string }>(entries: T[], videoId: string) {
+  return entries.map(entry => ({ ...entry, videoId: entry.videoId ?? videoId }));
+}
+
 function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[], request: FrameRequest): ClassificationIssue[] {
   // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
   const linked = extractYouTubeVideoIds(input.message);
@@ -622,7 +626,10 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
     return [{ path: 'frameAccess', code: 'frame_scope_outside_link', message: `The message links ${linked[0]}. Inspect that video, or use topic_research with comparisonVideoIds for every video whose frames this turn uses.` }];
   }
   if (decision.route !== 'finalize') {
-    const issue = frameRequestIssue(decision, request, input.sessionBrief?.assets);
+    const pin = decision.route === 'topic_research' && !decision.comparisonVideoIds?.length && !decision.playlistListing && linked.length === 1;
+    const plan = pin ? { ...decision, route: 'inspect_video', videoId: linked[0],
+      frameAccess: Array.isArray(decision.frameAccess) ? pinnedFrameAccess(decision.frameAccess, linked[0]!) : decision.frameAccess } : decision;
+    const issue = frameRequestIssue(plan, request, input.sessionBrief?.assets);
     if (issue) return [{ path: 'frameAccess', code: 'invalid_frame_access', message: issue }];
   }
   const scope = comparisonScopeIssues(decision, input, videoIds);
@@ -849,7 +856,9 @@ function finishClassification(
   const { explicitSourceCount, setAsideFrames: _setAside, ...classified } = withVisualAccess(decision);
   const pinned = !(decision.route === 'topic_research' && decision.playlistListing) && explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
     && (decision.route !== 'finalize' || (decision.responseIntent === 'context_answer' && decision.contextScope !== 'history'));
-  const route = pinned ? { ...classified, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
+  const pinnedAccess = pinned && Array.isArray(classified.frameAccess)
+    ? pinnedFrameAccess(classified.frameAccess, explicitVideoIds[0]!) : classified.frameAccess;
+  const route = pinned ? { ...classified, frameAccess: pinnedAccess, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
     visualEvidence: classified.visualEvidence ?? 'helpful', useStoryboard: classified.visualEvidence !== 'none' } : classified;
   const researchVideoCount = route.route === 'inspect_video' ? 1 : route.route === 'topic_research'
     ? Math.min(8, route.comparisonVideoIds?.length ?? explicitSourceCount ?? (route.researchBreadth === 'comparative' ? 4 : 2)) : 0;
@@ -945,8 +954,12 @@ export function extractYouTubeChannelIds(message: string): string[] {
 }
 
 function bindStoryboardSelection(decision: CapabilityRouteDecision, request: FrameRequest): CapabilityRouteDecision {
-  return decision.route === 'inspect_video' && decision.frameAccess === 'storyboard_only' && request.sheetTimes.length
-    ? { ...decision, frameAccess: { storyboardTimestampsMs: request.sheetTimes } } : decision;
+  if ((decision.route !== 'inspect_video' && decision.route !== 'topic_research') || decision.frameAccess !== 'storyboard_only') return decision;
+  const selections = requestedSheets(decision, request);
+  const scoped = request.refreshSheets ? { ...decision, refreshFramesOnly: true } : decision;
+  if (!selections?.length) return scoped;
+  return { ...scoped, frameAccess: decision.route === 'inspect_video'
+    ? { storyboardTimestampsMs: selections[0]!.timestampsMs } : { storyboardSelections: selections } };
 }
 
 export async function resolveCapabilityRoute(options: {
@@ -962,7 +975,7 @@ export async function resolveCapabilityRoute(options: {
     // video after validation. Resuming must not run them without the access the user gave.
     const subjects = decision.route === 'inspect_video' ? [decision.videoId]
       : decision.route === 'topic_research' ? decision.comparisonVideoIds ?? [] : [];
-    if ('frameAccess' in decision && Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry => entry.videoId && !subjects.includes(entry.videoId))) {
+    if ('frameAccess' in decision && Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry => entry.videoId ? !subjects.includes(entry.videoId) : decision.route === 'inspect_video' || subjects.length > 0)) {
       return { route: 'finalize', responseIntent: 'clarification', reason: 'Clarify which video the saved and fresh frame positions refer to.' };
     }
     if (options.message && (decision.route === 'inspect_video' || decision.route === 'topic_research')) {

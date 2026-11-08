@@ -58,7 +58,7 @@ export interface AgentToolContext {
   refreshEvidence?: boolean;
   refreshFramesOnly?: boolean;
   frameAccess?: FrameAccess;
-  storyboardSelection?: { videoId: string; timestampsMs: number[] };
+  storyboardSelections?: { videoId: string; timestampsMs: number[] }[];
   timestampedFrameQuestion?: string;
   session?: import('../../runtime/session-evidence').SessionAccess;
   assetCache?: RunAssetCache;

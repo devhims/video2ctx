@@ -1473,6 +1473,12 @@ test('single-sheet storyboard reuses the processor middle sheet across restored 
     expect(warm.value.value.sheets).toEqual(value.sheets);
     expect(warm.value.sessionReused).toBe(true);
     expect(storyboard).toHaveBeenCalledOnce();
+    // A sheet-only refresh must reach the provider even when the requested sheet is already saved.
+    const refresh = sessionProvider(p, reopen(), false, undefined, undefined, false, true);
+    await refresh.storyboard!(id, undefined, { maxSheets: 1 });
+    await refresh.storyboard!(id, undefined, { maxSheets: 1 });
+    expect(storyboard).toHaveBeenCalledTimes(2);
+    expect(storyboard).toHaveBeenLastCalledWith(id, undefined, expect.objectContaining({ refresh: true }), undefined);
     for (const { diagnostics } of [cold, warm]) {
       for (const span of diagnostics.spans) {
         const parent = diagnostics.spans.find(candidate => candidate.id === span.parentId);

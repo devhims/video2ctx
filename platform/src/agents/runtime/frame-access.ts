@@ -69,11 +69,24 @@ export function frameList(decision: CapabilityRouteDecision): FrameAccess | unde
   return 'frameAccess' in decision && Array.isArray(decision.frameAccess) ? decision.frameAccess : undefined;
 }
 
+export function imagePermissions(decision: Extract<CapabilityRouteDecision, { route: 'inspect_video' | 'topic_research' }>) {
+  const access = decision.frameAccess;
+  const frameScope = frameList(decision);
+  const object = access && typeof access === 'object' && !Array.isArray(access) ? access : undefined;
+  const sheetSelections = object && ('storyboardSelections' in object ? object.storyboardSelections
+    : decision.route === 'inspect_video' ? [{ videoId: decision.videoId, timestampsMs: object.storyboardTimestampsMs }] : undefined);
+  const retrieval = !decision.savedOnly && decision.useStoryboard !== false;
+  return { frameScope, sheetSelections,
+    canCapture: retrieval && (access === 'agent_selected' || !!frameScope?.some(entry => entry.captureTimestampsMs.length)),
+    canRetrieveSheets: retrieval && (access === 'storyboard_only' || access === 'agent_selected' || !!sheetSelections) };
+}
+
 /** A turn that asked for frame work, whose answer carries the application's account of it. */
 export function isFrameTurn(decision: CapabilityRouteDecision): boolean {
-  return (decision.route === 'inspect_video' || decision.route === 'topic_research')
-    && (Array.isArray(decision.frameAccess) || decision.frameAccess === 'agent_selected' || !!decision.refreshFramesOnly
-      || (decision.route === 'inspect_video' && !!decision.timestampedFrameQuestion));
+  if (decision.route !== 'inspect_video' && decision.route !== 'topic_research') return false;
+  const { frameScope, canCapture, canRetrieveSheets } = imagePermissions(decision);
+  return !!frameScope || canCapture || (!!decision.refreshFramesOnly && !canRetrieveSheets)
+    || (decision.route === 'inspect_video' && !!decision.timestampedFrameQuestion);
 }
 
 /** A saved frame as the session inventory records it. */
@@ -88,7 +101,7 @@ export interface InventoryFrame { version: string; videoId: string; timestampMs?
  * An image is saved when the session stored it before this run started, however this run reached it.
  */
 export function frameTurnNotes(options: {
-  runId: string; startedAt: number; access?: FrameAccess; inventory: readonly InventoryFrame[]; packets: readonly EvidencePacket[];
+  runId: string; startedAt: number; access?: FrameAccess; requestedSaved?: boolean; inventory: readonly InventoryFrame[]; packets: readonly EvidencePacket[];
   cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>;
 }): string[] {
   const { runId, access, inventory, packets } = options;
@@ -113,16 +126,15 @@ export function frameTurnNotes(options: {
   const listed = new Set(access?.flatMap(entry => entry.videoId
     ? [...entry.savedTimestampsMs, ...entry.captureTimestampsMs].map(time => `${entry.videoId}:${time}`) : []));
   const reinspected = savedBefore.filter(frame => analyzed.has(frame.version));
-  for (const frame of reinspected) {
-    if (frame.timestampMs !== undefined && !listed.has(`${frame.videoId}:${frame.timestampMs}`))
-      notes.push(`I re-inspected the saved ${named(frame.videoId, frame.timestampMs)}.`);
-  }
-  // Say why a saved frame went unused, so a skipped inspection is never silent.
-  const plannedSaved = !!access?.some(entry => entry.savedTimestampsMs.length);
-  if (savedBefore.length && !reinspected.length) notes.push(plannedSaved
-    ? 'No frame saved before this turn was re-inspected in this turn.'
-    : 'No frame saved before this turn was re-inspected in this turn, because its plan included none.');
-  const unplaced = [...new Set(savedBefore.filter(frame => frame.timestampMs === undefined && !analyzed.has(frame.version)).map(frame => frame.videoId))];
+  const additional = reinspected.filter(frame => frame.timestampMs === undefined || !listed.has(`${frame.videoId}:${frame.timestampMs}`));
+  if (additional.length === 1 && additional[0]!.timestampMs !== undefined)
+    notes.push(`I re-inspected the saved ${named(additional[0]!.videoId, additional[0]!.timestampMs)}.`);
+  else if (additional.length) notes.push(`I re-inspected ${additional.length} saved frame${additional.length === 1 ? '' : 's'} in this turn.`);
+  const plannedSaved = access?.filter(entry => entry.savedTimestampsMs.length) ?? [];
+  if (options.requestedSaved && !plannedSaved.length && !reinspected.length)
+    notes.push('No frame saved before this turn was re-inspected in this turn.');
+  const unplaced = new Set(savedBefore.filter(frame => frame.timestampMs === undefined && !analyzed.has(frame.version)
+    && plannedSaved.some(entry => entry.videoId === frame.videoId)).map(frame => frame.videoId));
   for (const videoId of unplaced) notes.push(`Saved frames of "${title(videoId) ?? videoId}" have no recorded position, so this turn could not match them to requested times or re-inspect them.`);
 
   // Each citation is judged by the image behind it. When the record cannot tie the citation
