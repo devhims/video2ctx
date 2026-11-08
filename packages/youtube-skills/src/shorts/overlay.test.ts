@@ -101,12 +101,20 @@ describe('face-aware overlay', () => {
   const short = { spec: { id: 'S1', hook: 'Hook', cuts: [] }, cuts: [], durationMs: 6_000 } as unknown as ResolvedShort;
   const one = [{ inMs: 0, outMs: 6_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } }];
 
-  test('moves captions below a close-up face and reports nothing when everything fits', () => {
+  test('keeps headings at the top and captions low, below a close-up face', () => {
     const faces = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5].map((atSec) => ({ atSec, boxes: [{ x: 50, y: 420, w: 980, h: 900 }] }));
     const plan = buildOverlay({ id: 'S1', short, words, segments: one, durationSec: 6, videoFile: 'S1.mp4', brand: {}, speakers: {}, overlay: {}, faces });
-    expect(plan.html).toMatch(/id="cap-0"[^>]*style="top:1324px/);
-    expect(plan.html).toMatch(/id="hook"[^>]*style="top:308px/);
+    expect(plan.html).toMatch(/id="cap-0"[^>]*style="top:1422px/);
+    expect(plan.html).toMatch(/id="hook"[^>]*style="top:236px/);
     expect(plan.issues).toEqual([]);
+  });
+
+  test('puts captions on the seam of split screens and headings below the wordmark', () => {
+    const split = [{ inMs: 0, outMs: 6_000, layout: { atMs: 0, mode: 'stack' as const } }];
+    const plan = buildOverlay({ id: 'S1', short, words, segments: split, durationSec: 6, videoFile: 'S1.mp4',
+      brand: { wordmark: ['the', 'INNER', 'SCORECARD'] }, speakers: {}, overlay: {} });
+    expect(plan.html).toMatch(/id="cap-0"[^>]*style="top:909px/);
+    expect(plan.html).toMatch(/id="hook"[^>]*style="top:310px/);
   });
 
   test('falls back to typical face zones per framing', () => {

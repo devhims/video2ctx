@@ -67,7 +67,15 @@ const END_CARD_SEC = 2.4;
 const CARD_SEC = 4.5;
 const NAME_TAG_SEC = 3.6;
 /** Caption block top edge per layout, on the 1080x1920 frame. */
-const CAPTION_TOP: Record<LayoutMode, number> = { crop: 1250, stack: 900, fit: 1290 };
+/** Captions sit low on single-person shots, inside this band, and on the seam of split screens. */
+const CAPTION_BAND: [number, number] = [1150, 1560];
+const CAPTION_LOW = 1422;
+const CAPTION_HEIGHT = 102;
+const SEAM_CAPTION_TOP = 960 - CAPTION_HEIGHT / 2;
+/** Share of a padded face box above the brows (forehead), which headings may cover. */
+const BROW_LINE = 0.3;
+/** Headings (hook, name tag, cards, end card) start this far below the wordmark. */
+const HEADING_GAP = 48;
 /** Vertical slot for the hook, name tag, cards, and end card. */
 const TOP_SLOT_Y = 236;
 
@@ -221,21 +229,6 @@ const HARD_PENALTY = 1e12;
 
 /** Space kept between captions and any title or card on screen with them. */
 const CAPTION_GAP = 60;
-/** Titles and cards stay in the top band or the lower third, so their spot is predictable. */
-const BLOCK_BANDS: Array<[number, number]> = [[TEXT_TOP, 620], [1150, TEXT_BOTTOM]];
-
-/** Over split screens both bands hold a face, so the seam between the two people is allowed too. */
-function bandsFor(segments: TimelineSegment[], startSec: number, endSec: number): Array<[number, number]> {
-  let stack = 0;
-  let other = 0;
-  for (const segment of segments) {
-    const shared = Math.max(0, Math.min(endSec, segment.endSec) - Math.max(startSec, segment.startSec));
-    if (segment.mode === 'stack') stack += shared;
-    else other += shared;
-  }
-  return stack > other ? [[TEXT_TOP, TEXT_BOTTOM]] : BLOCK_BANDS;
-}
-
 /** Average share of a block allowed over a face before it is reported. */
 const FACE_TOLERANCE = 0.12;
 /** How far a card may move from its requested time to fit within one camera shot. */
@@ -323,13 +316,16 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   // usually by keeping it inside one camera shot.
   const faceSamples = input.faces ?? typicalFaces(segments);
   const fixedBoxes: Box[] = brand.wordmark?.length ? [WORDMARK_BOX] : [];
+  // Headings always sit at the top, a clear gap below the wordmark.
+  const headingTop = brand.wordmark?.length ? WORDMARK_BOX.y + WORDMARK_BOX.h + HEADING_GAP : TOP_SLOT_Y;
+  const atTop = (height: number): Array<[number, number]> => [[headingTop, headingTop + height]];
   for (const slot of slots) {
     const length = slot.endSec - slot.startSec;
     let best = { shift: 0, overlap: Number.POSITIVE_INFINITY };
     for (const shift of CARD_NUDGE_SEC) {
       const startSec = slot.startSec + shift;
       if (startSec < 0 || startSec + length > durationSec - END_CARD_SEC - 0.1) continue;
-      const { overlap } = placeY(slot.height, TOP_SLOT_Y + 64, CARD_X, samplesDuring(faceSamples, startSec, startSec + length), fixedBoxes, bandsFor(segments, startSec, startSec + length));
+      const { overlap } = placeY(slot.height, headingTop, CARD_X, samplesDuring(faceSamples, startSec, startSec + length), [], atTop(slot.height));
       if (overlap < best.overlap - 1) best = { shift, overlap };
     }
     slot.startSec += best.shift;
@@ -355,24 +351,30 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
 
   const hookLines = (hookText ?? '').split('|').map((line) => line.trim()).filter(Boolean);
 
-  // Place every block clear of the faces on screen while it shows; captions also clear the blocks.
+  // Headings are fixed at the top; report any that cover a face there.
   const faces = faceSamples;
   const placed: Array<Timed & { y: number; height: number; xRange: [number, number] }> = [];
   const area = (height: number, [x0, x1]: [number, number]) => height * (x1 - x0);
-  const place = (id: string, timed: Timed, height: number, preferred: number, xRange: [number, number]) => {
-    const spot = placeY(height, preferred, xRange, samplesDuring(faces, timed.startSec, timed.endSec), fixedBoxes, bandsFor(segments, timed.startSec, timed.endSec));
-    if (spot.overlap >= HARD_PENALTY) {
-      issues.push(`${id} has no room clear of the wordmark; shorten its text.`);
-    } else if (spot.overlap > area(height, xRange) * FACE_TOLERANCE) {
+  const place = (id: string, timed: Timed, height: number, xRange: [number, number]) => {
+    // At the top a heading may cover the forehead; count only the face from the brows down.
+    const eyesDown = samplesDuring(faces, timed.startSec, timed.endSec)
+      .map((boxes) => boxes.map((box) => ({ ...box, y: box.y + box.h * BROW_LINE, h: box.h * (1 - BROW_LINE) })));
+    const spot = placeY(height, headingTop, xRange, eyesDown, [], atTop(height));
+    if (spot.overlap > area(height, xRange) * FACE_TOLERANCE) {
       const share = Math.round((spot.overlap / area(height, xRange)) * 100);
-      issues.push(`${id} covers a face: ${share}% of it on average over its time on screen. Shorten its text or time it to a single camera shot.`);
+      const split = segments.reduce((total, segment) => total + (segment.mode === 'stack'
+        ? Math.max(0, Math.min(timed.endSec, segment.endSec) - Math.max(timed.startSec, segment.startSec)) : 0), 0);
+      const advice = split > (timed.endSec - timed.startSec) / 2
+        ? 'It shows over a split screen, where the top person\'s face fills the top: frame that shot as a crop on the speaker instead.'
+        : 'Shorten its text, or time it to a moment when the head sits lower.';
+      issues.push(`${id} covers a face at the top: ${share}% of it on average over its time on screen. ${advice}`);
     }
-    placed.push({ ...timed, y: spot.y, height, xRange });
-    return spot.y;
+    placed.push({ ...timed, y: headingTop, height, xRange });
+    return headingTop;
   };
-  const hookY = hook ? place('hook', hook, hookHeight(hookLines, 74, 18), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
-  const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, TOP_SLOT_Y + 64, CARD_X)]));
-  const endY = endCard ? place('end card', endCard, hookHeight(brand.endCard!, 58, 22), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
+  const hookY = hook ? place('hook', hook, hookHeight(hookLines, 74, 18), FULL_WIDTH) : 0;
+  const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, CARD_X)]));
+  const endY = endCard ? place('end card', endCard, hookHeight(brand.endCard!, 58, 22), FULL_WIDTH) : 0;
   // One caption position per stretch of unchanging screen: a camera shot, split wherever a title
   // or card appears or leaves, so captions move only when something else on screen does.
   const cutPoints = [...new Set([
@@ -381,23 +383,26 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   ])].filter((at) => at >= 0 && at <= durationSec).sort((a, b) => a - b);
   const windows = cutPoints.slice(0, -1).map((startSec, index) => ({ startSec, endSec: cutPoints[index + 1]! }))
     .filter((window) => window.endSec - window.startSec > 0.05);
+  // Captions: on the seam of split screens; otherwise low in the frame, as clear of the face as the
+  // bottom band allows. Never at the top.
   const captionY = windows.map((window) => {
     const mode = segments.find((segment) => window.startSec + 0.01 >= segment.startSec && window.startSec + 0.01 < segment.endSec)?.mode ?? 'crop';
+    if (mode === 'stack') return SEAM_CAPTION_TOP;
     const blocks: Box[] = placed
       .filter((block) => block.startSec < window.endSec && block.endSec > window.startSec)
-      // Keep a clear gap so captions never read as part of a title or card.
+      // Keep a clear gap so captions never read as part of a heading or card.
       .map((block) => ({ x: 0, y: block.y - CAPTION_GAP, w: 1080, h: block.height + CAPTION_GAP * 2 }));
-    const spot = placeY(102, CAPTION_TOP[mode], FULL_WIDTH, samplesDuring(faces, window.startSec, window.endSec), [...blocks, ...fixedBoxes]);
-    if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of the titles and cards; shorten a card or move it.`);
-    else if (spot.overlap > area(102, FULL_WIDTH) * FACE_TOLERANCE) {
-      const share = Math.round((spot.overlap / area(102, FULL_WIDTH)) * 100);
-      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face: ${share}% of the caption band on average over that stretch.`);
+    const spot = placeY(CAPTION_HEIGHT, CAPTION_LOW, FULL_WIDTH, samplesDuring(faces, window.startSec, window.endSec), [...blocks, ...fixedBoxes], [CAPTION_BAND]);
+    if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of a card; shorten it.`);
+    else if (spot.overlap > area(CAPTION_HEIGHT, FULL_WIDTH) * FACE_TOLERANCE) {
+      const share = Math.round((spot.overlap / area(CAPTION_HEIGHT, FULL_WIDTH)) * 100);
+      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face (chin or mouth): ${share}% of the caption band on average over that stretch.`);
     }
     return spot.y;
   });
   const captionTopAt = (atSec: number) => {
     const index = windows.findIndex((window) => atSec >= window.startSec && atSec < window.endSec);
-    return captionY[index === -1 ? captionY.length - 1 : index] ?? CAPTION_TOP.crop;
+    return captionY[index === -1 ? captionY.length - 1 : index] ?? CAPTION_LOW;
   };
   const hookHtml = hookLines.map((line, index) => {
     const highlighted = hookLines.length > 1 ? index === hookLines.length - 1 : false;
