@@ -1183,6 +1183,44 @@ describe('YouTube agent capability router', () => {
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
+  it.each([[false], [true]])('limits a discovery capture to 1m30s or asks (classifier keeps agent_selected: %s)', async persists => {
+    const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial', visualEvidence: 'required', visualRequirements: ['dough'] };
+    const frameAccess = [{ savedTimestampsMs: [], captureTimestampsMs: [90000] }];
+    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }, ...(persists ? [] : [{ ...discovery, frameAccess }])]);
+    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
+      message: 'Find a sourdough tutorial and capture only 1m30s of that video. No other timestamps.' });
+    if (persists) expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+    else expect(route).toMatchObject({ route: 'topic_research', frameAccess });
+    expect(route).not.toHaveProperty('frameAccess', 'agent_selected');
+  });
+
+  // One parser serves both checks, so every format limits capture and requires the saved frame alike.
+  it.each(['1:30', '1m30s', '90 seconds', '1 minute 30 seconds', 'the 90-second mark'])('treats %s as a named time in both checks', async time => {
+    const videoId = 'abcdefghijk';
+    const sessionBrief = { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame' as const, current: true, collectedAt: 1, details: { timestampMs: 90000 } }] };
+    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
+    const permission = sequenceClassifier([{ ...base, frameAccess: 'agent_selected' },
+      { ...base, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [90000] }] }]);
+    // No saved frame here, so only the capture-permission check can reject agent_selected.
+    await classifyCapabilityWithModel({ model: permission, signal: new AbortController().signal,
+      message: `Capture only ${time} of https://youtu.be/${videoId}.` });
+    expect(permission.doGenerateCalls).toHaveLength(2);
+    const saved = sequenceClassifier([{ ...base, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [120000] }] },
+      { ...base, frameAccess: [{ videoId, savedTimestampsMs: [90000], captureTimestampsMs: [120000] }] }]);
+    await classifyCapabilityWithModel({ model: saved, sessionBrief, signal: new AbortController().signal,
+      message: `Re-inspect the saved frame at ${time} and capture 2:00 of https://youtu.be/${videoId}.` });
+    expect(saved.doGenerateCalls).toHaveLength(2);
+  });
+
+  it('keeps delegated capture when a length bound is the only time in the message', async () => {
+    const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough under 5 minutes', visualEvidence: 'required', visualRequirements: ['dough'] };
+    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }]);
+    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
+      message: 'Find sourdough videos under 5 minutes and show what the dough looks like.' });
+    expect(route).toMatchObject({ frameAccess: 'agent_selected' });
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   it('keeps a fixed capture time when discovery chooses the video', async () => {
     const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial', visualEvidence: 'required', visualRequirements: ['dough'] };
     const frameAccess = [{ savedTimestampsMs: [], captureTimestampsMs: [30000] }];

@@ -613,22 +613,24 @@ function candidateObject(value: unknown): Record<string, unknown> | undefined {
 /** An explicit prohibition rules out an unrestricted fallback. Only the classifier
  * resolves which video and positions the user authorized. */
 const prohibitsRecapture = (message: string) => /\b(?:without|never|do not|don['’]t)\s+re-?captur(?:e|ing)\b/i.test(message);
-/** Clock times, and durations introduced as a position ("at 90 seconds", "only 60 seconds"), not lengths ("a 10 minute video"). */
-const FRAME_POSITION = /\b\d+:\d{2}\b|\b\d+\s*ms\b|(?:\b(?:at|from|around|only|to|until)|@)\s*\d+(?:\.\d+)?\s*(?:milliseconds?|s|secs?|seconds?|mins?|minutes?)\b/i;
-const namesFramePositions = (message: string) => FRAME_POSITION.test(message);
 const UNIT_MS: ReadonlyArray<[RegExp, number]> = [[/^(?:ms|milliseconds?)$/i, 1], [/^(?:s|secs?|seconds?)$/i, 1_000],
   [/^(?:m|mins?|minutes?)$/i, 60_000], [/^(?:h|hrs?|hours?)$/i, 3_600_000]];
 const unitMs = (unit: string) => UNIT_MS.find(([pattern]) => pattern.test(unit))?.[1] ?? 0;
+/** A bound on length ("under 5 minutes", "longer than 10:00") is a filter, not a position. */
+const NOT_LENGTH_BOUND = /(?<!\b(?:under|over|than|least|most|within|up to)\s{1,3})/.source;
+const CLOCK_TIME = new RegExp(`${NOT_LENGTH_BOUND}\\b(?:(\\d+):)?(\\d{1,2}):(\\d{2})\\b`, 'gi');
 /** A quantity of time, optionally followed by seconds ("1 minute 30 seconds", "1m30s"), not a length ("a 30 second clip"). */
-const TIME_QUANTITY = /\b(\d+(?:\.\d+)?)\s*-?\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])(?:\s*(?:and\s*)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b)?(?!\s*-?\s*(?:long|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\b)/gi;
-/** Times named in the message, in milliseconds: clock times and spoken quantities. The saved-frame
- * check uses this generously, since a false match costs one more classification attempt. */
+const TIME_QUANTITY = new RegExp(`${NOT_LENGTH_BOUND}\\b(\\d+(?:\\.\\d+)?)\\s*-?\\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])`
+  + `(?:\\s*(?:and\\s*)?(\\d+(?:\\.\\d+)?)\\s*(seconds?|secs?|s)\\b)?(?!\\s*-?\\s*(?:long|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\\b)`, 'gi');
+/** Times named in the message, in milliseconds: clock times and spoken quantities. The one parser for
+ * every router check, so capture permission and saved-frame accounting agree on what counts as a time. */
 const namedTimes = (message: string) => [
-  ...[...message.matchAll(/\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/g)]
+  ...[...message.matchAll(CLOCK_TIME)]
     .map(([, hours, minutes, seconds]) => ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000),
   ...[...message.matchAll(TIME_QUANTITY)].map(([, amount, unit, extra]) =>
     Math.round(Number(amount) * unitMs(unit!) + (extra ? Number(extra) * 1_000 : 0))),
 ];
+const namesFramePositions = (message: string) => namedTimes(message).length > 0;
 
 function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
   // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
