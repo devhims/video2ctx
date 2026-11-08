@@ -1,0 +1,33 @@
+{
+  "name": "video2ctx-hybrid-probe-nov06",
+  "account_id": "9079b7cc8d9e8cf76bcca7559b82b5c5",
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "media": { "binding": "MEDIA" },
+  "limits": { "cpu_ms": 30000 },
+  "observability": { "enabled": false },
+  "containers": [
+    {
+      "class_name": "SessionGeneratorContainer",
+      "image": "./Dockerfile",
+      "image_build_context": ".",
+      "instance_type": "basic",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MINTER", "class_name": "SessionGeneratorContainer" },
+      { "name": "HYBRID", "class_name": "HybridFrames" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SessionGeneratorContainer", "HybridFrames"],
+    },
+  ],
+}
