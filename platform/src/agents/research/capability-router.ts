@@ -306,6 +306,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Select skill verify_saved_evidence for follow-ups that recover saved original captions/comments, verify exact quotations or passage links, or correct source claims. This replaces general discovery and analysis with a verification workflow. The skill does not prohibit fetching: a request that also needs evidence not yet saved, such as comments, still gets it unless savedOnly is set. Omit the skill for broad summaries or visual analysis.',
       'Set requestedEvidence for each kind of evidence the user explicitly asks for: original_quotes for exact quotations, verbatim wording or precise passage links; comments for what viewers or commenters say. Include every requested kind in one decision, alongside any explanation. Research cannot complete until each is read or reported unavailable, so choose an executable route.',
       'Set savedOnly true whenever the user prohibits fresh retrieval or asks to use existing saved sources only. Keep this restriction on follow-ups when it remains in force. Missing saved evidence is a gap, never permission to fetch. Use the saved reader instead of transcript retrieval or discovery.',
+      'A video length limit filters the source. A capture window limits the seek positions. For a tutorial under five minutes with a capture within the first 30 seconds, choose a captureTimestampsMs value between 0 and 30000 inclusive. Use an exact list even when the user lets you choose a position inside the window.',
       'New frames are captured only with frameAccess. When discovery will choose the videos but the user fixes the time, use one entry without videoId. When the session holds a saved frame at a time the user names, list it on its own video, or in setAsideFrames if the user excluded it or meant another video. When the user names frame positions, limits what may be captured, asks about exact timestamps, or re-inspects saved frames, list them in frameAccess with one entry per video. Set agent_selected only when new frames may help and the user leaves every position to you, including a plain frame refresh. Omit savedOnly when new captures are allowed. For example, re-inspect saved 10:30 and capture only 10:45 means [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }]. A prohibition on recapturing 10:30 still allows the requested 10:45. When the saved frame belongs to one video and the new capture to another, list both videos and choose topic_research with both in comparisonVideoIds, even if the message links only one. Times mentioned for comparison, narration or history do not authorize capture.',
       'Requests for exact quotations from original saved captions/comments, precise passage-start links, or explicit original-asset reads require inspect_video or topic_research with the resolved subjects, even if prior summaries discuss the topic. Research can call search_originals without fetching YouTube. Quoting a source is different from quoting a prior conversation message. Do not route an original-source read directly to finalize.',
       'For every context_answer set contextScope: history for listing, quoting, recalling or correcting conversation messages or preferences; video for claims about video content; mixed only when the requested answer needs both. A video URL inside a quoted earlier message does not require video evidence.',
@@ -616,21 +617,56 @@ const prohibitsRecapture = (message: string) => /\b(?:without|never|do not|don['
 const UNIT_MS: ReadonlyArray<[RegExp, number]> = [[/^(?:ms|milliseconds?)$/i, 1], [/^(?:s|secs?|seconds?)$/i, 1_000],
   [/^(?:m|mins?|minutes?)$/i, 60_000], [/^(?:h|hrs?|hours?)$/i, 3_600_000]];
 const unitMs = (unit: string) => UNIT_MS.find(([pattern]) => pattern.test(unit))?.[1] ?? 0;
-/** A bound on length ("under 5 minutes", "longer than 10:00") is a filter, not a position. */
-const NOT_LENGTH_BOUND = /(?<!\b(?:under|over|than|least|most|within|up to)\s{1,3})/.source;
-const CLOCK_TIME = new RegExp(`${NOT_LENGTH_BOUND}\\b(?:(\\d+):)?(\\d{1,2}):(\\d{2})\\b`, 'gi');
-/** A quantity of time, optionally followed by seconds ("1 minute 30 seconds", "1m30s"), not a length ("a 30 second clip"). */
-const TIME_QUANTITY = new RegExp(`${NOT_LENGTH_BOUND}\\b(\\d+(?:\\.\\d+)?)\\s*-?\\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])`
-  + `(?:\\s*(?:and\\s*)?(\\d+(?:\\.\\d+)?)\\s*(seconds?|secs?|s)\\b)?(?!\\s*-?\\s*(?:long|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\\b)`, 'gi');
-/** Times named in the message, in milliseconds: clock times and spoken quantities. The one parser for
- * every router check, so capture permission and saved-frame accounting agree on what counts as a time. */
-const namedTimes = (message: string) => [
-  ...[...message.matchAll(CLOCK_TIME)]
-    .map(([, hours, minutes, seconds]) => ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000),
-  ...[...message.matchAll(TIME_QUANTITY)].map(([, amount, unit, extra]) =>
-    Math.round(Number(amount) * unitMs(unit!) + (extra ? Number(extra) * 1_000 : 0))),
-];
-const namesFramePositions = (message: string) => namedTimes(message).length > 0;
+const CLOCK_TIME = /\b(?:(\d+):)?(\d{1,2}):(\d{2})\b/gi;
+const TIME_QUANTITY = /\b(\d+(?:\.\d+)?)\s*-?\s*(milliseconds?|ms|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])(?:\s*(?:and\s*)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b)?/gi;
+
+// A comparison such as "within" or "at most" can limit either video length or capture position.
+// Exclude a time when the surrounding words describe duration ("videos under 5 minutes", "5 minutes long").
+const COMPARISON = /\b(?:under|over|within|up to|at (?:least|most)|(?:no )?(?:longer|shorter|less|more) than)\s*$/i;
+const DURATION_SUBJECT = /\b(?:duration|length|runtime)(?:\s+(?:of|is|must be|should be))?\s*$/i;
+const SOURCE_SELECTION = /\b(?:find|search|recommend|list|videos?|clips?|tutorials?|lectures?|recordings?|episodes?)\b/i;
+const FRAME_ACTION = /\b(?:frames?|stills?|timestamps?|capture|capturing|inspect|sample|extract)\b/i;
+const VIDEO_LENGTH_SUFFIX = /^\s*-?\s*(?:long|in (?:length|duration)|videos?|clips?|ads?|intros?|segments?|versions?|cuts?|shorts?|views?)\b/i;
+const START_WINDOW = /\b(?:within(?: the first)?|up to|no later than|in the first|during the first)\s*$/i;
+const START_ANCHOR = /^\s+(?:of|from)\s+(?:the\s+)?(?:(?:video|clip)(?:'s|’s)\s+)?(?:start|beginning)\b/i;
+const RELATIVE_ANCHOR = /^\s+(?:of|from|after|before)\b/i;
+
+function isVideoLength(before: string, after: string): boolean {
+  if (VIDEO_LENGTH_SUFFIX.test(after)) return true;
+  const comparison = COMPARISON.exec(before);
+  if (!comparison) return false;
+  const subject = before.slice(0, comparison.index);
+  if (DURATION_SUBJECT.test(subject)) return true;
+  if (!START_WINDOW.test(before) && /\b(?:video|clip|tutorial|lecture|recording|episode)s?\s*$/i.test(subject)) return true;
+  const clause = subject.split(/[.!?;,\n]|\b(?:and|but|then)\b/i).at(-1) ?? '';
+  return SOURCE_SELECTION.test(clause) && !FRAME_ACTION.test(clause);
+}
+
+function frameTimes(message: string) {
+  const positions = new Set<number>();
+  let captureEndMs: number | undefined;
+  function add(match: RegExpExecArray, time: number) {
+    const before = message.slice(0, match.index);
+    const after = message.slice(match.index + match[0].length);
+    const fromStart = START_ANCHOR.test(after);
+    if (!fromStart && isVideoLength(before, after)) return;
+    // A window end limits new captures. It does not request inspection of a saved frame at the endpoint.
+    if (START_WINDOW.test(before) && (fromStart || !RELATIVE_ANCHOR.test(after) || /\bthe first\s*$/i.test(before))) {
+      captureEndMs = Math.min(captureEndMs ?? time, time);
+    } else {
+      positions.add(time);
+    }
+  }
+  for (const match of message.matchAll(CLOCK_TIME)) {
+    const [, hours, minutes, seconds] = match;
+    add(match, ((Number(hours ?? 0) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1_000);
+  }
+  for (const match of message.matchAll(TIME_QUANTITY)) {
+    const [, amount, unit, extra] = match;
+    add(match, Math.round(Number(amount) * unitMs(unit!) + Number(extra ?? 0) * 1_000));
+  }
+  return { positions, captureEndMs };
+}
 
 function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
   // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
@@ -640,11 +676,12 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
   }
   // An open refresh may choose its own positions. Named positions or a recapture prohibition
   // need a bounded list, or every fallback would quietly widen what the user allowed.
+  const { positions, captureEndMs } = frameTimes(input.message);
   // Capture is closed without frameAccess, so omission never widens it. These checks only ask
   // for a list where the classifier itself, or an explicit limit in the message, implies one.
   if (decision.route !== 'finalize' && !decision.savedOnly && !Array.isArray(decision.frameAccess)) {
     // Delegating which video is chosen is not delegating when it is captured.
-    const limited = prohibitsRecapture(input.message) || namesFramePositions(input.message);
+    const limited = prohibitsRecapture(input.message) || positions.size > 0 || captureEndMs !== undefined;
     if (decision.timestampedFrameQuestion || (decision.frameAccess === 'agent_selected' && limited)) {
       return [{ path: 'frameAccess', code: 'missing_capture_scope', message: 'The user fixed the frame positions. List the saved inspection positions and the permitted capture positions in frameAccess, one entry per video.' }];
     }
@@ -652,15 +689,19 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
       return [{ path: 'frameAccess', code: 'missing_capture_permission', message: 'A frame refresh needs capture permission. List the positions in frameAccess, or set agent_selected if the user left them to you.' }];
     }
   }
+  // Apply a start-relative window to captures only. A saved inspection can be anywhere in the video.
+  if (captureEndMs !== undefined && Array.isArray(decision.frameAccess)
+    && decision.frameAccess.some(entry => entry.captureTimestampsMs.some(time => time > captureEndMs))) {
+    return [{ path: 'frameAccess', code: 'capture_outside_window', message: `Select capture positions within the requested window ending at ${captureEndMs} ms, or clarify the requested positions.` }];
+  }
   // Each saved frame at a time the user named is accounted for on its own video: inspected,
   // recaptured, or set aside. Otherwise a plan can drop it without the research ever being able to reach it.
   if (decision.route !== 'finalize' && (decision.frameAccess || decision.refreshFramesOnly || decision.timestampedFrameQuestion || decision.visualEvidence !== 'none')) {
-    const named = new Set(namedTimes(input.message));
     const accounted = (videoId: string, time: number) => (Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry =>
       entry.videoId === videoId && (entry.savedTimestampsMs.includes(time) || entry.captureTimestampsMs.includes(time))))
       || !!decision.setAsideFrames?.some(frame => frame.videoId === videoId && frame.timestampMs === time);
     const omitted = input.sessionBrief?.assets.find(asset => asset.kind === 'frame' && typeof asset.details.timestampMs === 'number'
-      && named.has(asset.details.timestampMs) && !accounted(asset.videoId, asset.details.timestampMs));
+      && positions.has(asset.details.timestampMs) && !accounted(asset.videoId, asset.details.timestampMs));
     if (omitted) {
       const time = clockTime(omitted.details.timestampMs as number);
       return [{ path: 'frameAccess', code: 'saved_frame_unaccounted', message: `The session holds a saved ${time} frame of ${omitted.videoId}, and the user named ${time}. List it in that video's frameAccess entry (savedTimestampsMs to re-inspect, captureTimestampsMs to recapture), with that video in the route, or in setAsideFrames if the user excluded it or meant another video.` }];

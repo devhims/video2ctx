@@ -1212,13 +1212,37 @@ describe('YouTube agent capability router', () => {
     expect(saved.doGenerateCalls).toHaveLength(2);
   });
 
-  it('keeps delegated capture when a length bound is the only time in the message', async () => {
+  it.each([
+    'Find sourdough videos under 5 minutes and show what the dough looks like.',
+    'Find tutorials about shaping dough that are shorter than 5:00 and choose a frame.',
+    'Choose a frame from a sourdough tutorial under 5 minutes.',
+  ])('keeps delegated capture when a length bound is the only time in the message: %s', async message => {
     const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough under 5 minutes', visualEvidence: 'required', visualRequirements: ['dough'] };
     const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }]);
     const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
-      message: 'Find sourdough videos under 5 minutes and show what the dough looks like.' });
+      message });
     expect(route).toMatchObject({ frameAccess: 'agent_selected' });
     expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it.each(['0:30', '30 seconds', '0m30s'])('enforces a capture window within %s of the start during discovery', async limit => {
+    const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial',
+      refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough'] };
+    const captureAt = (time: number) => [{ savedTimestampsMs: [], captureTimestampsMs: [time] }];
+    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }, { ...discovery, frameAccess: captureAt(30001) }]);
+    const fallbackModel = sequenceClassifier([{ ...discovery, frameAccess: captureAt(30000) }]);
+    const route = await classifyCapabilityWithModel({ model, fallbackModel, signal: new AbortController().signal,
+      message: `Find a sourdough tutorial under 5 minutes and capture a frame only within ${limit} of the start. Do not capture anything later.` });
+    expect(route).toMatchObject({ route: 'topic_research', frameAccess: captureAt(30000) });
+    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
+  });
+
+  it('asks for clarification if every attempt leaves the capture window unrestricted', async () => {
+    const model = sequenceClassifier([{ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial',
+      frameAccess: 'agent_selected', visualEvidence: 'required', visualRequirements: ['dough'] }]);
+    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
+      message: 'Find a sourdough tutorial and capture a frame only within 0:30 of the start. Do not capture anything later.' });
+    expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
 
   it('keeps a fixed capture time when discovery chooses the video', async () => {
