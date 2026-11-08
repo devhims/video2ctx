@@ -14,9 +14,11 @@ This repository uses a single product context, with platform and web as implemen
 
 ### video2ctx integrations
 
-Two published skills live under `.agents/skills/`. They describe consuming video2ctx and carry no repository paths, so they apply here and after `npx skills add` equally.
+Four published skills live under `.agents/skills/`. They describe consuming video2ctx and carry no repository paths, so they apply here and after `npx skills add` equally.
 
 - `youtube-ctx` — self-contained stateless search, extraction, and progressive visual inspection directly from the user's machine; FFmpeg is optional for exact frames
+- `youtube-shorts` — ranked Shorts from a long video: transcript-driven moment selection, word-accurate cuts, per-shot 9:16 framing, and FFmpeg rendering from the creator's master file
+- `youtube-shorts-publish` — titles, descriptions, hashtags, cover frames, and schedules for rendered Shorts, checked against YouTube's limits
 - `video2ctx-platform` — authenticated hosted provider reads, account and usage details, direct-access fallback, monitors, notifications, and scheduling invariants
 
 ### Platform internals
