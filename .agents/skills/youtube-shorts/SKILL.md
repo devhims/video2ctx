@@ -89,7 +89,7 @@ When the user wants on-screen design (captions, a hook title, name tags, context
 node <skill-directory>/scripts/shorts.mjs overlay --project <dir>
 ```
 
-Done when: every short's snapshots pass the checks in that reference, and `<id>-overlay.mp4` is rendered.
+Done when: every face report from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in that reference, and `<id>-overlay.mp4` is rendered.
 
 ## 8. Report
 

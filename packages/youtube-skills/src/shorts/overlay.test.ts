@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { buildOverlay, captionGroups, timelineSegments } from './overlay';
+import { buildOverlay, captionGroups, placeY, timelineSegments, typicalFaces } from './overlay';
 import type { CaptionWord, ResolvedShort } from './edl';
 
 const words: CaptionWord[] = [
@@ -34,7 +34,7 @@ describe('captionGroups', () => {
     const short = { spec: { id: 'S2', cuts: [] }, cuts: [], durationMs: 20_000 } as unknown as ResolvedShort;
     const plan = buildOverlay({ id: 'S2', short, words: merged, segments, durationSec: 20, videoFile: 'S2.mp4', brand: {}, speakers: {},
       overlay: { cards: [{ label: 'Context', title: 'Hugging Face', atPhrase: 'hugging face' }] } });
-    expect(plan.issues).toEqual([]);
+    expect(plan.issues.filter((issue) => /phrase/.test(issue))).toEqual([]);
     expect(plan.html).toContain('id="card-1"');
   });
 
@@ -65,5 +65,51 @@ describe('buildOverlay', () => {
       expect.stringMatching(/no such phrase/),
       expect.stringMatching(/needs atPhrase or atSec/),
     ]));
+  });
+});
+
+describe('placeY', () => {
+  const face = { x: 100, y: 500, w: 800, h: 900 };
+
+  test('keeps the preferred spot when it is clear of faces', () => {
+    expect(placeY(100, 300, [60, 1020], [[face]])).toEqual({ y: 300, overlap: 0 });
+  });
+
+  test('moves to the nearest clear spot when the preferred one covers a face', () => {
+    expect(placeY(100, 1250, [60, 1020], [[face]])).toEqual({ y: 1404, overlap: 0 });
+  });
+
+  test('ignores faces outside the block horizontally', () => {
+    expect(placeY(100, 900, [48, 90], [[face]]).overlap).toBe(0);
+  });
+
+  test('scores by average overlap, so a brief lean does not rule a spot out', () => {
+    const head = { x: 0, y: 180, w: 1080, h: 1120 };
+    const lean = { x: 0, y: 1300, w: 1080, h: 260 };
+    // Only the band under the head is ever clear, and the lean covers it in one sample of four.
+    expect(placeY(100, 1404, [60, 1020], [[head], [head], [head], [head, lean]])).toEqual({ y: 1404, overlap: 24_000 });
+  });
+
+  test('settles for the least overlap when nothing is clear', () => {
+    const spot = placeY(400, 600, [60, 1020], [[{ x: 0, y: 180, w: 1080, h: 1300 }]]);
+    expect(spot.y).toBe(1156);
+    expect(spot.overlap).toBeGreaterThan(0);
+  });
+});
+
+describe('face-aware overlay', () => {
+  const short = { spec: { id: 'S1', hook: 'Hook', cuts: [] }, cuts: [], durationMs: 6_000 } as unknown as ResolvedShort;
+  const one = [{ inMs: 0, outMs: 6_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } }];
+
+  test('moves captions below a close-up face and reports nothing when everything fits', () => {
+    const faces = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5].map((atSec) => ({ atSec, boxes: [{ x: 50, y: 420, w: 980, h: 900 }] }));
+    const plan = buildOverlay({ id: 'S1', short, words, segments: one, durationSec: 6, videoFile: 'S1.mp4', brand: {}, speakers: {}, overlay: {}, faces });
+    expect(plan.html).toMatch(/id="cap-0"[^>]*style="top:1324px/);
+    expect(plan.html).toMatch(/id="hook"[^>]*style="top:308px/);
+    expect(plan.issues).toEqual([]);
+  });
+
+  test('falls back to typical face zones per framing', () => {
+    expect(typicalFaces(timelineSegments(one))[0]!.boxes).toEqual([{ x: 120, y: 380, w: 840, h: 980 }]);
   });
 });

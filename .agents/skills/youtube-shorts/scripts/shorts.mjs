@@ -19021,9 +19021,9 @@ var require_undici = __commonJS({
 });
 
 // src/shorts/cli.ts
-import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp, readFile as readFile2, rm as rm3, stat as stat2, writeFile as writeFile3 } from "node:fs/promises";
-import { cpus, homedir, tmpdir } from "node:os";
-import { join as join5, resolve as resolve3 } from "node:path";
+import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
+import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
+import { join as join6, resolve as resolve3 } from "node:path";
 
 // ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
@@ -22333,6 +22333,72 @@ var sec = (value) => Number(value.toFixed(3));
 function captionSize(text) {
   return Math.max(48, Math.min(78, Math.floor(900 / (Math.max(text.length, 1) * 0.6))));
 }
+var TEXT_TOP = 180;
+var TEXT_BOTTOM = 1560;
+var FULL_WIDTH = [60, 1020];
+var CARD_X = [48, 808];
+var WORDMARK_BOX = { x: 730, y: 170, w: 320, h: 92 };
+function typicalFaces(segments) {
+  const zones = {
+    crop: [{ x: 120, y: 380, w: 840, h: 980 }],
+    stack: [{ x: 200, y: 120, w: 680, h: 700 }, { x: 200, y: 1080, w: 680, h: 700 }],
+    fit: [{ x: 200, y: 700, w: 680, h: 520 }]
+  };
+  const samples = [];
+  for (const segment of segments) {
+    for (let atSec = segment.startSec; atSec < segment.endSec; atSec += 0.5) samples.push({ atSec, boxes: zones[segment.mode] });
+  }
+  return samples;
+}
+function samplesDuring(samples, startSec, endSec) {
+  const during = samples.filter((sample) => sample.atSec >= startSec - 0.25 && sample.atSec <= endSec + 0.25).map((sample) => sample.boxes);
+  return during.length ? during : [[]];
+}
+function overlapArea(y, height, [x0, x1], boxes) {
+  return boxes.reduce((total, box) => {
+    const w = Math.max(0, Math.min(x1, box.x + box.w) - Math.max(x0, box.x));
+    const h = Math.max(0, Math.min(y + height, box.y + box.h) - Math.max(y, box.y));
+    return total + w * h;
+  }, 0);
+}
+function placeY(height, preferred, xRange, samples, fixed = [], bands = [[TEXT_TOP, TEXT_BOTTOM]]) {
+  const frames = samples.length ? samples : [[]];
+  let best = { y: preferred, overlap: Number.POSITIVE_INFINITY, distance: Number.POSITIVE_INFINITY };
+  const tops = bands.flatMap(([top, bottom]) => {
+    const list = [];
+    for (let y = Math.max(TEXT_TOP, top); y + height <= Math.min(TEXT_BOTTOM, bottom); y += 8) list.push(y);
+    return list;
+  });
+  for (const y of tops.length ? tops : [Math.max(TEXT_TOP, Math.min(preferred, TEXT_BOTTOM - height))]) {
+    const blocked = overlapArea(y, height, xRange, fixed) > 0 ? HARD_PENALTY : 0;
+    const overlap = blocked + frames.reduce((total, boxes) => total + overlapArea(y, height, xRange, boxes), 0) / frames.length;
+    const distance = Math.abs(y - preferred);
+    if (overlap < best.overlap || overlap === best.overlap && distance < best.distance) best = { y, overlap, distance };
+  }
+  return { y: best.y, overlap: best.overlap };
+}
+var HARD_PENALTY = 1e12;
+var CAPTION_GAP = 60;
+var BLOCK_BANDS = [[TEXT_TOP, 620], [1150, TEXT_BOTTOM]];
+function bandsFor(segments, startSec, endSec) {
+  let stack = 0;
+  let other = 0;
+  for (const segment of segments) {
+    const shared = Math.max(0, Math.min(endSec, segment.endSec) - Math.max(startSec, segment.startSec));
+    if (segment.mode === "stack") stack += shared;
+    else other += shared;
+  }
+  return stack > other ? [[TEXT_TOP, TEXT_BOTTOM]] : BLOCK_BANDS;
+}
+var FACE_TOLERANCE = 0.12;
+var CARD_NUDGE_SEC = [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2];
+var lineCount = (text, perLine) => Math.max(1, Math.ceil(text.length / perLine));
+function hookHeight(lines, fontSize, perLine) {
+  return lines.reduce((total, line) => total + lineCount(line, perLine) * fontSize * 1.06, 0) + 10 * Math.max(0, lines.length - 1) + 16;
+}
+function cardHeight(title, body, source) {
+  return 54 + 32 + 6 + lineCount(title, 26) * 55 + (body ? 10 + lineCount(body, 42) * 40 : 0) + (source ? 12 + 27 : 0);
+}
 function buildOverlay(input) {
   const { brand, overlay, durationSec } = input;
   const issues = [];
@@ -22355,6 +22421,7 @@ function buildOverlay(input) {
         id: "name-tag",
         startSec,
         endSec: clampEnd(startSec, overlay.nameTag.durationSec ?? NAME_TAG_SEC),
+        height: cardHeight(speaker.name, speaker.role),
         html: `<div class="card-label">${escapeHtml(speaker.label ?? "Guest")}</div><div class="card-title">${escapeHtml(speaker.name)}</div>` + (speaker.role ? `<div class="card-body">${escapeHtml(speaker.role)}</div>` : "")
       });
     }
@@ -22372,9 +22439,24 @@ function buildOverlay(input) {
       id: `card-${index + 1}`,
       startSec,
       endSec: clampEnd(startSec, card.durationSec ?? CARD_SEC),
+      height: cardHeight(card.title, card.body, card.source),
       html: `<div class="card-label">${escapeHtml(card.label)}</div><div class="card-title">${escapeHtml(card.title)}</div>` + (card.body ? `<div class="card-body">${escapeHtml(card.body)}</div>` : "") + (card.source ? `<div class="card-source">Source: ${escapeHtml(card.source)}</div>` : "")
     });
   });
+  const faceSamples = input.faces ?? typicalFaces(segments);
+  const fixedBoxes = brand.wordmark?.length ? [WORDMARK_BOX] : [];
+  for (const slot of slots) {
+    const length = slot.endSec - slot.startSec;
+    let best = { shift: 0, overlap: Number.POSITIVE_INFINITY };
+    for (const shift of CARD_NUDGE_SEC) {
+      const startSec = slot.startSec + shift;
+      if (startSec < 0 || startSec + length > durationSec - END_CARD_SEC - 0.1) continue;
+      const { overlap } = placeY(slot.height, TOP_SLOT_Y + 64, CARD_X, samplesDuring(faceSamples, startSec, startSec + length), fixedBoxes, bandsFor(segments, startSec, startSec + length));
+      if (overlap < best.overlap - 1) best = { shift, overlap };
+    }
+    slot.startSec += best.shift;
+    slot.endSec += best.shift;
+  }
   slots.sort((left, right) => left.startSec - right.startSec);
   let freeAt = hook ? hook.endSec + 0.15 : 0;
   for (const slot of slots) {
@@ -22393,6 +22475,43 @@ function buildOverlay(input) {
   const visibleSlots = slots.filter((slot) => slot.endSec > slot.startSec);
   const endCard = brand.endCard?.length ? { startSec: durationSec - END_CARD_SEC, endSec: durationSec } : void 0;
   const hookLines = (hookText ?? "").split("|").map((line) => line.trim()).filter(Boolean);
+  const faces = faceSamples;
+  const placed = [];
+  const area = (height, [x0, x1]) => height * (x1 - x0);
+  const place = (id, timed, height, preferred, xRange) => {
+    const spot = placeY(height, preferred, xRange, samplesDuring(faces, timed.startSec, timed.endSec), fixedBoxes, bandsFor(segments, timed.startSec, timed.endSec));
+    if (spot.overlap >= HARD_PENALTY) {
+      issues.push(`${id} has no room clear of the wordmark; shorten its text.`);
+    } else if (spot.overlap > area(height, xRange) * FACE_TOLERANCE) {
+      const share = Math.round(spot.overlap / area(height, xRange) * 100);
+      issues.push(`${id} covers a face: ${share}% of it on average over its time on screen. Shorten its text or time it to a single camera shot.`);
+    }
+    placed.push({ ...timed, y: spot.y, height, xRange });
+    return spot.y;
+  };
+  const hookY = hook ? place("hook", hook, hookHeight(hookLines, 74, 18), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
+  const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, TOP_SLOT_Y + 64, CARD_X)]));
+  const endY = endCard ? place("end card", endCard, hookHeight(brand.endCard, 58, 22), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
+  const cutPoints = [.../* @__PURE__ */ new Set([
+    ...segments.flatMap((segment) => [segment.startSec, segment.endSec]),
+    ...placed.flatMap((block) => [block.startSec, block.endSec])
+  ])].filter((at) => at >= 0 && at <= durationSec).sort((a, b) => a - b);
+  const windows = cutPoints.slice(0, -1).map((startSec, index) => ({ startSec, endSec: cutPoints[index + 1] })).filter((window) => window.endSec - window.startSec > 0.05);
+  const captionY = windows.map((window) => {
+    const mode = segments.find((segment) => window.startSec + 0.01 >= segment.startSec && window.startSec + 0.01 < segment.endSec)?.mode ?? "crop";
+    const blocks = placed.filter((block) => block.startSec < window.endSec && block.endSec > window.startSec).map((block) => ({ x: 0, y: block.y - CAPTION_GAP, w: 1080, h: block.height + CAPTION_GAP * 2 }));
+    const spot = placeY(102, CAPTION_TOP[mode], FULL_WIDTH, samplesDuring(faces, window.startSec, window.endSec), [...blocks, ...fixedBoxes]);
+    if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of the titles and cards; shorten a card or move it.`);
+    else if (spot.overlap > area(102, FULL_WIDTH) * FACE_TOLERANCE) {
+      const share = Math.round(spot.overlap / area(102, FULL_WIDTH) * 100);
+      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face: ${share}% of the caption band on average over that stretch.`);
+    }
+    return spot.y;
+  });
+  const captionTopAt = (atSec) => {
+    const index = windows.findIndex((window) => atSec >= window.startSec && atSec < window.endSec);
+    return captionY[index === -1 ? captionY.length - 1 : index] ?? CAPTION_TOP.crop;
+  };
   const hookHtml = hookLines.map((line, index) => {
     const highlighted = hookLines.length > 1 ? index === hookLines.length - 1 : false;
     return `<div class="hook-line${highlighted ? " hook-hi" : ""}"><span>${escapeHtml(line)}</span></div>`;
@@ -22401,10 +22520,10 @@ function buildOverlay(input) {
   const captionHtml = groups.map((group, index) => {
     const text = group.words.map((word) => word.text).join(" ");
     const words = group.words.map((word) => `<span class="${word.emphasis ? "w em" : "w"}">${escapeHtml(word.text)}</span>`).join(" ");
-    return `<div id="cap-${index}" class="clip cap" data-start="${sec(group.startSec)}" data-duration="${sec(group.endSec - group.startSec)}" data-track-index="4" style="top:${CAPTION_TOP[group.mode]}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
+    return `<div id="cap-${index}" class="clip cap" data-start="${sec(group.startSec)}" data-duration="${sec(group.endSec - group.startSec)}" data-track-index="4" style="top:${captionTopAt(group.startSec + 0.05)}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
   }).join("\n      ");
   const slotHtml = visibleSlots.map(
-    (slot) => `<div id="${slot.id}" class="clip slot" data-start="${sec(slot.startSec)}" data-duration="${sec(slot.endSec - slot.startSec)}" data-track-index="3"><div class="card">${slot.html}</div></div>`
+    (slot) => `<div id="${slot.id}" class="clip slot" data-start="${sec(slot.startSec)}" data-duration="${sec(slot.endSec - slot.startSec)}" data-track-index="3" style="top:${slotY.get(slot.id)}px"><div class="card">${slot.html}</div></div>`
   ).join("\n      ");
   const tweens = [];
   if (hook) {
@@ -22427,7 +22546,7 @@ function buildOverlay(input) {
       `tl.from("#end-card .end-line", { y: 40, opacity: 0, duration: 0.35, ease: "power3.out", stagger: 0.12 }, ${sec(endCard.startSec)});`
     );
   }
-  const endHtml = endCard ? `<div id="end-card" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3"><div class="end-inner">` + brand.endCard.map((line, index) => `<div class="end-line${index === 0 ? " hook-hi" : ""}"><span>${escapeHtml(line)}</span></div>`).join("") + "</div></div>" : "";
+  const endHtml = endCard ? `<div id="end-card" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3" style="top:${endY}px"><div class="end-inner">` + brand.endCard.map((line, index) => `<div class="end-line${index === 0 ? " hook-hi" : ""}"><span>${escapeHtml(line)}</span></div>`).join("") + "</div></div>" : "";
   const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -22447,14 +22566,14 @@ function buildOverlay(input) {
       .wm-big { font-size: 30px; letter-spacing: .5px; }
       .wm-rule { width: 4px; height: 52px; background: var(--accent); }
       .wm-tag { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 30px; }
-      #hook { position: absolute; left: 0; right: 0; top: ${TOP_SLOT_Y + 70}px; }
+      #hook { position: absolute; left: 0; right: 0; }
       .hook-inner, .end-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
       .hook-line, .end-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
         color: #fff; text-transform: uppercase; text-align: center; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
       .hook-hi span { background: var(--accent); padding: 4px 22px 8px; text-shadow: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-      #end-card { position: absolute; left: 0; right: 0; top: ${TOP_SLOT_Y + 70}px; }
+      #end-card { position: absolute; left: 0; right: 0; }
       .end-line { font-size: 58px; }
-      .slot { position: absolute; left: 48px; top: ${TOP_SLOT_Y + 64}px; width: 760px; }
+      .slot { position: absolute; left: 48px; width: 760px; }
       .card { background: rgba(15,16,22,.80); border-radius: 18px; padding: 26px 32px 28px; border-left: 8px solid var(--label); }
       .card-label { font-family: "Oswald", sans-serif; font-weight: 600; font-size: 26px; letter-spacing: 1.5px; color: var(--label); text-transform: uppercase; }
       .card-title { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 50px; line-height: 1.1; color: #fff; margin-top: 6px; }
@@ -22471,7 +22590,7 @@ function buildOverlay(input) {
       <video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>
       <div id="scrim" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="1"></div>
       ${wordmark}
-      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3"><div class="hook-inner">${hookHtml}</div></div>` : ""}
+      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px"><div class="hook-inner">${hookHtml}</div></div>` : ""}
       ${slotHtml}
       ${endHtml}
       ${captionHtml}
@@ -22485,6 +22604,107 @@ function buildOverlay(input) {
 </html>
 `;
   return { html, issues };
+}
+
+// src/shorts/faces.ts
+import { mkdtemp, readdir, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as join5 } from "node:path";
+
+// src/shorts/ytdlp.ts
+import { spawn as spawn2 } from "node:child_process";
+import { join as join4 } from "node:path";
+var NODE_RUNTIME_MIN_MAJOR = 22;
+var FETCH_TIMEOUT_MS = 90 * 6e4;
+function ytDlpArgs(options) {
+  const h = options.maxHeight;
+  return [
+    "--no-playlist",
+    "--no-progress",
+    "-f",
+    `bv*[height<=${h}][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=${h}]+ba/b[height<=${h}]`,
+    "--merge-output-format",
+    "mp4",
+    "--ffmpeg-location",
+    options.ffmpeg,
+    ...options.nodeMajor >= NODE_RUNTIME_MIN_MAJOR ? ["--js-runtimes", "node"] : [],
+    ...options.proxy ? ["--proxy", options.proxy] : [],
+    "--print",
+    "after_move:filepath",
+    "-o",
+    join4(options.directory, `${options.videoId}-%(height)sp.%(ext)s`),
+    `https://www.youtube.com/watch?v=${options.videoId}`
+  ];
+}
+function runCommand(command, args, timeoutMs = FETCH_TIMEOUT_MS) {
+  return new Promise((resolve4, reject) => {
+    const child = spawn2(command, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout = (stdout + chunk.toString("utf8")).slice(-1e5);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-1e5);
+    });
+    child.once("error", reject);
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 1e3).unref();
+    }, timeoutMs);
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve4({ code, stdout, stderr });
+    });
+  });
+}
+
+// src/shorts/faces.ts
+var SAMPLE_FPS = 2;
+var FRAME_W = 1080;
+var FRAME_H = 1920;
+var VISION_SCRIPT = `ObjC.import('Vision');
+function run(argv) {
+  const out = [];
+  for (const path of argv) {
+    const handler = $.VNImageRequestHandler.alloc.initWithURLOptions($.NSURL.fileURLWithPath(path), $({}));
+    const request = $.VNDetectFaceRectanglesRequest.alloc.init;
+    handler.performRequestsError($([request]), Ref());
+    const faces = [];
+    const results = request.results;
+    for (let i = 0; i < results.count; i++) {
+      const box = results.objectAtIndex(i).boundingBox;
+      faces.push({ x: box.origin.x, y: 1 - box.origin.y - box.size.height, w: box.size.width, h: box.size.height });
+    }
+    out.push({ path, faces });
+  }
+  return JSON.stringify(out);
+}`;
+function padFace(box) {
+  return { x: box.x - box.w * 0.04, y: box.y - box.h * 0.1, w: box.w * 1.08, h: box.h * 1.14 };
+}
+async function detectFaces(ffmpeg, video, platform = process.platform) {
+  if (platform !== "darwin") return void 0;
+  const work = await mkdtemp(join5(tmpdir(), "shorts-faces-"));
+  try {
+    const frames = await runFfmpeg(ffmpeg, ["-i", video, "-vf", `fps=${SAMPLE_FPS},scale=540:-2`, "-q:v", "4", join5(work, "f%05d.jpg")]);
+    if (frames.code !== 0) return void 0;
+    const files = (await readdir(work)).filter((name) => name.endsWith(".jpg")).sort();
+    if (!files.length) return void 0;
+    const script = join5(work, "faces.js");
+    await writeFile3(script, VISION_SCRIPT);
+    const result = await runCommand("/usr/bin/osascript", ["-l", "JavaScript", script, ...files.map((name) => join5(work, name))], 5 * 6e4);
+    if (result.code !== 0) return void 0;
+    const parsed = JSON.parse(result.stdout.trim());
+    return parsed.map((entry, index) => ({
+      atSec: index / SAMPLE_FPS,
+      boxes: entry.faces.map((face) => padFace({ x: face.x * FRAME_W, y: face.y * FRAME_H, w: face.w * FRAME_W, h: face.h * FRAME_H }))
+    }));
+  } catch {
+    return void 0;
+  } finally {
+    await rm3(work, { recursive: true, force: true });
+  }
 }
 
 // src/watch/diagnostics.ts
@@ -23083,54 +23303,6 @@ async function openYouTubeSource(ffmpeg, videoId, requestFetch) {
   throw new MediaError(`Could not open a YouTube stream with audio for ${videoId}.${detail}`);
 }
 
-// src/shorts/ytdlp.ts
-import { spawn as spawn2 } from "node:child_process";
-import { join as join4 } from "node:path";
-var NODE_RUNTIME_MIN_MAJOR = 22;
-var FETCH_TIMEOUT_MS = 90 * 6e4;
-function ytDlpArgs(options) {
-  const h = options.maxHeight;
-  return [
-    "--no-playlist",
-    "--no-progress",
-    "-f",
-    `bv*[height<=${h}][vcodec^=avc1]+ba[acodec^=mp4a]/bv*[height<=${h}]+ba/b[height<=${h}]`,
-    "--merge-output-format",
-    "mp4",
-    "--ffmpeg-location",
-    options.ffmpeg,
-    ...options.nodeMajor >= NODE_RUNTIME_MIN_MAJOR ? ["--js-runtimes", "node"] : [],
-    ...options.proxy ? ["--proxy", options.proxy] : [],
-    "--print",
-    "after_move:filepath",
-    "-o",
-    join4(options.directory, `${options.videoId}-%(height)sp.%(ext)s`),
-    `https://www.youtube.com/watch?v=${options.videoId}`
-  ];
-}
-function runCommand(command, args, timeoutMs = FETCH_TIMEOUT_MS) {
-  return new Promise((resolve4, reject) => {
-    const child = spawn2(command, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout = (stdout + chunk.toString("utf8")).slice(-1e5);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = (stderr + chunk.toString("utf8")).slice(-1e5);
-    });
-    child.once("error", reject);
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1e3).unref();
-    }, timeoutMs);
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve4({ code, stdout, stderr });
-    });
-  });
-}
-
 // src/shorts/transcribe.ts
 var SEGMENT_WORDS = 12;
 function whisperToTranscript(videoId, words, model, language = "en") {
@@ -23227,7 +23399,8 @@ Commands:
           model through HyperFrames on first use
   overlay Write a HyperFrames project per rendered short under <project>/overlay/<id>
           with the channel's wordmark, hook, name tag, context cards, captions,
-          and end card from edl.json; render it with HyperFrames
+          and end card from edl.json, each placed clear of the faces detected
+          in the short (macOS Vision); render it with HyperFrames
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -23309,9 +23482,9 @@ async function readJson(path, what) {
   }
 }
 async function loadProject(project) {
-  const transcript = await readJson(join5(project, "words.json"), "words.json (run read first)");
-  const edl = parseEdl(await readJson(join5(project, "edl.json"), "edl.json"));
-  const video = await readJson(join5(project, "video.json"), "video.json (run read first)");
+  const transcript = await readJson(join6(project, "words.json"), "words.json (run read first)");
+  const edl = parseEdl(await readJson(join6(project, "edl.json"), "edl.json"));
+  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
   if (edl.videoId !== video.videoId) {
     throw new ShortsInputError(`edl.json videoId ${edl.videoId} does not match video.json ${String(video.videoId)}.`);
   }
@@ -23382,10 +23555,10 @@ async function writeTranscript(project, video, transcript) {
   const words = flattenWords(transcript.segments);
   const chapters = parseChapters(video.description);
   await Promise.all([
-    writeFile3(join5(project, "video.json"), `${JSON.stringify({ ...video, track: transcript.track }, null, 2)}
+    writeFile4(join6(project, "video.json"), `${JSON.stringify({ ...video, track: transcript.track }, null, 2)}
 `),
-    writeFile3(join5(project, "words.json"), JSON.stringify(transcript)),
-    writeFile3(join5(project, "transcript.md"), renderTranscript(words, {
+    writeFile4(join6(project, "words.json"), JSON.stringify(transcript)),
+    writeFile4(join6(project, "transcript.md"), renderTranscript(words, {
       title: video.title,
       videoId: video.videoId,
       durationSeconds: video.durationSeconds,
@@ -23414,17 +23587,17 @@ async function commandRead(flags, environment, dependencies) {
     };
     await mkdir4(project, { recursive: true });
     const files = {
-      transcript: join5(project, "transcript.md"),
-      words: join5(project, "words.json"),
-      video: join5(project, "video.json"),
-      edl: join5(project, "edl.json")
+      transcript: join6(project, "transcript.md"),
+      words: join6(project, "words.json"),
+      video: join6(project, "video.json"),
+      edl: join6(project, "edl.json")
     };
     let transcript;
     try {
       transcript = await (dependencies.getTranscript ?? getTranscript)({ videoId, lang, granularity: "word", fetch: fetchResource.fetch });
     } catch (error) {
       if (!(error instanceof YouTubeClientError) || !NO_CAPTIONS.has(error.code)) throw error;
-      await writeFile3(files.video, `${JSON.stringify({ ...video, track: null }, null, 2)}
+      await writeFile4(files.video, `${JSON.stringify({ ...video, track: null }, null, 2)}
 `);
       return {
         project,
@@ -23452,7 +23625,7 @@ async function commandRead(flags, environment, dependencies) {
 }
 async function resolveWhisper(flags, environment, model) {
   const command = (typeof flags["whisper-path"] === "string" ? flags["whisper-path"] : void 0) ?? environment.WHISPER_CLI_PATH ?? "whisper-cli";
-  const modelPath = resolve3((typeof flags["whisper-model"] === "string" ? flags["whisper-model"] : void 0) ?? join5(environment.HOME ?? homedir(), ".cache", "hyperframes", "whisper", "models", `ggml-${model}.bin`));
+  const modelPath = resolve3((typeof flags["whisper-model"] === "string" ? flags["whisper-model"] : void 0) ?? join6(environment.HOME ?? homedir(), ".cache", "hyperframes", "whisper", "models", `ggml-${model}.bin`));
   const find = async () => ({
     cli: await resolveFfmpegExecutable(command, environment).catch(() => void 0),
     model: (await stat2(modelPath).catch(() => void 0))?.isFile() ?? false
@@ -23461,14 +23634,14 @@ async function resolveWhisper(flags, environment, model) {
   if (!found.cli || !found.model) {
     const npx = await resolveFfmpegExecutable("npx", environment).catch(() => void 0);
     if (npx) {
-      const work = await mkdtemp(join5(tmpdir(), "shorts-whisper-setup-"));
+      const work = await mkdtemp2(join6(tmpdir2(), "shorts-whisper-setup-"));
       try {
         const ffmpeg = await resolveFfmpeg(flags, environment);
-        const silence = join5(work, "silence.wav");
+        const silence = join6(work, "silence.wav");
         await runCommand(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "1", silence]);
         await runCommand(npx, ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "transcribe", silence, "--engine", "whisper", "--model", model, "--json", "-d", work]);
       } finally {
-        await rm3(work, { recursive: true, force: true });
+        await rm4(work, { recursive: true, force: true });
       }
       found = await find();
     }
@@ -23479,15 +23652,15 @@ async function resolveWhisper(flags, environment, model) {
 }
 async function commandTranscribe(flags, environment) {
   const project = resolve3(required(flags, "project"));
-  const video = await readJson(join5(project, "video.json"), "video.json (run read first)");
+  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
   const model = typeof flags.model === "string" ? flags.model : "small.en";
   const language = typeof flags.language === "string" ? flags.language : "en";
   if (!/^[a-z0-9.-]+$/i.test(model) || !/^[a-z]{2,3}$/i.test(language)) throw new ShortsInputError("--model or --language has an unexpected value.");
   const whisper = await resolveWhisper(flags, environment, model);
   const media = await prepareMedia(flags, environment, video);
-  const work = await mkdtemp(join5(tmpdir(), "shorts-whisper-"));
+  const work = await mkdtemp2(join6(tmpdir2(), "shorts-whisper-"));
   try {
-    const wav = join5(work, "speech-16k.wav");
+    const wav = join6(work, "speech-16k.wav");
     await extractSpeechAudio(media.ffmpeg, media.master, wav);
     const result = await runCommand(whisper.cli, [
       "-m",
@@ -23501,7 +23674,7 @@ async function commandTranscribe(flags, environment) {
       "-nfa",
       "-ojf",
       "-of",
-      join5(work, "whisper"),
+      join6(work, "whisper"),
       "-np",
       "-t",
       String(Math.max(1, Math.min(8, cpus().length)))
@@ -23510,18 +23683,18 @@ async function commandTranscribe(flags, environment) {
       const detail = result.stderr.trim().split("\n").slice(-3).join(" ");
       throw new MediaError(`Whisper transcription failed: ${detail}`, result.stderr);
     }
-    const words = parseWhisperCliJson(await readJson(join5(work, "whisper.json"), "whisper-cli output"));
+    const words = parseWhisperCliJson(await readJson(join6(work, "whisper.json"), "whisper-cli output"));
     if (!words.length) throw new MediaError("Whisper found no speech in the source.");
     const count = await writeTranscript(project, video, whisperToTranscript(video.videoId, words, model, language));
     return {
       project,
       captions: `whisper:${model}`,
       words: count,
-      files: { transcript: join5(project, "transcript.md"), words: join5(project, "words.json") },
+      files: { transcript: join6(project, "transcript.md"), words: join6(project, "words.json") },
       warnings: [...media.warnings, "Whisper mishears names too: build the glossary as with YouTube captions. There are no speaker-change marks (>>)."]
     };
   } finally {
-    await rm3(work, { recursive: true, force: true });
+    await rm4(work, { recursive: true, force: true });
     await media.close();
   }
 }
@@ -23541,11 +23714,11 @@ async function commandPlan(flags) {
     });
     spec.durationSec = Math.round(short.durationMs / 100) / 10;
   }
-  await writeFile3(join5(project, "edl.json"), `${JSON.stringify(edl, null, 2)}
+  await writeFile4(join6(project, "edl.json"), `${JSON.stringify(edl, null, 2)}
 `);
   return {
     ok: errorsOf(issues).length === 0,
-    edl: join5(project, "edl.json"),
+    edl: join6(project, "edl.json"),
     shorts: shorts.map((short) => ({
       id: short.spec.id,
       durationSec: Math.round(short.durationMs / 100) / 10,
@@ -23571,8 +23744,8 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
   const { master, ffmpeg, masterInfo, warnings } = media;
   const output = [];
   for (const short of shorts) {
-    const directory = join5(project, "shots", short.spec.id);
-    await rm3(directory, { recursive: true, force: true });
+    const directory = join6(project, "shots", short.spec.id);
+    await rm4(directory, { recursive: true, force: true });
     const shots = [];
     for (const [cutIndex, cut] of short.cuts.entries()) {
       const changes = await detectShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
@@ -23580,12 +23753,12 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
       for (const [index, startMs] of starts.entries()) {
         const endMs = starts[index + 1] ?? cut.outMs;
         const n = shots.length + 1;
-        const thumb = join5(directory, `${String(n).padStart(2, "0")}.jpg`);
+        const thumb = join6(directory, `${String(n).padStart(2, "0")}.jpg`);
         await extractThumbnail(ffmpeg, master, Math.round((startMs + endMs) / 2), thumb);
         shots.push({ n, atMs: startMs, at: formatTime(startMs), durationSec: Math.round((endMs - startMs) / 100) / 10, cut: cutIndex, thumb });
       }
     }
-    const sheet = join5(project, "shots", `${short.spec.id}.jpg`);
+    const sheet = join6(project, "shots", `${short.spec.id}.jpg`);
     await tileImages(ffmpeg, shots.map((shot) => shot.thumb), sheet, 4);
     output.push({ id: short.spec.id, sheet, sheetOrder: "left to right, top to bottom, matching n", shots });
   }
@@ -23610,13 +23783,13 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
   if (!capabilities.canBurnCaptions) {
     warnings.push("This FFmpeg build has no subtitles filter (libass), so captions are written as .srt and .ass sidecars only.");
   }
-  const directory = join5(project, "render");
+  const directory = join6(project, "render");
   await mkdir4(directory, { recursive: true });
   const output = [];
   for (let short of shorts) {
     const id = short.spec.id;
-    const parts = join5(directory, `${id}.parts`);
-    await rm3(parts, { recursive: true, force: true });
+    const parts = join6(directory, `${id}.parts`);
+    await rm4(parts, { recursive: true, force: true });
     await mkdir4(parts, { recursive: true });
     const snapped = [];
     for (const [index, cut] of short.cuts.entries()) {
@@ -23636,29 +23809,29 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
     const files = [];
     try {
       for (const [index, segment] of segments.entries()) {
-        const file = join5(parts, `${String(index).padStart(3, "0")}.mp4`);
+        const file = join6(parts, `${String(index).padStart(3, "0")}.mp4`);
         await renderSegment(ffmpeg, master, masterInfo, segment, capabilities, file);
         files.push(file);
       }
-      const videoPath = join5(directory, `${id}.mp4`);
+      const videoPath = join6(directory, `${id}.mp4`);
       await assembleShort(ffmpeg, master, files, short.cuts, videoPath, masterInfo.hasAudio);
       const cues = buildCues(captionWords(words, short, edl.glossary));
-      const srt = join5(directory, `${id}.srt`);
-      const ass = join5(directory, `${id}.ass`);
-      await writeFile3(srt, toSrt(cues));
-      await writeFile3(join5(directory, `${id}.cuts.json`), `${JSON.stringify({ id, cuts: short.cuts }, null, 2)}
+      const srt = join6(directory, `${id}.srt`);
+      const ass = join6(directory, `${id}.ass`);
+      await writeFile4(srt, toSrt(cues));
+      await writeFile4(join6(directory, `${id}.cuts.json`), `${JSON.stringify({ id, cuts: short.cuts }, null, 2)}
 `);
-      await writeFile3(ass, toAss(cues, short.spec.hook));
+      await writeFile4(ass, toAss(cues, short.spec.hook));
       let captioned;
       if (capabilities.canBurnCaptions) {
-        captioned = join5(directory, `${id}-captioned.mp4`);
+        captioned = join6(directory, `${id}-captioned.mp4`);
         await burnCaptions(ffmpeg, videoPath, ass, captioned, capabilities);
       }
       const rendered = await probeMaster(ffmpeg, captioned ?? videoPath);
       if (Math.abs(rendered.durationSec * 1e3 - short.durationMs) > 300) {
         warnings.push(`${id} rendered at ${rendered.durationSec.toFixed(2)}s, expected ${(short.durationMs / 1e3).toFixed(2)}s.`);
       }
-      const preview = join5(directory, `${id}-preview.jpg`);
+      const preview = join6(directory, `${id}-preview.jpg`);
       await previewSheet(ffmpeg, captioned ?? videoPath, short.durationMs, preview);
       output.push({
         id,
@@ -23672,14 +23845,14 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
         segments: segments.map((segment) => ({ in: formatTime(segment.inMs), out: formatTime(segment.outMs), mode: segment.layout.mode }))
       });
     } finally {
-      await rm3(parts, { recursive: true, force: true });
+      await rm4(parts, { recursive: true, force: true });
     }
   }
   return { encoder: capabilities.encoder, captionsBurned: capabilities.canBurnCaptions, shorts: output, warnings, issues };
 }
 async function commandFetch(flags, environment) {
   const project = resolve3(required(flags, "project"));
-  const video = await readJson(join5(project, "video.json"), "video.json (run read first)");
+  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
   const videoId = String(video.videoId);
   const maxHeight = typeof flags["max-height"] === "string" ? Number(flags["max-height"]) : 1080;
   if (!Number.isSafeInteger(maxHeight) || maxHeight < 144 || maxHeight > 4320) {
@@ -23693,7 +23866,7 @@ async function commandFetch(flags, environment) {
   } catch {
     throw new DependencyError("yt-dlp is not installed. Install it yourself (https://github.com/yt-dlp/yt-dlp#installation), set YT_DLP_PATH, or pass --yt-dlp-path. Otherwise use the master file with --master.");
   }
-  const directory = join5(project, "source");
+  const directory = join6(project, "source");
   await mkdir4(directory, { recursive: true });
   const proxy = (typeof flags.proxy === "string" ? flags.proxy : void 0) ?? environment.OUTBOUND_PROXY_URL;
   const nodeMajor = Number(process.versions.node.split(".")[0]);
@@ -23721,21 +23894,26 @@ async function commandOverlay(flags, environment) {
   const output = [];
   for (const short of shorts) {
     const id = short.spec.id;
-    const video = join5(project, "render", `${id}.mp4`);
+    const video = join6(project, "render", `${id}.mp4`);
     if (!(await stat2(video).catch(() => void 0))?.isFile()) {
       throw new ShortsInputError(`${video} not found. Run render for ${id} first.`);
     }
     const info = await probeMaster(ffmpeg, video);
-    const manifest = await readJson(join5(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+    const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
     if (!Array.isArray(manifest.cuts) || manifest.cuts.length !== short.cuts.length) {
       throw new ShortsInputError(`${id}.cuts.json does not match edl.json; rerun render for ${id}.`);
     }
     const rendered = { ...short, cuts: manifest.cuts };
-    const directory = join5(project, "overlay", id);
-    await mkdir4(join5(directory, "assets"), { recursive: true });
-    await copyFile2(video, join5(directory, "assets", `${id}.mp4`));
+    const directory = join6(project, "overlay", id);
+    await mkdir4(join6(directory, "assets"), { recursive: true });
+    await copyFile2(video, join6(directory, "assets", `${id}.mp4`));
+    const faces = await detectFaces(ffmpeg, video);
+    if (faces) await writeFile4(join6(directory, "faces.json"), `${JSON.stringify(faces)}
+`);
+    else issues.push({ short: id, level: "warning", message: "Face detection needs macOS (Vision); placing overlays around typical face areas for each framing. Check snapshots closely." });
     const plan = buildOverlay({
       id,
+      faces,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),
@@ -23746,18 +23924,18 @@ async function commandOverlay(flags, environment) {
       overlay: short.spec.overlay ?? {}
     });
     await Promise.all([
-      writeFile3(join5(directory, "index.html"), plan.html),
-      writeFile3(join5(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" }, media: { autoProxy: true } }, null, 2)}
+      writeFile4(join6(directory, "index.html"), plan.html),
+      writeFile4(join6(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" }, media: { autoProxy: true } }, null, 2)}
 `),
-      writeFile3(join5(directory, "meta.json"), `${JSON.stringify({ id: `${edl.videoId}-${id}`, name: short.spec.title ?? id }, null, 2)}
+      writeFile4(join6(directory, "meta.json"), `${JSON.stringify({ id: `${edl.videoId}-${id}`, name: short.spec.title ?? id }, null, 2)}
 `)
     ]);
     for (const message of plan.issues) issues.push({ short: id, level: "warning", message });
     output.push({
       id,
       project: directory,
-      output: join5(project, "render", `${id}-overlay.mp4`),
-      render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join5(project, "render", `${id}-overlay.mp4`)}`
+      output: join6(project, "render", `${id}-overlay.mp4`),
+      render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join6(project, "render", `${id}-overlay.mp4`)}`
     });
   }
   return { shorts: output, issues };

@@ -1,5 +1,6 @@
 import { normalizeToken, phraseTokens } from './transcript';
 import type { CaptionWord, LayoutMode, RenderSegment, ResolvedShort } from './edl';
+import type { Box, FaceSample } from './faces';
 
 /** Channel look shared by every short. Colours are CSS colours. */
 export interface Brand {
@@ -150,6 +151,106 @@ function captionSize(text: string): number {
   return Math.max(48, Math.min(78, Math.floor(900 / (Math.max(text.length, 1) * 0.6))));
 }
 
+/** Text stays between the top status bar and YouTube's caption, handle, and button area. */
+const TEXT_TOP = 180;
+const TEXT_BOTTOM = 1560;
+const FULL_WIDTH: [number, number] = [60, 1020];
+const CARD_X: [number, number] = [48, 808];
+/** The wordmark's corner (top right), kept clear like a face. */
+const WORDMARK_BOX: Box = { x: 730, y: 170, w: 320, h: 92 };
+
+/** Typical face areas for each framing, used when face detection is unavailable. */
+export function typicalFaces(segments: TimelineSegment[]): FaceSample[] {
+  const zones: Record<LayoutMode, Box[]> = {
+    crop: [{ x: 120, y: 380, w: 840, h: 980 }],
+    stack: [{ x: 200, y: 120, w: 680, h: 700 }, { x: 200, y: 1080, w: 680, h: 700 }],
+    fit: [{ x: 200, y: 700, w: 680, h: 520 }],
+  };
+  const samples: FaceSample[] = [];
+  for (const segment of segments) {
+    for (let atSec = segment.startSec; atSec < segment.endSec; atSec += 0.5) samples.push({ atSec, boxes: zones[segment.mode] });
+  }
+  return samples;
+}
+
+function samplesDuring(samples: FaceSample[], startSec: number, endSec: number): Box[][] {
+  const during = samples.filter((sample) => sample.atSec >= startSec - 0.25 && sample.atSec <= endSec + 0.25).map((sample) => sample.boxes);
+  return during.length ? during : [[]];
+}
+
+function overlapArea(y: number, height: number, [x0, x1]: [number, number], boxes: Box[]): number {
+  return boxes.reduce((total, box) => {
+    const w = Math.max(0, Math.min(x1, box.x + box.w) - Math.max(x0, box.x));
+    const h = Math.max(0, Math.min(y + height, box.y + box.h) - Math.max(y, box.y));
+    return total + w * h;
+  }, 0);
+}
+
+/**
+ * The top edge nearest `preferred` where a block of `height` covers no face. Faces are given per
+ * sample over the block's time on screen and scored by average overlap, so a brief head movement
+ * does not rule out a spot. When every position covers a face, the one covering the least.
+ */
+export function placeY(
+  height: number,
+  preferred: number,
+  xRange: [number, number],
+  samples: Box[][],
+  fixed: Box[] = [],
+  bands: Array<[number, number]> = [[TEXT_TOP, TEXT_BOTTOM]],
+): { y: number; overlap: number } {
+  const frames = samples.length ? samples : [[]];
+  let best = { y: preferred, overlap: Number.POSITIVE_INFINITY, distance: Number.POSITIVE_INFINITY };
+  const tops = bands.flatMap(([top, bottom]) => {
+    const list: number[] = [];
+    for (let y = Math.max(TEXT_TOP, top); y + height <= Math.min(TEXT_BOTTOM, bottom); y += 8) list.push(y);
+    return list;
+  });
+  for (const y of tops.length ? tops : [Math.max(TEXT_TOP, Math.min(preferred, TEXT_BOTTOM - height))]) {
+    // Fixed boxes (the wordmark, other titles and cards) are hard limits; faces are scored.
+    const blocked = overlapArea(y, height, xRange, fixed) > 0 ? HARD_PENALTY : 0;
+    const overlap = blocked + frames.reduce((total, boxes) => total + overlapArea(y, height, xRange, boxes), 0) / frames.length;
+    const distance = Math.abs(y - preferred);
+    if (overlap < best.overlap || (overlap === best.overlap && distance < best.distance)) best = { y, overlap, distance };
+  }
+  return { y: best.y, overlap: best.overlap };
+}
+
+/** Added for any position touching a fixed box, so those are used only when nothing else exists. */
+const HARD_PENALTY = 1e12;
+
+/** Space kept between captions and any title or card on screen with them. */
+const CAPTION_GAP = 60;
+/** Titles and cards stay in the top band or the lower third, so their spot is predictable. */
+const BLOCK_BANDS: Array<[number, number]> = [[TEXT_TOP, 620], [1150, TEXT_BOTTOM]];
+
+/** Over split screens both bands hold a face, so the seam between the two people is allowed too. */
+function bandsFor(segments: TimelineSegment[], startSec: number, endSec: number): Array<[number, number]> {
+  let stack = 0;
+  let other = 0;
+  for (const segment of segments) {
+    const shared = Math.max(0, Math.min(endSec, segment.endSec) - Math.max(startSec, segment.startSec));
+    if (segment.mode === 'stack') stack += shared;
+    else other += shared;
+  }
+  return stack > other ? [[TEXT_TOP, TEXT_BOTTOM]] : BLOCK_BANDS;
+}
+
+/** Average share of a block allowed over a face before it is reported. */
+const FACE_TOLERANCE = 0.12;
+/** How far a card may move from its requested time to fit within one camera shot. */
+const CARD_NUDGE_SEC = [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2];
+
+const lineCount = (text: string, perLine: number) => Math.max(1, Math.ceil(text.length / perLine));
+
+function hookHeight(lines: string[], fontSize: number, perLine: number): number {
+  return lines.reduce((total, line) => total + lineCount(line, perLine) * fontSize * 1.06, 0) + 10 * Math.max(0, lines.length - 1) + 16;
+}
+
+function cardHeight(title: string, body?: string, source?: string): number {
+  return 54 + 32 + 6 + lineCount(title, 26) * 55 + (body ? 10 + lineCount(body, 42) * 40 : 0) + (source ? 12 + 27 : 0);
+}
+
 export interface OverlayInput {
   id: string;
   short: ResolvedShort;
@@ -160,6 +261,8 @@ export interface OverlayInput {
   brand: Brand;
   speakers: Record<string, Speaker>;
   overlay: ShortOverlay;
+  /** Faces in the rendered short; typical zones per framing are used when absent. */
+  faces?: FaceSample[];
 }
 
 export interface OverlayPlan {
@@ -180,7 +283,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   // Top-slot items run one at a time: hook, then name tag and cards in time order, then the end card.
   const hookText = input.short.spec.hook?.trim();
   const hook: Timed | undefined = hookText ? { startSec: 0.1, endSec: Math.min(HOOK_SEC, durationSec - END_CARD_SEC - 0.2) } : undefined;
-  const slots: Array<Timed & { kind: 'name' | 'card'; html: string; id: string }> = [];
+  const slots: Array<Timed & { kind: 'name' | 'card'; html: string; id: string; height: number }> = [];
 
   if (overlay.nameTag) {
     const speaker = input.speakers[overlay.nameTag.speaker];
@@ -191,6 +294,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       slots.push({
         kind: 'name', id: 'name-tag', startSec,
         endSec: clampEnd(startSec, overlay.nameTag.durationSec ?? NAME_TAG_SEC),
+        height: cardHeight(speaker.name, speaker.role),
         html: `<div class="card-label">${escapeHtml(speaker.label ?? 'Guest')}</div>` +
           `<div class="card-title">${escapeHtml(speaker.name)}</div>` +
           (speaker.role ? `<div class="card-body">${escapeHtml(speaker.role)}</div>` : ''),
@@ -208,12 +312,29 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
     slots.push({
       kind: 'card', id: `card-${index + 1}`, startSec,
       endSec: clampEnd(startSec, card.durationSec ?? CARD_SEC),
+      height: cardHeight(card.title, card.body, card.source),
       html: `<div class="card-label">${escapeHtml(card.label)}</div>` +
         `<div class="card-title">${escapeHtml(card.title)}</div>` +
         (card.body ? `<div class="card-body">${escapeHtml(card.body)}</div>` : '') +
         (card.source ? `<div class="card-source">Source: ${escapeHtml(card.source)}</div>` : ''),
     });
   });
+  // Nudge each card or name tag (up to 2 s) toward a moment where it fits clear of faces,
+  // usually by keeping it inside one camera shot.
+  const faceSamples = input.faces ?? typicalFaces(segments);
+  const fixedBoxes: Box[] = brand.wordmark?.length ? [WORDMARK_BOX] : [];
+  for (const slot of slots) {
+    const length = slot.endSec - slot.startSec;
+    let best = { shift: 0, overlap: Number.POSITIVE_INFINITY };
+    for (const shift of CARD_NUDGE_SEC) {
+      const startSec = slot.startSec + shift;
+      if (startSec < 0 || startSec + length > durationSec - END_CARD_SEC - 0.1) continue;
+      const { overlap } = placeY(slot.height, TOP_SLOT_Y + 64, CARD_X, samplesDuring(faceSamples, startSec, startSec + length), fixedBoxes, bandsFor(segments, startSec, startSec + length));
+      if (overlap < best.overlap - 1) best = { shift, overlap };
+    }
+    slot.startSec += best.shift;
+    slot.endSec += best.shift;
+  }
   slots.sort((left, right) => left.startSec - right.startSec);
   let freeAt = hook ? hook.endSec + 0.15 : 0;
   for (const slot of slots) {
@@ -233,6 +354,51 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   const endCard = brand.endCard?.length ? { startSec: durationSec - END_CARD_SEC, endSec: durationSec } : undefined;
 
   const hookLines = (hookText ?? '').split('|').map((line) => line.trim()).filter(Boolean);
+
+  // Place every block clear of the faces on screen while it shows; captions also clear the blocks.
+  const faces = faceSamples;
+  const placed: Array<Timed & { y: number; height: number; xRange: [number, number] }> = [];
+  const area = (height: number, [x0, x1]: [number, number]) => height * (x1 - x0);
+  const place = (id: string, timed: Timed, height: number, preferred: number, xRange: [number, number]) => {
+    const spot = placeY(height, preferred, xRange, samplesDuring(faces, timed.startSec, timed.endSec), fixedBoxes, bandsFor(segments, timed.startSec, timed.endSec));
+    if (spot.overlap >= HARD_PENALTY) {
+      issues.push(`${id} has no room clear of the wordmark; shorten its text.`);
+    } else if (spot.overlap > area(height, xRange) * FACE_TOLERANCE) {
+      const share = Math.round((spot.overlap / area(height, xRange)) * 100);
+      issues.push(`${id} covers a face: ${share}% of it on average over its time on screen. Shorten its text or time it to a single camera shot.`);
+    }
+    placed.push({ ...timed, y: spot.y, height, xRange });
+    return spot.y;
+  };
+  const hookY = hook ? place('hook', hook, hookHeight(hookLines, 74, 18), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
+  const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, TOP_SLOT_Y + 64, CARD_X)]));
+  const endY = endCard ? place('end card', endCard, hookHeight(brand.endCard!, 58, 22), TOP_SLOT_Y + 70, FULL_WIDTH) : 0;
+  // One caption position per stretch of unchanging screen: a camera shot, split wherever a title
+  // or card appears or leaves, so captions move only when something else on screen does.
+  const cutPoints = [...new Set([
+    ...segments.flatMap((segment) => [segment.startSec, segment.endSec]),
+    ...placed.flatMap((block) => [block.startSec, block.endSec]),
+  ])].filter((at) => at >= 0 && at <= durationSec).sort((a, b) => a - b);
+  const windows = cutPoints.slice(0, -1).map((startSec, index) => ({ startSec, endSec: cutPoints[index + 1]! }))
+    .filter((window) => window.endSec - window.startSec > 0.05);
+  const captionY = windows.map((window) => {
+    const mode = segments.find((segment) => window.startSec + 0.01 >= segment.startSec && window.startSec + 0.01 < segment.endSec)?.mode ?? 'crop';
+    const blocks: Box[] = placed
+      .filter((block) => block.startSec < window.endSec && block.endSec > window.startSec)
+      // Keep a clear gap so captions never read as part of a title or card.
+      .map((block) => ({ x: 0, y: block.y - CAPTION_GAP, w: 1080, h: block.height + CAPTION_GAP * 2 }));
+    const spot = placeY(102, CAPTION_TOP[mode], FULL_WIDTH, samplesDuring(faces, window.startSec, window.endSec), [...blocks, ...fixedBoxes]);
+    if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of the titles and cards; shorten a card or move it.`);
+    else if (spot.overlap > area(102, FULL_WIDTH) * FACE_TOLERANCE) {
+      const share = Math.round((spot.overlap / area(102, FULL_WIDTH)) * 100);
+      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face: ${share}% of the caption band on average over that stretch.`);
+    }
+    return spot.y;
+  });
+  const captionTopAt = (atSec: number) => {
+    const index = windows.findIndex((window) => atSec >= window.startSec && atSec < window.endSec);
+    return captionY[index === -1 ? captionY.length - 1 : index] ?? CAPTION_TOP.crop;
+  };
   const hookHtml = hookLines.map((line, index) => {
     const highlighted = hookLines.length > 1 ? index === hookLines.length - 1 : false;
     return `<div class="hook-line${highlighted ? ' hook-hi' : ''}"><span>${escapeHtml(line)}</span></div>`;
@@ -249,11 +415,11 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
     const text = group.words.map((word) => word.text).join(' ');
     const words = group.words.map((word) => `<span class="${word.emphasis ? 'w em' : 'w'}">${escapeHtml(word.text)}</span>`).join(' ');
     return `<div id="cap-${index}" class="clip cap" data-start="${sec(group.startSec)}" data-duration="${sec(group.endSec - group.startSec)}" data-track-index="4" ` +
-      `style="top:${CAPTION_TOP[group.mode]}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
+      `style="top:${captionTopAt(group.startSec + 0.05)}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
   }).join('\n      ');
 
   const slotHtml = visibleSlots.map((slot) =>
-    `<div id="${slot.id}" class="clip slot" data-start="${sec(slot.startSec)}" data-duration="${sec(slot.endSec - slot.startSec)}" data-track-index="3"><div class="card">${slot.html}</div></div>`,
+    `<div id="${slot.id}" class="clip slot" data-start="${sec(slot.startSec)}" data-duration="${sec(slot.endSec - slot.startSec)}" data-track-index="3" style="top:${slotY.get(slot.id)}px"><div class="card">${slot.html}</div></div>`,
   ).join('\n      ');
 
   const tweens: string[] = [];
@@ -279,7 +445,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   }
 
   const endHtml = endCard
-    ? `<div id="end-card" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3"><div class="end-inner">` +
+    ? `<div id="end-card" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3" style="top:${endY}px"><div class="end-inner">` +
       brand.endCard!.map((line, index) => `<div class="end-line${index === 0 ? ' hook-hi' : ''}"><span>${escapeHtml(line)}</span></div>`).join('') +
       '</div></div>'
     : '';
@@ -303,14 +469,14 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       .wm-big { font-size: 30px; letter-spacing: .5px; }
       .wm-rule { width: 4px; height: 52px; background: var(--accent); }
       .wm-tag { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 30px; }
-      #hook { position: absolute; left: 0; right: 0; top: ${TOP_SLOT_Y + 70}px; }
+      #hook { position: absolute; left: 0; right: 0; }
       .hook-inner, .end-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
       .hook-line, .end-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
         color: #fff; text-transform: uppercase; text-align: center; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
       .hook-hi span { background: var(--accent); padding: 4px 22px 8px; text-shadow: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-      #end-card { position: absolute; left: 0; right: 0; top: ${TOP_SLOT_Y + 70}px; }
+      #end-card { position: absolute; left: 0; right: 0; }
       .end-line { font-size: 58px; }
-      .slot { position: absolute; left: 48px; top: ${TOP_SLOT_Y + 64}px; width: 760px; }
+      .slot { position: absolute; left: 48px; width: 760px; }
       .card { background: rgba(15,16,22,.80); border-radius: 18px; padding: 26px 32px 28px; border-left: 8px solid var(--label); }
       .card-label { font-family: "Oswald", sans-serif; font-weight: 600; font-size: 26px; letter-spacing: 1.5px; color: var(--label); text-transform: uppercase; }
       .card-title { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 50px; line-height: 1.1; color: #fff; margin-top: 6px; }
@@ -327,7 +493,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       <video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>
       <div id="scrim" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="1"></div>
       ${wordmark}
-      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3"><div class="hook-inner">${hookHtml}</div></div>` : ''}
+      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px"><div class="hook-inner">${hookHtml}</div></div>` : ''}
       ${slotHtml}
       ${endHtml}
       ${captionHtml}

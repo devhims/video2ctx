@@ -4,9 +4,21 @@
 
 - **Wordmark**: top right, for the whole short.
 - **Hook**: the short's `hook` in the top slot for the first 3 s. A `|` splits it into lines, and the last line sits on the accent bar.
-- **Name tag and context cards**: a dark card in the top slot with a label-coloured rule. Slot items never overlap: later ones wait their turn, and an item with no room before the end card is dropped with a warning.
-- **Captions**: 1 to 3 words per group, with `emphasis` words in the accent colour. They sit below the mouth on `crop` shots and on the seam of `stack` shots.
+- **Name tag and context cards**: a dark card with a label-coloured rule. They never overlap each other: later ones wait their turn, and an item with no room before the end card is dropped with a warning.
+- **Captions**: 1 to 3 words per group, with `emphasis` words in the accent colour.
 - **End card**: `brand.endCard` lines for the last 2.4 s.
+
+## Faces stay clear
+
+`overlay` finds the faces in each rendered short twice a second using macOS's Vision framework, with nothing to install, and saves them to `overlay/<id>/faces.json`. It then places every block where it covers the least face over its time on screen:
+
+- **Hook, name tag, cards, end card**: the top band or the lower third, nearest their usual spot. Over split screens the seam between the two people is allowed too.
+- **Name tags and cards** move up to 2 s from their requested time to stay within one camera shot.
+- **Captions** take one position per stretch where nothing else on screen changes, so they move only at a camera cut or when a title or card comes or goes. They keep a clear gap from titles and cards and never cover the wordmark.
+
+Faces are margins around brows to chin, so text may sit over hair or background. Off macOS, typical face areas for each framing stand in; check those snapshots closely.
+
+Each block that still covers a face reports a percentage, such as "hook covers a face: 24%". For each report, snapshot that moment and fix what the frame shows. Time a card or name tag (`atSec`, `atPhrase`) to a single camera shot, shorten the text, or accept it when the overlap is only hair or a chin.
 
 Then render each one with the `render` command that `overlay` prints (`npx hyperframes@<version> render ...`). That writes `<project>/render/<id>-overlay.mp4`, at roughly 2 s of render time per second of video.
 
@@ -65,7 +77,7 @@ Use the channel's own words and colours. Cards state only facts you can source: 
 
 Snapshot each project at the hook, the name tag, each card, a `stack` shot and the end card (`npx hyperframes snapshot --at <seconds,...> --no-end` inside `overlay/<id>`), and look at every frame:
 
-- Captions stay clear of mouths and eyes.
+- Captions, titles and cards stay clear of eyes and mouths, and every face report is either fixed or accepted after looking.
 - No text sits under the platform's right-hand buttons or below about 1330 px.
 - Cards don't cover a face.
 - Each keyword lands on the right word.

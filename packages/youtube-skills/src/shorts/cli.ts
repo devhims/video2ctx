@@ -37,6 +37,7 @@ import {
   type MasterInfo,
 } from './media';
 import { buildOverlay } from './overlay';
+import { detectFaces } from './faces';
 import { openYouTubeSource } from './source';
 import { runCommand, ytDlpArgs } from './ytdlp';
 import { dtwPreset, parseWhisperCliJson, whisperToTranscript } from './transcribe';
@@ -78,7 +79,8 @@ Commands:
           model through HyperFrames on first use
   overlay Write a HyperFrames project per rendered short under <project>/overlay/<id>
           with the channel's wordmark, hook, name tag, context cards, captions,
-          and end card from edl.json; render it with HyperFrames
+          and end card from edl.json, each placed clear of the faces detected
+          in the short (macOS Vision); render it with HyperFrames
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -620,8 +622,12 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
     const directory = join(project, 'overlay', id);
     await mkdir(join(directory, 'assets'), { recursive: true });
     await copyFile(video, join(directory, 'assets', `${id}.mp4`));
+    const faces = await detectFaces(ffmpeg, video);
+    if (faces) await writeFile(join(directory, 'faces.json'), `${JSON.stringify(faces)}\n`);
+    else issues.push({ short: id, level: 'warning', message: 'Face detection needs macOS (Vision); placing overlays around typical face areas for each framing. Check snapshots closely.' });
     const plan = buildOverlay({
       id,
+      faces,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),
