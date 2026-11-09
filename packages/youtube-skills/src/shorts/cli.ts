@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { cpus, homedir, tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 
 import { YouTubeClientError, getDetails, getTranscript, type Transcript } from 'all-things-youtube';
 import { createRequestFetch } from '../direct/cli';
@@ -23,6 +23,7 @@ import {
 } from './edl';
 import {
   MediaError,
+  runFfmpeg,
   burnCaptions,
   detectCapabilities,
   detectShotChanges,
@@ -36,7 +37,7 @@ import {
   tileImages,
   type MasterInfo,
 } from './media';
-import { buildOverlay } from './overlay';
+import { OVERLAY_SFX, buildOverlay, type SfxKey } from './overlay';
 import { detectFaces } from './faces';
 import { openYouTubeSource } from './source';
 import { runCommand, ytDlpArgs } from './ytdlp';
@@ -79,8 +80,10 @@ Commands:
           model through HyperFrames on first use
   overlay Write a HyperFrames project per rendered short under <project>/overlay/<id>
           with the channel's wordmark, hook, name tag, context cards, captions,
-          and end card from edl.json, each placed clear of the faces detected
-          in the short (macOS Vision); render it with HyperFrames
+          zooms, mounted scenes, and an end card with the source thumbnail after
+          the last word, each placed clear of the faces detected in the short
+          (macOS Vision); sound effects come from HyperFrames' bundled library.
+          Render it with HyperFrames
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -123,6 +126,10 @@ export interface CliIo {
 export interface CliDependencies {
   getDetails?: typeof getDetails;
   getTranscript?: typeof getTranscript;
+  /** The source video's thumbnail as JPEG bytes, or undefined when it cannot be fetched. */
+  fetchThumbnail?: (videoId: string) => Promise<Uint8Array | undefined>;
+  /** Bundled sound effects by library key, as files under `cache`. */
+  resolveSfx?: (keys: string[], cache: string) => Promise<{ files: Record<string, string>; missing: string[] }>;
 }
 
 class DependencyError extends Error {
@@ -601,12 +608,74 @@ async function commandFetch(flags: Flags, environment: NodeJS.ProcessEnv) {
   return { master: path, ...info, next: `Pass --master ${path} to shots and render.`, warnings };
 }
 
-async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
+async function downloadThumbnail(videoId: string): Promise<Uint8Array | undefined> {
+  for (const name of ['maxresdefault', 'hqdefault']) {
+    const response = await fetch(`https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/${name}.jpg`, { signal: AbortSignal.timeout(15_000) }).catch(() => undefined);
+    if (response?.ok) return new Uint8Array(await response.arrayBuffer());
+  }
+  return undefined;
+}
+
+/** HyperFrames' bundled sound effects, resolved offline (no account) into a per-project cache. */
+function bundledSfx(environment: NodeJS.ProcessEnv) {
+  return async (keys: string[], cache: string) => {
+    await mkdir(cache, { recursive: true });
+    const files: Record<string, string> = {};
+    const missing: string[] = [];
+    const npx = await resolveFfmpegExecutable('npx', environment).catch(() => undefined);
+    for (const key of keys) {
+      const target = join(cache, `${key}.mp3`);
+      if ((await stat(target).catch(() => undefined))?.isFile()) {
+        files[key] = target;
+        continue;
+      }
+      const result = npx
+        ? await runCommand(npx, ['-y', `hyperframes@${HYPERFRAMES_VERSION}`, 'media-use', 'resolve', '--type', 'sfx', '--intent', key, '--local-only', '--json', '-p', cache], 120_000).catch(() => undefined)
+        : undefined;
+      try {
+        const found = JSON.parse(result?.stdout.trim().split('\n').at(-1) ?? '') as { ok?: boolean; path?: string; provenance?: { library_key?: string } };
+        if (found.ok && found.path && found.provenance?.library_key === key) {
+          await copyFile(resolve(cache, found.path), target);
+          files[key] = target;
+          continue;
+        }
+      } catch {
+        // Not JSON: HyperFrames is missing or failed; reported below.
+      }
+      missing.push(key);
+    }
+    return { files, missing };
+  };
+}
+
+/**
+ * The short's final frame, sharp and blurred, for the end card to freeze on. Decodes the last
+ * quarter second and keeps the last frame, since audio can run a frame past the video stream.
+ */
+async function extractEndFrames(ffmpeg: string, video: string, directory: string): Promise<{ freeze?: string; blur?: string }> {
+  const output: { freeze?: string; blur?: string } = {};
+  const variants = [
+    ['freeze', 'freeze.jpg', 'scale=out_range=full', '2'],
+    ['blur', 'freeze-blur.jpg', 'scale=1080:1920,gblur=sigma=38,hue=s=0.75,scale=out_range=full', '3'],
+  ] as const;
+  for (const [key, file, filter, quality] of variants) {
+    const target = join(directory, file);
+    await rm(target, { force: true });
+    await runFfmpeg(ffmpeg, ['-loglevel', 'error', '-y', '-sseof', '-0.25', '-i', video, '-an', '-vf', filter, '-pix_fmt', 'yuvj420p', '-q:v', quality, '-update', '1', target]);
+    if ((await stat(target).catch(() => undefined))?.isFile()) output[key] = `endcard/${file}`;
+  }
+  return output;
+}
+
+async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv, dependencies: CliDependencies) {
   const project = resolve(required(flags, 'project'));
   const { words, edl } = await loadProject(project);
   const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
   const ffmpeg = await resolveFfmpeg(flags, environment);
   const output = [];
+  let thumbnail: Uint8Array | undefined | null = null;
+  const resolveSfx = dependencies.resolveSfx ?? bundledSfx(environment);
+  const sfxReported = new Set<string>();
   for (const short of shorts) {
     const id = short.spec.id;
     const video = join(project, 'render', `${id}.mp4`);
@@ -630,6 +699,52 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
       hookImageFile = `hook-image${extname(source).toLowerCase() || '.jpg'}`;
       await copyFile(source, join(directory, 'assets', hookImageFile));
     }
+    const spec = short.spec.overlay ?? {};
+    const durationSec = Math.floor(info.durationSec * 100) / 100;
+    // Scenes: hand-made HyperFrames sub-compositions, copied in so a rerun keeps them.
+    const sceneFiles: Array<{ compositionId: string; file: string } | undefined> = [];
+    const sceneSfx = new Set<string>();
+    for (const [index, scene] of (spec.scenes ?? []).entries()) {
+      const source = resolve(project, scene.src);
+      const text = await readFile(source, 'utf8').catch(() => undefined);
+      if (text === undefined) throw new ShortsInputError(`${id} scene ${index + 1} not found at ${source}.`);
+      const file = basename(source);
+      if (sceneFiles.some((other) => other?.file === file)) throw new ShortsInputError(`${id} uses ${file} for two scenes; give each scene its own file.`);
+      await mkdir(join(directory, 'compositions'), { recursive: true });
+      await copyFile(source, join(directory, 'compositions', file));
+      const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1];
+      sceneFiles.push(compositionId ? { compositionId, file } : undefined);
+      for (const match of text.matchAll(/assets\/sfx\/([a-z0-9-]+)\.mp3/g)) sceneSfx.add(match[1]!);
+    }
+    let endCardFiles: { freeze?: string; blur?: string; thumbnail?: string } | undefined;
+    if (edl.brand?.endCard) {
+      await mkdir(join(directory, 'assets', 'endcard'), { recursive: true });
+      endCardFiles = await extractEndFrames(ffmpeg, video, join(directory, 'assets', 'endcard'));
+      if (!endCardFiles.freeze) issues.push({ short: id, level: 'warning', message: 'Could not extract the final frame; the end card plays on black.' });
+      if (thumbnail === null) {
+        thumbnail = await (dependencies.fetchThumbnail ?? downloadThumbnail)(edl.videoId).catch(() => undefined);
+        if (!thumbnail) issues.push({ short: id, level: 'warning', message: `Could not fetch the thumbnail of ${edl.videoId}; the end card shows text only.` });
+      }
+      if (thumbnail) {
+        await writeFile(join(directory, 'assets', 'endcard', 'thumbnail.jpg'), thumbnail);
+        endCardFiles.thumbnail = 'endcard/thumbnail.jpg';
+      }
+    }
+    const sfx: Partial<Record<SfxKey, string>> = {};
+    if (edl.brand?.endCard || spec.zooms?.length || spec.scenes?.length) {
+      const keys = [...new Set<string>([...OVERLAY_SFX, ...sceneSfx])];
+      const found = await resolveSfx(keys, join(project, 'overlay', '.sfx'));
+      await mkdir(join(directory, 'assets', 'sfx'), { recursive: true });
+      for (const [key, path] of Object.entries(found.files)) {
+        await copyFile(path, join(directory, 'assets', 'sfx', `${key}.mp3`));
+        if ((OVERLAY_SFX as string[]).includes(key)) sfx[key as SfxKey] = `sfx/${key}.mp3`;
+      }
+      const missing = found.missing.filter((key) => !sfxReported.has(key));
+      if (missing.length) {
+        missing.forEach((key) => sfxReported.add(key));
+        issues.push({ short: id, level: 'warning', message: `Sound effects not found (${missing.join(', ')}); those cues play silent. They come from \`npx hyperframes@${HYPERFRAMES_VERSION} media-use resolve --type sfx --local-only\`.` });
+      }
+    }
     const faces = await detectFaces(ffmpeg, video);
     if (faces) await writeFile(join(directory, 'faces.json'), `${JSON.stringify(faces)}\n`);
     else issues.push({ short: id, level: 'warning', message: 'Face detection needs macOS (Vision); placing overlays around typical face areas for each framing. Check snapshots closely.' });
@@ -637,14 +752,17 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
       id,
       faces,
       hookImageFile,
+      endCardFiles,
+      sfx,
+      sceneFiles,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),
-      durationSec: Math.floor(info.durationSec * 100) / 100,
+      durationSec,
       videoFile: `${id}.mp4`,
       brand: edl.brand ?? {},
       speakers: edl.speakers ?? {},
-      overlay: short.spec.overlay ?? {},
+      overlay: spec,
     });
     await Promise.all([
       writeFile(join(directory, 'index.html'), plan.html),
@@ -655,6 +773,7 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
     output.push({
       id,
       project: directory,
+      durationSec: plan.durationSec,
       output: join(project, 'render', `${id}-overlay.mp4`),
       render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join(project, 'render', `${id}-overlay.mp4`)}`,
     });
@@ -693,7 +812,7 @@ export async function runShortsCli(
           : command === 'render'
             ? await commandRender(flags, environment)
             : command === 'overlay'
-              ? await commandOverlay(flags, environment)
+              ? await commandOverlay(flags, environment, dependencies)
               : command === 'fetch'
                 ? await commandFetch(flags, environment)
                 : await commandTranscribe(flags, environment);

@@ -72,6 +72,12 @@ describe('captions', () => {
     expect(caption.find((word) => word.text === 'he')).toMatchObject({ startMs: 3_200 });
   });
 
+  test('stop at the last planned word when the snapped out-edge reaches the next one', () => {
+    const { shorts } = resolveShorts(words, edl({ cuts: [{ from: 'he stopped', to: 'me' }] }));
+    const snapped = { ...shorts[0]!, cuts: [{ ...shorts[0]!.cuts[0]!, outMs: 21_600 }] };
+    expect(captionWords(words, snapped).map((word) => word.text)).toEqual(['he', 'stopped', 'me.']);
+  });
+
   test('build short cues and valid SRT and ASS', () => {
     const cues = buildCues([
       { text: 'one', startMs: 0, endMs: 300 },

@@ -13665,7 +13665,7 @@ var require_fetch = __commonJS({
     function handleFetchDone(response) {
       finalizeAndReportTiming(response, "fetch");
     }
-    function fetch(input, init = void 0) {
+    function fetch2(input, init = void 0) {
       webidl.argumentLengthCheck(arguments, 1, "globalThis.fetch");
       let p = createDeferredPromise();
       let requestObject;
@@ -14622,7 +14622,7 @@ var require_fetch = __commonJS({
       }
     }
     module.exports = {
-      fetch,
+      fetch: fetch2,
       Fetch,
       fetching,
       finalizeAndReportTiming
@@ -18971,7 +18971,7 @@ var require_undici = __commonJS({
     module.exports.setGlobalDispatcher = setGlobalDispatcher;
     module.exports.getGlobalDispatcher = getGlobalDispatcher;
     var fetchImpl = require_fetch().fetch;
-    module.exports.fetch = async function fetch(init, options = void 0) {
+    module.exports.fetch = async function fetch2(init, options = void 0) {
       try {
         return await fetchImpl(init, options);
       } catch (err) {
@@ -19023,7 +19023,7 @@ var require_undici = __commonJS({
 // src/shorts/cli.ts
 import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
-import { extname as extname2, join as join6, resolve as resolve3 } from "node:path";
+import { basename as basename2, extname as extname2, join as join6, resolve as resolve3 } from "node:path";
 
 // ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
@@ -21849,7 +21849,7 @@ function captionWords(words, short, glossary) {
   const output = [];
   let offset = 0;
   for (const cut of short.cuts) {
-    const inCut = words.filter((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs < cut.outMs);
+    const inCut = words.filter((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs <= cut.lastWordStartMs && word.startMs < cut.outMs);
     for (let index = 0; index < inCut.length; ) {
       const word = inCut[index];
       const entry = entries.find((candidate) => candidate.tokens.every(
@@ -22262,9 +22262,26 @@ async function previewSheet(ffmpeg, video, durationMs, path) {
 }
 
 // src/shorts/overlay.ts
+var SFX_PEAK = {
+  riser: 3.472,
+  "impact-bass-1": 0.073,
+  "click-soft": 0.073,
+  pop: 0.12,
+  "whoosh-short": 0.162,
+  whoosh: 0.162
+};
+var OVERLAY_SFX = Object.keys(SFX_PEAK);
 var HOOK_SEC = 3;
 var HOLD_GAP_SEC = 1;
-var END_CARD_SEC = 2.4;
+var END_CARD_SEC = 2.8;
+var FRAME_SEC = 1 / 30;
+var ZOOM_MIN_GAP_SEC = 6;
+var ZOOMS = {
+  snap: { scale: 1.16, inSec: 0.14, ease: "power3.out", holdSec: 1.2, sfx: "whoosh-short" },
+  push: { scale: 1.15, inSec: 1, ease: "power2.out", holdSec: 0.6 },
+  punch: { scale: 1.22, inSec: 0.12, ease: "power3.out", holdSec: 0.9, sfx: "impact-bass-1" }
+};
+var ZOOM_RELEASE_SEC = 0.4;
 var CARD_SEC = 4.5;
 var NAME_TAG_SEC = 3.6;
 var CAPTION_BAND = [1150, 1560];
@@ -22394,6 +22411,39 @@ function hookHeight(lines, fontSize, perLine) {
 function cardHeight(title, body, source) {
   return 54 + 32 + 6 + lineCount(title, 26) * 55 + (body ? 10 + lineCount(body, 42) * 40 : 0) + (source ? 12 + 27 : 0);
 }
+function placeScenes(input, issues) {
+  const placed = [];
+  (input.overlay.scenes ?? []).forEach((scene, index) => {
+    const name = `scene ${index + 1}`;
+    const file = input.sceneFiles?.[index];
+    if (!file) return issues.push(`${name}: ${scene.src} has no data-composition-id on its root; skipped.`);
+    if (scene.mode !== "bottom" && scene.mode !== "full") return issues.push(`${name}: mode must be "bottom" or "full"; skipped.`);
+    const at = (phrase, fallback, what) => {
+      const found = findPhraseSec(input.words, phrase);
+      if (phrase && found === void 0) issues.push(`${name}: ${what} phrase "${phrase}" is not in this short's captions.`);
+      return found ?? fallback;
+    };
+    const startSec = at(scene.atPhrase, scene.atSec, "start");
+    if (startSec === void 0) return issues.push(`${name} needs atPhrase or atSec; skipped.`);
+    const endSec = at(scene.endPhrase, scene.durationSec === void 0 ? void 0 : startSec + scene.durationSec, "end");
+    if (endSec === void 0) return issues.push(`${name} needs endPhrase or durationSec; skipped.`);
+    if (endSec - startSec < 0.8 || endSec > input.durationSec + 0.01) return issues.push(`${name} runs ${startSec.toFixed(2)}–${endSec.toFixed(2)}s, outside the short or under 0.8 s; skipped.`);
+    let expandSec = scene.mode === "bottom" ? at(scene.expandAtPhrase, scene.expandAtSec, "expand") : void 0;
+    if (expandSec !== void 0 && (expandSec <= startSec + 0.3 || expandSec >= endSec - 0.3)) {
+      issues.push(`${name}: expand at ${expandSec.toFixed(2)}s is not inside the scene; it stays in the bottom half.`);
+      expandSec = void 0;
+    }
+    const clash = placed.find((other) => startSec < other.endSec && endSec > other.startSec);
+    if (clash) return issues.push(`${name} overlaps ${clash.id}; skipped.`);
+    placed.push({ id: file.compositionId, file: file.file, mode: scene.mode, startSec, endSec, expandSec });
+  });
+  return placed.sort((left, right) => left.startSec - right.startSec);
+}
+function sceneCover(scenes, atSec) {
+  const scene = scenes.find((candidate) => atSec >= candidate.startSec && atSec < candidate.endSec);
+  if (!scene) return void 0;
+  return scene.mode === "full" || scene.expandSec !== void 0 && atSec >= scene.expandSec ? "full" : "bottom";
+}
 function buildOverlay(input) {
   const { brand, overlay, durationSec } = input;
   const issues = [];
@@ -22401,9 +22451,10 @@ function buildOverlay(input) {
   const label = brand.label ?? "#F5A623";
   const segments = timelineSegments(input.segments);
   const groups = captionGroups(input.words, segments, overlay.emphasis);
-  const clampEnd = (start, length) => Math.min(start + length, durationSec - END_CARD_SEC - 0.1);
+  const clampEnd = (start, length) => Math.min(start + length, durationSec - 0.1);
+  const scenes = placeScenes(input, issues);
   const hookText = input.short.spec.hook?.trim();
-  const hook = hookText ? { startSec: 0.1, endSec: Math.min(HOOK_SEC, durationSec - END_CARD_SEC - 0.2) } : void 0;
+  const hook = hookText ? { startSec: 0.1, endSec: Math.min(HOOK_SEC, durationSec - 0.2) } : void 0;
   const slots = [];
   if (overlay.nameTag) {
     const speaker = input.speakers[overlay.nameTag.speaker];
@@ -22447,7 +22498,7 @@ function buildOverlay(input) {
     let best = { shift: 0, overlap: Number.POSITIVE_INFINITY };
     for (const shift of CARD_NUDGE_SEC) {
       const startSec = slot.startSec + shift;
-      if (startSec < 0 || startSec + length > durationSec - END_CARD_SEC - 0.1) continue;
+      if (startSec < 0 || startSec + length > durationSec - 0.1) continue;
       const { overlap } = placeY(slot.height, headingTop, CARD_X, samplesDuring(faceSamples, startSec, startSec + length), [], atTop(slot.height));
       if (overlap < best.overlap - 1) best = { shift, overlap };
     }
@@ -22463,14 +22514,15 @@ function buildOverlay(input) {
       slot.endSec = clampEnd(freeAt, length);
     }
     if (slot.endSec - slot.startSec < 1.5) {
-      issues.push(`${slot.id} has no room before the end card and was dropped.`);
+      issues.push(`${slot.id} has no room before the short ends and was dropped.`);
       slot.endSec = slot.startSec;
       continue;
     }
     freeAt = slot.endSec + 0.15;
   }
   const visibleSlots = slots.filter((slot) => slot.endSec > slot.startSec);
-  const endCard = brand.endCard?.length ? { startSec: durationSec - END_CARD_SEC, endSec: durationSec } : void 0;
+  const endCard = brand.endCard ? { startSec: durationSec, endSec: durationSec + END_CARD_SEC } : void 0;
+  const totalSec = endCard ? endCard.endSec : durationSec;
   const hookLines = (hookText ?? "").split("|").map((line) => line.trim()).filter(Boolean);
   const faces = faceSamples;
   const placed = [];
@@ -22492,14 +22544,21 @@ function buildOverlay(input) {
   const hookBlockHeight = withImage ? Math.max(HOOK_IMAGE_SIZE, hookHeight(hookLines, hookFont, 16)) : hookHeight(hookLines, hookFont, 18);
   const hookY = hook ? place("hook", hook, hookBlockHeight, FULL_WIDTH) : 0;
   const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, CARD_X)]));
-  const endY = endCard ? place("end card", endCard, hookHeight(brand.endCard, 58, 22), FULL_WIDTH) : 0;
+  for (const block of placed) {
+    const under = scenes.find((scene) => block.startSec < scene.endSec && block.endSec > scene.startSec && scene.mode === "full");
+    if (under) issues.push(`A heading at ${block.startSec.toFixed(1)}s shows over full-screen ${under.id}; move one of them.`);
+  }
   const cutPoints = [.../* @__PURE__ */ new Set([
     ...segments.flatMap((segment) => [segment.startSec, segment.endSec]),
-    ...placed.flatMap((block) => [block.startSec, block.endSec])
+    ...placed.flatMap((block) => [block.startSec, block.endSec]),
+    ...scenes.flatMap((scene) => [scene.startSec, scene.endSec, ...scene.expandSec === void 0 ? [] : [scene.expandSec]])
   ])].filter((at) => at >= 0 && at <= durationSec).sort((a, b) => a - b);
   const windows = cutPoints.slice(0, -1).map((startSec, index) => ({ startSec, endSec: cutPoints[index + 1] })).filter((window) => window.endSec - window.startSec > 0.05);
   const captionY = windows.map((window) => {
     const mode = segments.find((segment) => window.startSec + 0.01 >= segment.startSec && window.startSec + 0.01 < segment.endSec)?.mode ?? "crop";
+    const cover = sceneCover(scenes, window.startSec + 0.01);
+    if (cover === "bottom") return SEAM_CAPTION_TOP;
+    if (cover === "full") return CAPTION_LOW;
     if (mode === "stack") return SEAM_CAPTION_TOP;
     const blocks = placed.filter((block) => block.startSec < window.endSec && block.endSec > window.startSec).map((block) => ({ x: 0, y: block.y - CAPTION_GAP, w: 1080, h: block.height + CAPTION_GAP * 2 }));
     const spot = placeY(CAPTION_HEIGHT, CAPTION_LOW, FULL_WIDTH, samplesDuring(faces, window.startSec, window.endSec), [...blocks, ...fixedBoxes], [CAPTION_BAND]);
@@ -22518,11 +22577,11 @@ function buildOverlay(input) {
     const highlighted = hookLines.length > 1 ? index === hookLines.length - 1 : false;
     return `<div class="hook-line${highlighted ? " hook-hi" : ""}"><span>${escapeHtml(line)}</span></div>`;
   }).join("");
-  const wordmark = brand.wordmark?.length ? `<div id="wordmark" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="2"><div class="wm-mark">${brand.wordmark.map((line, index) => `<div class="wm-${index === 0 && brand.wordmark.length > 2 ? "small" : "big"}">${escapeHtml(line)}</div>`).join("")}</div>` + (brand.wordmarkTag ? `<div class="wm-rule"></div><div class="wm-tag">${escapeHtml(brand.wordmarkTag)}</div>` : "") + "</div>" : "";
+  const wordmark = brand.wordmark?.length ? `<div id="wordmark" class="clip" data-start="0" data-duration="${sec(totalSec)}" data-track-index="2"><div class="wm-mark">${brand.wordmark.map((line, index) => `<div class="wm-${index === 0 && brand.wordmark.length > 2 ? "small" : "big"}">${escapeHtml(line)}</div>`).join("")}</div>` + (brand.wordmarkTag ? `<div class="wm-rule"></div><div class="wm-tag">${escapeHtml(brand.wordmarkTag)}</div>` : "") + "</div>" : "";
   const captionHtml = groups.map((group, index) => {
     const text = group.words.map((word) => word.text).join(" ");
     const words = group.words.map((word) => `<span class="${word.emphasis ? "w em" : "w"}">${escapeHtml(word.text)}</span>`).join(" ");
-    return `<div id="cap-${index}" class="clip cap" data-start="${sec(group.startSec)}" data-duration="${sec(group.endSec - group.startSec)}" data-track-index="4" style="top:${captionTopAt(group.startSec + 0.05)}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
+    return `<div id="cap-${index}" class="clip cap" data-start="${sec(group.startSec)}" data-duration="${sec(Math.min(group.endSec, durationSec) - group.startSec)}" data-track-index="4" style="top:${captionTopAt(group.startSec + 0.05)}px;font-size:${captionSize(text)}px"><div class="cap-inner">${words}</div></div>`;
   }).join("\n      ");
   const slotHtml = visibleSlots.map(
     (slot) => `<div id="${slot.id}" class="clip slot" data-start="${sec(slot.startSec)}" data-duration="${sec(slot.endSec - slot.startSec)}" data-track-index="3" style="top:${slotY.get(slot.id)}px"><div class="card">${slot.html}</div></div>`
@@ -22544,12 +22603,119 @@ function buildOverlay(input) {
   groups.forEach((group, index) => {
     tweens.push(`tl.from("#cap-${index} .cap-inner", { y: 16, scale: 0.94, opacity: 0, duration: 0.12, ease: "power2.out" }, ${sec(group.startSec)});`);
   });
-  if (endCard) {
-    tweens.push(
-      `tl.from("#end-card .end-line", { y: 40, opacity: 0, duration: 0.35, ease: "power3.out", stagger: 0.12 }, ${sec(endCard.startSec)});`
-    );
+  const audio = [];
+  const hit = (key, pictureSec, volume, options = {}) => {
+    const file = input.sfx?.[key];
+    if (!file) return;
+    const startSec = Math.max(0, pictureSec + FRAME_SEC - (SFX_PEAK[key] - (options.mediaStart ?? 0)));
+    audio.push(`<audio id="sfx-${audio.length}" class="clip" src="assets/${escapeHtml(file)}" data-start="${sec(startSec)}" data-duration="${sec(options.duration ?? 0.6)}" data-volume="${volume}"` + (options.mediaStart ? ` data-media-start="${sec(options.mediaStart)}"` : "") + (options.fadeIn ? ` data-fade-in="${options.fadeIn}"` : "") + (options.fadeOut ? ` data-fade-out="${options.fadeOut}"` : "") + ` data-track-index="${6 + audio.length}"></audio>`);
+  };
+  const zoomOrigin = (atSec) => {
+    const sample = faceSamples.reduce((best, candidate) => !best || Math.abs(candidate.atSec - atSec) < Math.abs(best.atSec - atSec) ? candidate : best, void 0);
+    const box = sample?.boxes.slice().sort((a, b) => a.y - b.y)[0];
+    if (!box) return "50% 45%";
+    const x = Math.min(Math.max((box.x + box.w / 2) / 1080 * 100, 25), 75);
+    const y = Math.min(Math.max((box.y + box.h * 0.42) / 1920 * 100, 20), 60);
+    return `${x.toFixed(1)}% ${y.toFixed(1)}%`;
+  };
+  let zoomFreeAt = 0;
+  let lastZoomSec;
+  (overlay.zooms ?? []).map((zoom, index) => ({ zoom, index, startSec: findPhraseSec(input.words, zoom.atPhrase) ?? zoom.atSec })).sort((left, right) => (left.startSec ?? 0) - (right.startSec ?? 0)).forEach(({ zoom, index, startSec }) => {
+    const name = `zoom ${index + 1}`;
+    if (zoom.atPhrase && findPhraseSec(input.words, zoom.atPhrase) === void 0) issues.push(`${name}: phrase "${zoom.atPhrase}" is not in this short's captions.`);
+    if (startSec === void 0) return issues.push(`${name} needs atPhrase or atSec; skipped.`);
+    if (modeAt(segments, startSec + 0.05) === "stack") return issues.push(`${name} at ${startSec.toFixed(2)}s lands on a split screen, where a zoom crops both people; skipped.`);
+    if (sceneCover(scenes, startSec + 0.05)) return issues.push(`${name} at ${startSec.toFixed(2)}s is hidden by a scene; skipped.`);
+    if (startSec < zoomFreeAt) return issues.push(`${name} at ${startSec.toFixed(2)}s starts before the previous zoom has eased back; skipped.`);
+    if (startSec > durationSec - 1) return issues.push(`${name} at ${startSec.toFixed(2)}s has no room to ease back before the short ends; skipped.`);
+    if (lastZoomSec !== void 0 && startSec - lastZoomSec < ZOOM_MIN_GAP_SEC) {
+      issues.push(`${name} comes ${(startSec - lastZoomSec).toFixed(1)} s after the previous one; zooms this close read as busy; keep to about one every 10 s.`);
+    }
+    const kind = ZOOMS[zoom.kind ?? "snap"];
+    const peakSec = startSec + kind.inSec;
+    let releaseSec = Math.min(peakSec + (zoom.holdSec ?? kind.holdSec), durationSec - ZOOM_RELEASE_SEC);
+    tweens.push(`tl.set("#cam", { transformOrigin: "${zoomOrigin(startSec + 0.3)}" }, ${sec(startSec)});`);
+    tweens.push(`tl.to("#cam", { scale: ${zoom.scale ?? kind.scale}, duration: ${kind.inSec}, ease: "${kind.ease}" }, ${sec(startSec)});`);
+    const covering = scenes.find((scene) => scene.startSec >= peakSec - 0.05 && scene.startSec < releaseSec + ZOOM_RELEASE_SEC && scene.mode === "full");
+    if (covering) {
+      releaseSec = covering.startSec + 0.4;
+      tweens.push(`tl.set("#cam", { scale: 1 }, ${sec(releaseSec)});`);
+    } else {
+      tweens.push(`tl.to("#cam", { scale: 1, duration: ${ZOOM_RELEASE_SEC}, ease: "power2.inOut" }, ${sec(releaseSec)});`);
+    }
+    if (kind.sfx) hit(kind.sfx, startSec + 0.04, 0.3, { duration: kind.sfx === "impact-bass-1" ? 1.2 : 0.6 });
+    zoomFreeAt = releaseSec + ZOOM_RELEASE_SEC;
+    lastZoomSec = startSec;
+  });
+  const sceneHtml = scenes.map((scene) => {
+    const initial = scene.mode === "bottom" ? "inset(100% 0% 0% 0%)" : "circle(0% at 50% 40%)";
+    return `<div id="${escapeHtml(scene.id)}" class="scene" data-composition-id="${escapeHtml(scene.id)}" data-composition-src="compositions/${escapeHtml(scene.file)}" data-start="${sec(scene.startSec)}" data-duration="${sec(scene.endSec - scene.startSec)}" data-track-index="5" data-track-kind="graphics" data-width="1080" data-height="1920" style="clip-path:${initial}"></div>`;
+  }).join("\n      ");
+  for (const scene of scenes) {
+    const host = JSON.stringify(`#${scene.id}`);
+    if (scene.mode === "bottom") {
+      tweens.push(`tl.to(${host}, { clipPath: "inset(50% 0% 0% 0%)", duration: 0.3, ease: "power3.out" }, ${sec(scene.startSec)});`);
+      if (scene.expandSec !== void 0) {
+        tweens.push(`tl.to(${host}, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.32, ease: "power2.inOut" }, ${sec(scene.expandSec)});`);
+        hit("whoosh-short", scene.expandSec + 0.15, 0.28);
+        tweens.push(`tl.to(${host}, { clipPath: "inset(0% 0% 100% 0%)", duration: 0.28, ease: "power2.in" }, ${sec(scene.endSec - 0.3)});`);
+      } else {
+        tweens.push(`tl.to(${host}, { clipPath: "inset(100% 0% 0% 0%)", duration: 0.28, ease: "power2.in" }, ${sec(scene.endSec - 0.3)});`);
+      }
+    } else {
+      tweens.push(`tl.to(${host}, { clipPath: "circle(125% at 50% 40%)", duration: 0.35, ease: "power2.out" }, ${sec(scene.startSec)});`);
+      tweens.push(`tl.to(${host}, { clipPath: "circle(0% at 50% 55%)", duration: 0.22, ease: "power2.in" }, ${sec(scene.endSec - 0.24)});`);
+    }
+    hit("whoosh", scene.startSec + 0.1, 0.3);
+    hit(scene.mode === "full" ? "whoosh-short" : "whoosh", scene.endSec - 0.12, 0.28);
   }
-  const endHtml = endCard ? `<div id="end-card" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3" style="top:${endY}px"><div class="end-inner">` + brand.endCard.map((line, index) => `<div class="end-line${index === 0 ? " hook-hi" : ""}"><span>${escapeHtml(line)}</span></div>`).join("") + "</div></div>" : "";
+  let endHtml = "";
+  if (endCard) {
+    const card = brand.endCard;
+    const heading = card.heading?.length ? card.heading : ["Watch the", "Full episode"];
+    const cta = card.cta ?? "Tap the link below";
+    const files = input.endCardFiles ?? {};
+    const thumb = files.thumbnail;
+    const at = (offset) => sec(endCard.startSec + offset);
+    const brandTop = thumb ? 1062 : 640;
+    const ctaTop = card.channel ? brandTop + 98 : brandTop;
+    endHtml = [
+      `<div id="ec" class="clip" data-start="${sec(endCard.startSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="3" data-track-kind="graphics">`,
+      `<div class="ec-head">${heading.map((line, index) => `<div id="ec-l${index}" class="${index === heading.length - 1 ? "ec-hi" : "ec-line"}"><span>${escapeHtml(line)}</span></div>`).join("")}</div>`,
+      thumb ? `<div id="ec-thumb"><img src="assets/${escapeHtml(thumb)}" alt="Full episode thumbnail" /></div><div id="ec-ripple"></div><div id="ec-play"><svg width="44" height="48" viewBox="0 0 50 54"><path d="M0 0 L50 27 L0 54 Z" fill="#fff"/></svg></div><div id="ec-touch"></div>` : "",
+      card.channel ? `<div id="ec-brand" style="top:${brandTop}px">${escapeHtml(card.channel)}</div>` : "",
+      cta ? `<div id="ec-chip" style="top:${ctaTop}px"><span>${escapeHtml(cta)}</span><svg id="ec-arrow" width="34" height="40" viewBox="0 0 34 40"><path d="M17 0 V32 M3 20 L17 36 L31 20" stroke="${escapeHtml(accent)}" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>` : "",
+      "</div>"
+    ].join("");
+    if (files.blur) tweens.push(`tl.from("#end-blur .eb-inner", { opacity: 0, duration: 0.3, ease: "power1.out" }, ${at(0)});`);
+    heading.forEach((_, index) => tweens.push(`tl.from("#ec-l${index}", { y: 40, opacity: 0, duration: 0.35, ease: "power3.out" }, ${at(0.08 + index * 0.1)});`));
+    if (thumb) {
+      tweens.push(
+        `tl.from("#ec-thumb", { y: 170, scale: 0.8, duration: 0.36, ease: "back.out(1.5)" }, ${at(0)});`,
+        `tl.from("#ec-thumb", { opacity: 0, duration: 0.14, ease: "none" }, ${at(0)});`,
+        `tl.from("#ec-play", { scale: 0, duration: 0.3, ease: "back.out(2)" }, ${at(0.42)});`,
+        `tl.set("#ec-ripple", { opacity: 0 }, ${at(0)});`,
+        `tl.fromTo("#ec-touch", { opacity: 0, scale: 1.4, x: 200, y: 180 }, { opacity: 1, scale: 1, x: 0, y: 0, duration: 0.3, ease: "power2.out", immediateRender: false }, ${at(0.5)});`,
+        `tl.to("#ec-touch", { scale: 0.72, duration: 0.08, ease: "power2.in" }, ${at(0.8)});`,
+        `tl.to("#ec-play", { scale: 0.86, duration: 0.08, ease: "power2.in" }, ${at(0.8)});`,
+        `tl.to("#ec-play", { scale: 1, duration: 0.35, ease: "back.out(3)" }, ${at(0.88)});`,
+        `tl.to("#ec-touch", { scale: 1.1, opacity: 0, duration: 0.3, ease: "power2.out" }, ${at(0.88)});`,
+        `tl.fromTo("#ec-ripple", { scale: 0.7, opacity: 0.85 }, { scale: 2.1, opacity: 0, duration: 0.6, ease: "power2.out", immediateRender: false }, ${at(0.86)});`
+      );
+      hit("riser", endCard.startSec + 0.36, 0.28, { mediaStart: 2.272, duration: 1.6, fadeIn: 0.5, fadeOut: 0.35 });
+      hit("impact-bass-1", endCard.startSec + 0.36, 0.32, { duration: 1.6, fadeOut: 0.6 });
+      hit("click-soft", endCard.startSec + 0.88, 0.9, { duration: 0.36 });
+    }
+    if (card.channel) tweens.push(`tl.from("#ec-brand", { y: 24, opacity: 0, duration: 0.3, ease: "power2.out" }, ${at(0.45)});`);
+    if (cta) {
+      tweens.push(
+        `tl.from("#ec-chip", { scale: 0.6, opacity: 0, duration: 0.28, ease: "back.out(2)" }, ${at(1)});`,
+        `tl.to("#ec-arrow", { y: 9, duration: 0.16, ease: "sine.inOut", yoyo: true, repeat: 5 }, ${at(1.4)});`
+      );
+      hit("pop", endCard.startSec + 1.28, 0.8);
+    }
+  }
+  const freezeHtml = endCard && input.endCardFiles?.freeze ? `<img id="end-freeze" class="clip" src="assets/${escapeHtml(input.endCardFiles.freeze)}" alt="" data-start="${sec(durationSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="0">` + (input.endCardFiles.blur ? `<div id="end-blur" class="clip" data-start="${sec(durationSec)}" data-duration="${sec(END_CARD_SEC)}" data-track-index="1"><div class="eb-inner"><img src="assets/${escapeHtml(input.endCardFiles.blur)}" alt=""><div class="eb-dim"></div></div></div>` : "") : "";
   const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -22560,7 +22726,11 @@ function buildOverlay(input) {
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 1080px; height: 1920px; overflow: hidden; background: #000; }
       #root { --accent: ${accent}; --label: ${label}; font-family: "Poppins", sans-serif; }
-      #a-roll { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      #cam { position: absolute; inset: 0; overflow: hidden; }
+      #a-roll, #end-freeze, #end-blur img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      #end-blur .eb-inner { position: absolute; inset: 0; }
+      #end-blur .eb-dim { position: absolute; inset: 0; background: rgba(8,8,12,.38); }
+      .scene { position: absolute; inset: 0; }
       #scrim { position: absolute; left: 0; right: 0; top: 0; height: 640px;
         background: linear-gradient(to bottom, rgba(0,0,0,.55), rgba(0,0,0,0)); }
       #wordmark { position: absolute; top: 184px; right: 56px; display: flex; align-items: center; gap: 14px; color: #fff; }
@@ -22570,17 +22740,36 @@ function buildOverlay(input) {
       .wm-rule { width: 4px; height: 52px; background: var(--accent); }
       .wm-tag { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 30px; }
       #hook { position: absolute; left: 0; right: 0; }
-      .hook-inner, .end-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
+      .hook-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
       .hook-row { display: flex; align-items: center; gap: 28px; padding: 0 56px; }
       .hook-img { width: ${HOOK_IMAGE_SIZE}px; height: ${HOOK_IMAGE_SIZE}px; flex: none; border-radius: 50%; object-fit: cover; object-position: 50% 20%;
         border: 6px solid var(--accent); box-shadow: 0 8px 28px rgba(0,0,0,.5); }
       .hook-side { align-items: flex-start; padding: 0; }
       .hook-side .hook-line { font-size: 60px; text-align: left; }
-      .hook-line, .end-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
+      .hook-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
         color: #fff; text-transform: uppercase; text-align: center; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
       .hook-hi span { background: var(--accent); padding: 4px 22px 8px; text-shadow: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-      #end-card { position: absolute; left: 0; right: 0; }
-      .end-line { font-size: 58px; }
+      #ec { position: absolute; inset: 0; }
+      .ec-head { position: absolute; top: 318px; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+      .ec-line, .ec-hi, #ec-brand { font-family: "Montserrat", sans-serif; font-weight: 900; text-transform: uppercase; color: #fff;
+        text-align: center; line-height: 1.04; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
+      .ec-line { font-size: 58px; letter-spacing: 1px; }
+      .ec-hi { font-size: 84px; }
+      .ec-hi span { background: var(--accent); padding: 4px 26px 10px; text-shadow: none; }
+      #ec-thumb { position: absolute; left: 120px; top: 548px; width: 840px; height: 472px; border-radius: 30px; overflow: hidden;
+        box-shadow: 0 0 0 5px rgba(255,255,255,.92), 0 34px 90px rgba(0,0,0,.65); background: #000; }
+      #ec-thumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
+      #ec-play, #ec-ripple { position: absolute; left: 275px; top: 890px; width: 150px; height: 106px; }
+      #ec-play { border-radius: 30px; background: #FF0033; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+      #ec-play svg { position: absolute; left: 57px; top: 29px; }
+      #ec-ripple { border-radius: 36px; border: 6px solid #fff; }
+      #ec-touch { position: absolute; left: 332px; top: 927px; width: 96px; height: 96px; border-radius: 50%;
+        background: rgba(255,255,255,.55); border: 4px solid rgba(255,255,255,.9); box-shadow: 0 6px 22px rgba(0,0,0,.35); }
+      #ec-brand { position: absolute; left: 0; right: 0; font-size: 46px; }
+      #ec-chip { position: absolute; left: 240px; width: 600px; height: 96px; border-radius: 48px;
+        background: rgba(15,16,22,.88); border: 4px solid var(--accent); display: flex; align-items: center; justify-content: center; gap: 18px;
+        font-family: "Poppins", sans-serif; font-weight: 700; font-size: 40px; color: #fff; }
+      #ec-arrow { display: block; }
       .slot { position: absolute; left: 48px; width: 760px; }
       .card { background: rgba(15,16,22,.80); border-radius: 18px; padding: 26px 32px 28px; border-left: 8px solid var(--label); }
       .card-label { font-family: "Oswald", sans-serif; font-weight: 600; font-size: 26px; letter-spacing: 1.5px; color: var(--label); text-transform: uppercase; }
@@ -22594,14 +22783,16 @@ function buildOverlay(input) {
     </style>
   </head>
   <body>
-    <div id="root" data-composition-id="main" data-start="0" data-duration="${sec(durationSec)}" data-width="1080" data-height="1920">
-      <video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>
-      <div id="scrim" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="1"></div>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="${sec(totalSec)}" data-width="1080" data-height="1920">
+      <div id="cam"><video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>${freezeHtml}</div>
+      ${sceneHtml}
+      <div id="scrim" class="clip" data-start="0" data-duration="${sec(totalSec)}" data-track-index="1"></div>
       ${wordmark}
       ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px">${withImage ? `<div class="hook-row"><img class="hook-img" src="assets/${escapeHtml(input.hookImageFile)}" alt="${escapeHtml(overlay.hookImage?.alt ?? "")}" /><div class="hook-inner hook-side">${hookHtml}</div></div>` : `<div class="hook-inner">${hookHtml}</div>`}</div>` : ""}
       ${slotHtml}
       ${endHtml}
       ${captionHtml}
+      ${audio.join("\n      ")}
     </div>
     <script>
       const tl = gsap.timeline({ paused: true });
@@ -22611,7 +22802,7 @@ function buildOverlay(input) {
   </body>
 </html>
 `;
-  return { html, issues };
+  return { html, issues, durationSec: sec(totalSec) };
 }
 
 // src/shorts/faces.ts
@@ -23407,8 +23598,10 @@ Commands:
           model through HyperFrames on first use
   overlay Write a HyperFrames project per rendered short under <project>/overlay/<id>
           with the channel's wordmark, hook, name tag, context cards, captions,
-          and end card from edl.json, each placed clear of the faces detected
-          in the short (macOS Vision); render it with HyperFrames
+          zooms, mounted scenes, and an end card with the source thumbnail after
+          the last word, each placed clear of the faces detected in the short
+          (macOS Vision); sound effects come from HyperFrames' bundled library.
+          Render it with HyperFrames
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -23894,12 +24087,63 @@ async function commandFetch(flags, environment) {
   if (!info.hasAudio) warnings.push("The downloaded file has no audio stream.");
   return { master: path, ...info, next: `Pass --master ${path} to shots and render.`, warnings };
 }
-async function commandOverlay(flags, environment) {
+async function downloadThumbnail(videoId) {
+  for (const name of ["maxresdefault", "hqdefault"]) {
+    const response = await fetch(`https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/${name}.jpg`, { signal: AbortSignal.timeout(15e3) }).catch(() => void 0);
+    if (response?.ok) return new Uint8Array(await response.arrayBuffer());
+  }
+  return void 0;
+}
+function bundledSfx(environment) {
+  return async (keys, cache) => {
+    await mkdir4(cache, { recursive: true });
+    const files = {};
+    const missing = [];
+    const npx = await resolveFfmpegExecutable("npx", environment).catch(() => void 0);
+    for (const key of keys) {
+      const target = join6(cache, `${key}.mp3`);
+      if ((await stat2(target).catch(() => void 0))?.isFile()) {
+        files[key] = target;
+        continue;
+      }
+      const result = npx ? await runCommand(npx, ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "media-use", "resolve", "--type", "sfx", "--intent", key, "--local-only", "--json", "-p", cache], 12e4).catch(() => void 0) : void 0;
+      try {
+        const found = JSON.parse(result?.stdout.trim().split("\n").at(-1) ?? "");
+        if (found.ok && found.path && found.provenance?.library_key === key) {
+          await copyFile2(resolve3(cache, found.path), target);
+          files[key] = target;
+          continue;
+        }
+      } catch {
+      }
+      missing.push(key);
+    }
+    return { files, missing };
+  };
+}
+async function extractEndFrames(ffmpeg, video, directory) {
+  const output = {};
+  const variants = [
+    ["freeze", "freeze.jpg", "scale=out_range=full", "2"],
+    ["blur", "freeze-blur.jpg", "scale=1080:1920,gblur=sigma=38,hue=s=0.75,scale=out_range=full", "3"]
+  ];
+  for (const [key, file, filter, quality] of variants) {
+    const target = join6(directory, file);
+    await rm4(target, { force: true });
+    await runFfmpeg(ffmpeg, ["-loglevel", "error", "-y", "-sseof", "-0.25", "-i", video, "-an", "-vf", filter, "-pix_fmt", "yuvj420p", "-q:v", quality, "-update", "1", target]);
+    if ((await stat2(target).catch(() => void 0))?.isFile()) output[key] = `endcard/${file}`;
+  }
+  return output;
+}
+async function commandOverlay(flags, environment, dependencies) {
   const project = resolve3(required(flags, "project"));
   const { words, edl } = await loadProject(project);
   const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
   const ffmpeg = await resolveFfmpeg(flags, environment);
   const output = [];
+  let thumbnail = null;
+  const resolveSfx = dependencies.resolveSfx ?? bundledSfx(environment);
+  const sfxReported = /* @__PURE__ */ new Set();
   for (const short of shorts) {
     const id = short.spec.id;
     const video = join6(project, "render", `${id}.mp4`);
@@ -23923,6 +24167,51 @@ async function commandOverlay(flags, environment) {
       hookImageFile = `hook-image${extname2(source).toLowerCase() || ".jpg"}`;
       await copyFile2(source, join6(directory, "assets", hookImageFile));
     }
+    const spec = short.spec.overlay ?? {};
+    const durationSec = Math.floor(info.durationSec * 100) / 100;
+    const sceneFiles = [];
+    const sceneSfx = /* @__PURE__ */ new Set();
+    for (const [index, scene] of (spec.scenes ?? []).entries()) {
+      const source = resolve3(project, scene.src);
+      const text = await readFile2(source, "utf8").catch(() => void 0);
+      if (text === void 0) throw new ShortsInputError(`${id} scene ${index + 1} not found at ${source}.`);
+      const file = basename2(source);
+      if (sceneFiles.some((other) => other?.file === file)) throw new ShortsInputError(`${id} uses ${file} for two scenes; give each scene its own file.`);
+      await mkdir4(join6(directory, "compositions"), { recursive: true });
+      await copyFile2(source, join6(directory, "compositions", file));
+      const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1];
+      sceneFiles.push(compositionId ? { compositionId, file } : void 0);
+      for (const match of text.matchAll(/assets\/sfx\/([a-z0-9-]+)\.mp3/g)) sceneSfx.add(match[1]);
+    }
+    let endCardFiles;
+    if (edl.brand?.endCard) {
+      await mkdir4(join6(directory, "assets", "endcard"), { recursive: true });
+      endCardFiles = await extractEndFrames(ffmpeg, video, join6(directory, "assets", "endcard"));
+      if (!endCardFiles.freeze) issues.push({ short: id, level: "warning", message: "Could not extract the final frame; the end card plays on black." });
+      if (thumbnail === null) {
+        thumbnail = await (dependencies.fetchThumbnail ?? downloadThumbnail)(edl.videoId).catch(() => void 0);
+        if (!thumbnail) issues.push({ short: id, level: "warning", message: `Could not fetch the thumbnail of ${edl.videoId}; the end card shows text only.` });
+      }
+      if (thumbnail) {
+        await writeFile4(join6(directory, "assets", "endcard", "thumbnail.jpg"), thumbnail);
+        endCardFiles.thumbnail = "endcard/thumbnail.jpg";
+      }
+    }
+    const sfx = {};
+    if (edl.brand?.endCard || spec.zooms?.length || spec.scenes?.length) {
+      const keys = [.../* @__PURE__ */ new Set([...OVERLAY_SFX, ...sceneSfx])];
+      const found = await resolveSfx(keys, join6(project, "overlay", ".sfx"));
+      await mkdir4(join6(directory, "assets", "sfx"), { recursive: true });
+      for (const [key, path] of Object.entries(found.files)) {
+        await copyFile2(path, join6(directory, "assets", "sfx", `${key}.mp3`));
+        if (OVERLAY_SFX.includes(key)) sfx[key] = `sfx/${key}.mp3`;
+      }
+      const missing = found.missing.filter((key) => !sfxReported.has(key));
+      if (missing.length) {
+        missing.forEach((key) => sfxReported.add(key));
+        issues.push({ short: id, level: "warning", message: `Sound effects not found (${missing.join(", ")}); those cues play silent. They come from \`npx hyperframes@${HYPERFRAMES_VERSION} media-use resolve --type sfx --local-only\`.` });
+      }
+    }
     const faces = await detectFaces(ffmpeg, video);
     if (faces) await writeFile4(join6(directory, "faces.json"), `${JSON.stringify(faces)}
 `);
@@ -23931,14 +24220,17 @@ async function commandOverlay(flags, environment) {
       id,
       faces,
       hookImageFile,
+      endCardFiles,
+      sfx,
+      sceneFiles,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),
-      durationSec: Math.floor(info.durationSec * 100) / 100,
+      durationSec,
       videoFile: `${id}.mp4`,
       brand: edl.brand ?? {},
       speakers: edl.speakers ?? {},
-      overlay: short.spec.overlay ?? {}
+      overlay: spec
     });
     await Promise.all([
       writeFile4(join6(directory, "index.html"), plan.html),
@@ -23951,6 +24243,7 @@ async function commandOverlay(flags, environment) {
     output.push({
       id,
       project: directory,
+      durationSec: plan.durationSec,
       output: join6(project, "render", `${id}-overlay.mp4`),
       render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join6(project, "render", `${id}-overlay.mp4`)}`
     });
@@ -23973,7 +24266,7 @@ async function runShortsCli(argv, io, environment = process.env, dependencies = 
   }
   try {
     const { command, flags } = parseArguments(argv);
-    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
+    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
     return 0;

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
@@ -199,5 +199,33 @@ console.log(out);
     expect(Math.abs(result.shorts[0].durationSec - 5.4)).toBeLessThan(0.3);
     expect(await readFile(result.shorts[0].srt, 'utf8')).toContain('minions love Guru.');
     await stat(result.shorts[0].preview);
-  }, 120_000);
+
+    // Overlay: end card on the final frame with the thumbnail, a zoom, a mounted scene, bundled sounds.
+    await writeFile(join(directory, 'scene.html'), '<template><div id="root" data-composition-id="demo-scene" data-width="1080" data-height="1920">' +
+      '<audio id="demo-pop" class="clip" src="assets/sfx/sparkle.mp3" data-start="0.2" data-duration="0.5" data-volume="0.5"></audio></div>' +
+      '<script>window.__timelines["demo-scene"] = gsap.timeline({ paused: true });</script></template>');
+    edl.brand = { endCard: { channel: 'on Test' } };
+    edl.shorts[0].overlay = { zooms: [{ atSec: 0.4 }], scenes: [{ src: 'scene.html', mode: 'full', atSec: 1, durationSec: 1.5 }] };
+    await writeFile(join(directory, 'edl.json'), JSON.stringify(edl));
+    const requested: string[][] = [];
+    const overlay = io();
+    expect(await runShortsCli(['overlay', '--project', directory], overlay, process.env, {
+      fetchThumbnail: async () => new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      resolveSfx: async (keys, cache) => {
+        requested.push(keys);
+        await mkdir(cache, { recursive: true });
+        const files: Record<string, string> = {};
+        for (const key of keys) await writeFile(files[key] = join(cache, `${key}.mp3`), 'mp3');
+        return { files, missing: [] };
+      },
+    }), overlay.errors.join('')).toBe(0);
+    const built = JSON.parse(overlay.output.join('')).shorts[0];
+    expect(Math.abs(built.durationSec - result.shorts[0].durationSec - 2.8)).toBeLessThan(0.05);
+    const html = await readFile(join(built.project, 'index.html'), 'utf8');
+    expect(html).toContain('data-composition-src="compositions/scene.html"');
+    expect(html).toContain('<img src="assets/endcard/thumbnail.jpg"');
+    expect(requested[0]).toEqual(expect.arrayContaining(['riser', 'pop', 'sparkle']));
+    for (const file of ['endcard/freeze.jpg', 'endcard/freeze-blur.jpg', 'sfx/sparkle.mp3']) await stat(join(built.project, 'assets', file));
+    await stat(join(built.project, 'compositions', 'scene.html'));
+  }, 180_000);
 });

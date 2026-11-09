@@ -15,7 +15,7 @@ Run `node <skill-directory>/scripts/shorts.mjs <command>`, resolving `scripts/sh
 |---|---|
 | Node.js 18.17+ (with npx) | Every command |
 | FFmpeg | `shots`, `render`, `overlay`, `fetch`, `transcribe` |
-| HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
+| HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays and their bundled sound effects; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
 | The youtube-ctx skill (`npx skills add devhims/video2ctx --skill youtube-ctx`) | Researching the channel's look before overlays (step 7) |
 | yt-dlp, installed by the user (optional) | `fetch`, a 1080p source when there is no master |
 
@@ -83,13 +83,13 @@ Done when: every preview passes, every "no pause" edge was moved or reported, an
 
 ## 7. Add overlays
 
-When the user wants on-screen design (captions, a hook title, name tags, context cards, branding), follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames.
+When the user wants on-screen design (captions, a hook title, name tags, an end card, branding), follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. For zooms on key lines and animated scenes that act an idea out, follow [references/motion.md](references/motion.md).
 
 ```bash
 node <skill-directory>/scripts/shorts.mjs overlay --project <dir>
 ```
 
-Done when: every face report from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in that reference, and `<id>-overlay.mp4` is rendered.
+Done when: every face report and motion warning from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in both references, and `<id>-overlay.mp4` is rendered.
 
 ## 8. Report
 

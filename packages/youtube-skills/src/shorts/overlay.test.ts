@@ -51,7 +51,7 @@ describe('buildOverlay', () => {
   test('writes timed overlays with the brand and reports unmatched phrases', () => {
     const plan = buildOverlay({
       id: 'S1', short, words, segments, durationSec: 10, videoFile: 'S1.mp4',
-      brand: { wordmark: ['the', 'INNER', 'SCORECARD'], wordmarkTag: 'CLIPS', accent: '#E3262E', endCard: ['Full episode'] },
+      brand: { wordmark: ['the', 'INNER', 'SCORECARD'], wordmarkTag: 'CLIPS', accent: '#E3262E', endCard: { channel: 'on The Inner Scorecard' } },
       speakers: { guest: { name: 'Joaquin', role: 'Former OpenAI' } },
       overlay: { nameTag: { speaker: 'guest', atSec: 0.5 }, cards: [{ label: 'Context', title: 'Minions', atPhrase: 'no such phrase' }] },
     });
@@ -59,7 +59,7 @@ describe('buildOverlay', () => {
     expect(plan.html).toContain('<div class="hook-line hook-hi"><span>like the Minions</span></div>');
     expect(plan.html).toContain('--accent: #E3262E');
     expect(plan.html).toMatch(/id="name-tag" class="clip slot" data-start="3\.15"/);
-    expect(plan.html).toMatch(/id="end-card" class="clip" data-start="7\.6"/);
+    expect(plan.html).toMatch(/id="ec" class="clip" data-start="10"/);
     expect(plan.html).toContain('window.__timelines["main"] = tl;');
     expect(plan.issues).toEqual(expect.arrayContaining([
       expect.stringMatching(/no such phrase/),
@@ -127,5 +127,75 @@ describe('face-aware overlay', () => {
 
   test('falls back to typical face zones per framing', () => {
     expect(typicalFaces(timelineSegments(one))[0]!.boxes).toEqual([{ x: 120, y: 380, w: 840, h: 980 }]);
+  });
+});
+
+describe('end card, zooms and scenes', () => {
+  const short = { spec: { id: 'S1', hook: 'Hook', cuts: [] }, cuts: [], durationMs: 20_000 } as unknown as ResolvedShort;
+  const long: CaptionWord[] = [
+    { text: 'they', startMs: 1_000, endMs: 1_300 }, { text: 'get', startMs: 1_300, endMs: 1_500 }, { text: 'mischievous.', startMs: 1_500, endMs: 2_200 },
+    { text: 'the', startMs: 5_000, endMs: 5_200 }, { text: 'minions', startMs: 5_200, endMs: 5_700 }, { text: 'love', startMs: 5_700, endMs: 6_000 },
+    { text: 'what', startMs: 9_000, endMs: 9_300 }, { text: 'the', startMs: 9_300, endMs: 9_500 }, { text: 'hell?', startMs: 9_500, endMs: 10_000 },
+    { text: 'come', startMs: 16_000, endMs: 16_400 }, { text: 'on.', startMs: 16_400, endMs: 16_900 },
+  ];
+  const crop = [{ inMs: 0, outMs: 20_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } }];
+  const sfx = { riser: 'sfx/riser.mp3', 'impact-bass-1': 'sfx/impact-bass-1.mp3', 'click-soft': 'sfx/click-soft.mp3', pop: 'sfx/pop.mp3', 'whoosh-short': 'sfx/whoosh-short.mp3', whoosh: 'sfx/whoosh.mp3' };
+  const base = { id: 'S1', short, words: long, segments: crop, durationSec: 17, videoFile: 'S1.mp4', speakers: {} };
+
+  test('plays the end card after the last word on a blurred freeze, with the thumbnail and its sounds', () => {
+    const plan = buildOverlay({ ...base, brand: { endCard: { channel: 'on The Inner Scorecard' } }, overlay: {}, sfx,
+      endCardFiles: { freeze: 'endcard/freeze.jpg', blur: 'endcard/freeze-blur.jpg', thumbnail: 'endcard/thumbnail.jpg' } });
+    expect(plan.durationSec).toBe(19.8);
+    expect(plan.html).toMatch(/id="root" data-composition-id="main" data-start="0" data-duration="19\.8"/);
+    expect(plan.html).toMatch(/<div id="cam"><video id="a-roll"[^>]*data-duration="17"/);
+    expect(plan.html).toMatch(/id="end-freeze" class="clip" src="assets\/endcard\/freeze\.jpg" alt="" data-start="17"/);
+    expect(plan.html).toContain('<img src="assets/endcard/thumbnail.jpg"');
+    expect(plan.html).toContain('<span>Full episode</span>');
+    expect(plan.html).toContain('<span>Tap the link below</span>');
+    // Riser cresting on the thumbnail's landing, impact, tap click, chip pop.
+    expect(plan.html).toMatch(/src="assets\/sfx\/riser\.mp3" data-start="16\.193"[^>]*data-media-start="2\.272"/);
+    expect(plan.html).toMatch(/src="assets\/sfx\/impact-bass-1\.mp3" data-start="17\.32"/);
+    expect((plan.html.match(/<audio /g) ?? []).length).toBe(4);
+  });
+
+  test('shows text only without a thumbnail, and plays silent without sound files', () => {
+    const plan = buildOverlay({ ...base, brand: { endCard: { cta: '' } }, overlay: {} });
+    expect(plan.html).not.toContain('id="ec-thumb"');
+    expect(plan.html).not.toContain('id="ec-chip"');
+    expect(plan.html).not.toContain('<audio ');
+  });
+
+  test('zooms on the face for key lines, with a whoosh or a hit, and reports busy or misplaced ones', () => {
+    const faces = Array.from({ length: 40 }, (_, index) => ({ atSec: index / 2, boxes: [{ x: 140, y: 400, w: 800, h: 900 }] }));
+    const plan = buildOverlay({ ...base, brand: {}, faces, sfx, overlay: { zooms: [
+      { atPhrase: 'get mischievous' }, { atPhrase: 'what the hell', kind: 'punch' }, { atPhrase: 'minions love', kind: 'push' },
+    ] } });
+    expect(plan.html).toContain('tl.set("#cam", { transformOrigin: "50.0% 40.5%" }, 1.3);');
+    expect(plan.html).toContain('tl.to("#cam", { scale: 1.16, duration: 0.14, ease: "power3.out" }, 1.3);');
+    expect(plan.html).toContain('tl.to("#cam", { scale: 1.22, duration: 0.12, ease: "power3.out" }, 9);');
+    expect(plan.html).toMatch(/src="assets\/sfx\/whoosh-short\.mp3"/);
+    expect(plan.html).toMatch(/src="assets\/sfx\/impact-bass-1\.mp3"/);
+    expect(plan.issues).toEqual(expect.arrayContaining([expect.stringMatching(/comes 3\.\d s after the previous one/)]));
+
+    const split = [{ inMs: 0, outMs: 20_000, layout: { atMs: 0, mode: 'stack' as const } }];
+    const onSplit = buildOverlay({ ...base, segments: split, brand: {}, overlay: { zooms: [{ atSec: 2 }] } });
+    expect(onSplit.issues).toEqual([expect.stringMatching(/split screen/)]);
+    expect(onSplit.html).not.toContain('tl.to("#cam"');
+  });
+
+  test('mounts scenes in the bottom half or over the frame, with captions on the seam or low', () => {
+    const plan = buildOverlay({ ...base, brand: {}, sfx, overlay: { scenes: [
+      { src: 'scenes/net.html', mode: 'bottom', atPhrase: 'the minions', endPhrase: 'come on', expandAtPhrase: 'what the' },
+      { src: 'scenes/cake.html', mode: 'full', atSec: 1, durationSec: 2 },
+      { src: 'scenes/none.html', mode: 'full', atSec: 12, durationSec: 2 },
+    ] }, sceneFiles: [{ compositionId: 'net', file: 'net.html' }, { compositionId: 'cake', file: 'cake.html' }, undefined] });
+    expect(plan.html).toMatch(/<div id="net" class="scene" data-composition-id="net" data-composition-src="compositions\/net\.html" data-start="5" data-duration="11"[^>]*style="clip-path:inset\(100% 0% 0% 0%\)"/);
+    expect(plan.html).toContain('tl.to("#net", { clipPath: "inset(50% 0% 0% 0%)", duration: 0.3, ease: "power3.out" }, 5);');
+    expect(plan.html).toContain('tl.to("#net", { clipPath: "inset(0% 0% 0% 0%)", duration: 0.32, ease: "power2.inOut" }, 9);');
+    expect(plan.html).toMatch(/id="cake"[^>]*style="clip-path:circle\(0% at 50% 40%\)"/);
+    // "minions love" sits on the seam under the bottom scene; "hell?" sits low once it covers the frame.
+    expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="5"[^>]*style="top:909px/);
+    expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="9"[^>]*style="top:1422px/);
+    expect(plan.issues).toEqual(expect.arrayContaining([expect.stringMatching(/scene 3: scenes\/none\.html has no data-composition-id/)]));
   });
 });

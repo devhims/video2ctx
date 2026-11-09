@@ -326,7 +326,8 @@ export function captionWords(words: Word[], short: ResolvedShort, glossary?: Rec
   const output: CaptionWord[] = [];
   let offset = 0;
   for (const cut of short.cuts) {
-    const inCut = words.filter((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs < cut.outMs);
+    // Up to the cut's last planned word: the snapped out-edge can reach the onset of the next sentence.
+    const inCut = words.filter((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs <= cut.lastWordStartMs && word.startMs < cut.outMs);
     for (let index = 0; index < inCut.length;) {
       const word = inCut[index]!;
       const entry = entries.find((candidate) => candidate.tokens.every(
