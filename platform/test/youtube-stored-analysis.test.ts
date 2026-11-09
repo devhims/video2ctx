@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildAgentTurnResult } from '../src/agents/finalizer';
 import { MockLanguageModelV4 } from 'ai/test';
+import { classifyCapabilityWithModel } from '../src/agents/research/capability-router';
 import { runResearchAgentWithModel } from '../src/agents/research/research-agent';
 import { z } from 'zod';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
@@ -132,22 +133,38 @@ function finalizeThroughApplication(context: AgentToolContext, packets: Evidence
   return async () => (await finalize.mock.results.at(-1)!.value).answer as string;
 }
 
-it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and only fetches 10:45 (saved image %s)', async savedState => {
+// Replay from the classifier's structured output through the real tool gates and answer builder.
+// The model and image provider are scripted: this tests enforcement, not language understanding.
+it.each([
+  ...['available', 'missing', 'analysis fails'].map(savedState => ({
+    name: 'sourdough', savedState, before: 630000, after: 645000, savedLabel: '10:30', newLabel: '10:45',
+    question: 'Describe the dough shape.', observation: 'The dough is round.',
+    message: 'Re-inspect the saved 10:30 image and capture only 10:45. Report the gap if reuse fails.',
+  })),
+  { name: 'weather-map 3:30/3:48', savedState: 'analysis fails', before: 210000, after: 228000, savedLabel: '3:30', newLabel: '3:48',
+    question: 'Read the weather map overlays.', observation: 'The map displays Tuesday.',
+    message: 'Re-inspect the saved 3:30 weather map. If reuse fails, report the gap and do not recapture it. Capture only 3:48. Read its labels and compare the overlays if possible.' },
+])('mixed-frame replay: $name (saved image $savedState)', async ({ name, savedState, before, after, savedLabel, newLabel, question, observation, message }) => {
   const { context, provider, store, frames, packets } = setup();
-  const frameAccess = [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }];
+  const frameAccess = [{ videoId, savedTimestampsMs: [before], captureTimestampsMs: [after] }];
   const at = (timestampMs: number) => ({ ...frames, frames: [{ ...frames.frames[0]!, timestampMs }] });
-  const saved = store.put('frame', videoId, at(630000), { timestampMs: 630000 });
-  const answer = finalizeThroughApplication(context, packets, frameAccess, store.runStart());
+  const saved = store.put('frame', videoId, at(before), { timestampMs: before });
+
   if (savedState === 'missing') store.remove(saved);
-  provider.frames.mockResolvedValue({ value: at(645000), cacheStatus: 'miss' });
+  provider.frames.mockResolvedValue({ value: at(after), cacheStatus: 'miss' });
   context.analyzeFrames = vi.fn(async ({ frames }) => {
     const time = frames.frames[0]!.timestampMs;
-    if (savedState === 'analysis fails' && time === 630000) throw new Error('Saved image analysis failed.');
-    return { findings: [{ observation: 'The dough is round.', timestampsMs: [time] }], warnings: [] };
+    if (savedState === 'analysis fails' && time === before) throw new Error('Saved image analysis failed.');
+    return { findings: [{ observation, timestampsMs: [time] }], warnings: [] };
   });
   const calls = [
-    { name: 'analyze_video_frames', input: { assetVersions: [saved], focus: 'Inspect the saved dough shape.' } },
-    { name: 'get_video_frames', input: { videoId, timestampsMs: [645000], analysis: 'Describe the dough.' } },
+    { name: 'analyze_video_frames', input: { assetVersions: [saved], focus: question } },
+    // Reproduce the forbidden recovery attempt, including a mixed batch and the storyboard alternative.
+    ...(name.startsWith('weather') ? [
+      { name: 'get_video_frames', input: { videoId, timestampsMs: [before, after] } },
+      { name: 'get_video_storyboard', input: { videoId, timestampsMs: [before] } },
+    ] : []),
+    { name: 'get_video_frames', input: { videoId, timestampsMs: [after], analysis: question } },
     { name: 'complete_research', input: {} },
   ];
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -160,25 +177,31 @@ it.each(['available', 'missing', 'analysis fails'])('inspects saved 10:30 and on
   } });
   const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => ({
     content: [{ type: 'text', text: JSON.stringify({ confidence: 'medium', warnings: [],
-      blocks: [{ text: 'The dough is round.', evidenceIds: ['ref_1'] }] }) }],
+      blocks: [{ text: observation, evidenceIds: ['ref_1'] }] }) }],
     finishReason: { unified: 'stop', raw: 'stop' }, usage, warnings: [],
   }) });
-  await runResearchAgentWithModel({ model, finalizationModel, context,
-    toolNames: ['analyze_video_frames', 'get_video_frames', 'finalize_answer'],
-    message: 'Re-inspect the saved 10:30 image and capture only 10:45. Report the gap if reuse fails.',
-    decision: { route: 'inspect_video', videoId, useStoryboard: true, refreshFramesOnly: true, visualEvidence: 'required', frameAccess },
-  });
+  const classifier = new MockLanguageModelV4({ doGenerate: async () => ({
+    content: [{ type: 'tool-call', toolCallId: 'route', toolName: 'classify_request', input: JSON.stringify({
+      route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: [question], frameAccess,
+    }) }], finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage, warnings: [],
+  }) });
+  const decision = await classifyCapabilityWithModel({ model: classifier, message, sessionBrief: context.session!.brief(), signal: context.signal });
+  if (decision.route !== 'inspect_video' || !Array.isArray(decision.frameAccess)) throw new Error('Expected scoped inspection');
+  const answer = finalizeThroughApplication(context, packets, decision.frameAccess, store.runStart());
+  await runResearchAgentWithModel({ model, finalizationModel, context, message, decision });
+  expect(provider.storyboard).not.toHaveBeenCalled();
   expect(provider.frames).toHaveBeenCalledOnce();
-  expect(provider.frames).toHaveBeenCalledWith(expect.objectContaining({ timestampsMs: [645000] }), expect.anything(),
+  expect(provider.frames).toHaveBeenCalledWith(expect.objectContaining({ timestampsMs: [after] }), expect.anything(),
     expect.anything(), expect.anything(), expect.anything());
   expect(vi.mocked(context.analyzeFrames).mock.calls.map(([input]) => input.frames.frames[0]!.timestampMs))
-    .toEqual(savedState === 'missing' ? [645000] : [630000, 645000]);
-  const savedReport = savedState === 'available' ? 'I re-inspected the saved 10:30 frame' : 'I could not re-inspect the saved 10:30 frame';
+    .toEqual(savedState === 'missing' ? [after] : [before, after]);
+  const savedReport = savedState === 'available' ? `I re-inspected the saved ${savedLabel} frame` : `I could not re-inspect the saved ${savedLabel} frame`;
   // Findings keep their citations; the account of tool actions is a separate, uncited paragraph.
   const [findings, activity] = (await answer()).split('\n\n');
+  expect(findings).toContain(observation);
   expect(findings).toContain('[cite:');
   expect(activity).toContain(savedReport);
-  expect(activity).toContain('I retrieved the 10:45 frame and inspected it.');
+  expect(activity).toContain(`I retrieved the ${newLabel} frame and inspected it.`);
   expect(activity).not.toContain('[cite:');
 });
 
@@ -356,16 +379,15 @@ describe('application notes on frame turns', () => {
     context.frameAccess = [{ videoId: other, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
     provider.frames.mockResolvedValue({ value: at(other, 60000), cacheStatus: 'miss' });
     const current = await executeGetVideoFrames({ videoId: other, timestampsMs: [60000], analysis: 'What is he wearing?' }, context, 'capture');
-    const answer = (text: string, packets: EvidencePacket[], requestedSaved = false) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
+    const answer = (text: string, packets: EvidencePacket[]) => buildAgentTurnResult({ runId: context.runId, conversationId: crypto.randomUUID(),
       userMessageId: crypto.randomUUID(), agentMessageId: crypto.randomUUID() }, { userId: 'user', creditsRemaining: 100 },
       { answer: text, intent: 'topic_research', confidence: 'medium', citations: [], artifacts: [], warnings: [] },
-      [earlier, ...packets], 0, undefined, { requestedSaved, access: context.frameAccess, inventory: inventoryOf(context), startedAt }).answer;
+      [earlier, ...packets], 0, undefined, { access: context.frameAccess, inventory: inventoryOf(context), startedAt }).answer;
     /** Moves this turn's start after saves made by a test's own earlier turn. */
     const restart = () => { startedAt = store.runStart(); };
     return { context, store, at, savedVersion, earlier, current, answer, restart };
   }
   const earlierNote = /The 0:30 observation( of "[^"]+")? comes from an image inspected in an earlier turn, not in this one\./;
-  const claimNote = 'No frame saved before this turn was re-inspected in this turn';
 
   it('labels an earlier frame citation on a history answer with no frame route or inventory', async () => {
     const { context, earlier } = await turns();
@@ -397,10 +419,11 @@ describe('application notes on frame turns', () => {
     'I inspected the saved 0:30 frame again.',
     'Both frames show shirts.',
   ])('states that no saved frame was re-inspected, whatever the answer says: %s', async claim => {
-    const { current, answer } = await turns();
-    const text = answer(`${claim} The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current], true);
-    expect(text).toContain(claimNote);
-    expect(text).toContain('I retrieved the 1:00 frame and inspected it.');
+    const { context, current, answer } = await turns();
+    context.frameAccess!.push({ videoId, savedTimestampsMs: [30000], captureTimestampsMs: [] });
+    const text = answer(`${claim} The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
+    expect(text).toContain('I could not re-inspect the saved 0:30 frame');
+    expect(text).toContain('I retrieved the 1:00 frame of "lmnopqrstuv" and inspected it.');
   });
 
   it('counts an image served from session storage as a re-inspected saved frame', async () => {
@@ -408,7 +431,7 @@ describe('application notes on frame turns', () => {
     // A capture request answered from the session returns the image saved by the earlier turn.
     const reused = { ...current, assetVersions: [savedVersion] };
     const text = answer(`The frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [reused]);
-    expect(text).not.toContain(claimNote);
+    expect(text).toContain('I re-inspected the saved 0:30 frame');
   });
 
   it.each([
@@ -434,7 +457,6 @@ describe('application notes on frame turns', () => {
     const { current, answer } = await turns(put => put(other, 30000));
     const text = answer(`The new frame shows a shirt [cite:${current.excerpts[0]!.id}].`, [current]);
     expect(text).not.toContain('no recorded position');
-    expect(text).not.toContain(claimNote);
   });
 
   it('judges each citation by its own image when an earlier batch held several', async () => {
@@ -452,7 +474,6 @@ describe('application notes on frame turns', () => {
     const text = answer(`The saved frame shows a shirt [cite:${cited.id}] [cite:${current.excerpts[0]!.id}].`, [batch, current, again]);
     expect(text).toContain('I re-inspected the saved 0:30 frame');
     expect(text).not.toMatch(earlierNote);
-    expect(text).not.toContain(claimNote);
   });
 
   it('keeps the earlier-turn note when this turn inspected a different image at the same moment', async () => {
@@ -469,7 +490,6 @@ describe('application notes on frame turns', () => {
     const again = await analyze('frame', savedVersion, context, 'What is he wearing?');
     const text = answer(`I re-inspected the saved frame: a shirt [cite:${earlier.excerpts[0]!.id}] [cite:${current.excerpts[0]!.id}].`, [current, again]);
     expect(text).not.toMatch(earlierNote);
-    expect(text).not.toContain(claimNote);
   });
 });
 

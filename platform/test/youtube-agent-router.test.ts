@@ -18,7 +18,6 @@ import { createCapabilityProvider, savedOnlyProvider } from '../src/agents/resea
 import type { ConversationTurn } from '../src/agents/runtime/conversation-memory';
 import type { YouTubeAgentProvider } from '../src/agents/providers/youtube/provider';
 import type { AgentToolContext } from '../src/agents/providers/youtube/tool-context';
-import { readFrameRequest } from '../src/agents/research/frame-request';
 import { currentDateGuidance } from '../src/agents/runtime/current-date';
 
 describe('YouTube agent capability router', () => {
@@ -1167,33 +1166,6 @@ describe('YouTube agent capability router', () => {
     expect(model.doGenerateCalls).toHaveLength(2);
   });
 
-  it.each([
-    ['Capture only the opening frame', 0], ['Capture the frame at 1:30s', 90000],
-  ] as const)('binds "%s" to its actual timestamp', async (message, requested) => {
-    const videoId = 'abcdefghijk';
-    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['frame'] };
-    const at = (time: number) => [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [time] }];
-    const model = sequenceClassifier([{ ...base, frameAccess: 'agent_selected' }, { ...base, frameAccess: at(30000) }]);
-    const fallbackModel = classifierModel({ ...base, frameAccess: at(requested) });
-    const decision = await classifyCapabilityWithModel({ model, fallbackModel, message: `${message} of https://youtu.be/${videoId}.`, signal: new AbortController().signal });
-    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
-    expect(decision).toMatchObject({ frameAccess: at(requested) });
-  });
-
-  it('asks for an exact bound before capturing the first few seconds', async () => {
-    const videoId = 'abcdefghijk';
-    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
-    const model = sequenceClassifier([{ ...base, frameAccess: 'agent_selected' },
-      { ...base, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [120000] }] }]);
-    expect(await classifyCapabilityWithModel({ model, message: `Sample only the first few seconds of https://youtu.be/${videoId}`,
-      signal: new AbortController().signal })).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-  });
-
-  it.each(['Your previous answer described 0:30.', 'Find a 2 hour lecture and describe the cover.',
-    'Find 5 hours of content about exercise.'])('does not authorize or require a position from "%s"', message => {
-    expect(readFrameRequest(message).positions).toEqual([]);
-  });
-
   it('pins a discovery capture to the linked inspection subject', async () => {
     const videoId = 'abcdefghijk';
     const model = classifierModel({ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'exercise',
@@ -1201,30 +1173,22 @@ describe('YouTube agent capability router', () => {
     const message = `Capture only 0:30 of https://youtu.be/${videoId}.`;
     const decision = await classifyCapabilityWithModel({ model, message, signal: new AbortController().signal });
     expect(decision).toMatchObject({ route: 'inspect_video', videoId, frameAccess: [{ videoId, captureTimestampsMs: [30000] }] });
-    expect(await resolveCapabilityRoute({ message, persisted: { ...decision, frameAccess: [{ captureTimestampsMs: [30000], savedTimestampsMs: [] }] },
+    expect(await resolveCapabilityRoute({ persisted: { ...decision, frameAccess: [{ captureTimestampsMs: [30000], savedTimestampsMs: [] }] },
       classify: vi.fn(), persist: vi.fn() })).toMatchObject({ responseIntent: 'clarification' });
-  });
-
-  it('assigns comparison sheet times joined by "with" to their own videos', () => {
-    const a = 'abcdefghijk', b = 'lmnopqrstuv';
-    const message = `Compare the storyboard sheet at 0:30 of https://youtu.be/${a} with the one at 1:00 of https://youtu.be/${b}.`;
-    expect(readFrameRequest(message).positions.map(pos => [pos.time, pos.videoIds])).toEqual([[30000, [a]], [60000, [b]]]);
-    const common = `Compare the storyboard sheet at 0:30 in both https://youtu.be/${a} and https://youtu.be/${b}.`;
-    expect(readFrameRequest(common).positions.map(pos => [pos.time, pos.videoIds])).toEqual([[30000, [a, b]]]);
   });
 
   it('keeps paired storyboard positions on comparison routes, including resume', async () => {
     const a = 'abcdefghijk', b = 'lmnopqrstuv';
-    const model = classifierModel({ route: 'topic_research', comparisonVideoIds: [a, b], frameAccess: 'storyboard_only',
+    const storyboardSelections = [{ videoId: a, timestampsMs: [30000] }, { videoId: b, timestampsMs: [60000] }];
+    const model = classifierModel({ route: 'topic_research', comparisonVideoIds: [a, b], frameAccess: { storyboardSelections },
       visualEvidence: 'required', visualRequirements: ['compare the scenes'] });
     const message = `Compare the storyboard sheets at 0:30 of https://youtu.be/${a} and 1:00 of https://youtu.be/${b}.`;
     const decision = await classifyCapabilityWithModel({ message, model, signal: new AbortController().signal });
-    const storyboardSelections = [{ videoId: a, timestampsMs: [30000] }, { videoId: b, timestampsMs: [60000] }];
     expect(decision).toMatchObject({ route: 'topic_research', frameAccess: { storyboardSelections } });
-    const resume = (selections: typeof storyboardSelections) => resolveCapabilityRoute({ message, classify: vi.fn(), persist: vi.fn(),
+    const resume = (selections: typeof storyboardSelections) => resolveCapabilityRoute({ classify: vi.fn(), persist: vi.fn(),
       persisted: { ...decision, frameAccess: { storyboardSelections: selections } } });
     await expect(resume(storyboardSelections)).resolves.toEqual(decision);
-    await expect(resume(storyboardSelections.map(item => ({ ...item, timestampsMs: [30000, 60000] })))).resolves.toMatchObject({ responseIntent: 'clarification' });
+    await expect(resume([{ videoId: 'zzzzzzzzzzz', timestampsMs: [30000] }])).resolves.toMatchObject({ responseIntent: 'clarification' });
     if (decision.route !== 'topic_research') throw new Error('Expected comparison.');
     const context = inspectContext();
     const storyboard = vi.fn<NonNullable<typeof context.provider.storyboard>>(async (videoId, times) => ({
@@ -1242,13 +1206,13 @@ describe('YouTube agent capability router', () => {
     expect(research.doGenerateCalls[0]?.tools?.map(tool => tool.name)).not.toContain('get_video_frames');
   });
 
-  it('repairs an unrestricted storyboard refresh without granting exact capture', async () => {
+  it('accepts a storyboard-only refresh without granting exact capture', async () => {
     const videoId = 'abcdefghijk';
     const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['overview'] };
-    const model = sequenceClassifier([{ ...route, frameAccess: 'agent_selected' }, { ...route, frameAccess: 'storyboard_only' }]);
+    const model = classifierModel({ ...route, refreshFramesOnly: true, frameAccess: 'storyboard_only' });
     const message = `Refresh only the storyboard for https://youtu.be/${videoId}.`;
     const decision = await classifyCapabilityWithModel({ model, message, signal: new AbortController().signal });
-    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(model.doGenerateCalls).toHaveLength(1);
     expect(decision).toMatchObject({ frameAccess: 'storyboard_only', refreshFramesOnly: true });
   });
 
@@ -1284,7 +1248,7 @@ describe('YouTube agent capability router', () => {
 
   it('repairs a storyboard grant into the requested exact capture', async () => {
     const videoId = 'abcdefghijk';
-    const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene at 0:45'] };
+    const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene at 0:45'], timestampedFrameQuestion: 'What is visible?' };
     const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [45000] }];
     const classifier = sequenceClassifier([{ ...route, frameAccess: 'storyboard_only' }, { ...route, frameAccess }]);
     const message = `Capture only 0:45 of https://youtu.be/${videoId} and describe it. Do not retrieve any other images.`;
@@ -1299,119 +1263,20 @@ describe('YouTube agent capability router', () => {
     expect(names).not.toContain('get_video_storyboard');
   });
 
-  it.each([
-    ['1 hour 30 minutes', 5400000, [3600000, 1800000]],
-    ['1h30m15s', 5415000, [3600000, 1800000, 15000]],
-    ['1 hour 30 minutes and 15 seconds', 5415000, [3600000, 1815000]],
-  ] as const)('only grants the complete timestamp in "%s"', async (expression, expected, parts) => {
-    const videoId = 'abcdefghijk';
-    const message = `Capture only the frame at ${expression} of https://youtu.be/${videoId}.`;
-    const scope = (times: readonly number[]) => [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [...times] }];
-    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
-    const model = sequenceClassifier([{ ...base, frameAccess: scope(parts) }, { ...base, frameAccess: scope([expected]) }]);
-    const decision = await classifyCapabilityWithModel({ message, model, signal: new AbortController().signal });
-    expect(decision).toMatchObject({ frameAccess: scope([expected]) });
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(readFrameRequest(message).positions).toEqual([{ time: expected, role: 'capture', videoIds: [videoId] }]);
-    await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: scope(parts) }, message,
-      classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ responseIntent: 'clarification' });
-  });
-
-  it.each([
-    ['Capture only the frame at 1 hour 30 minutes of https://youtu.be/abcdefghijk.', [], 5400000, 1800000],
-    ['Capture only the linked instant at https://youtu.be/abcdefghijk?t=45 and describe it.', [], 45000, 90000],
-    ['Capture only the linked instant at https://www.youtube.com/watch?v=abcdefghijk&t=45.', [], 45000, 90000],
-    ['Capture only 0:45 of https://youtu.be/abcdefghijk.', [], 45000, 90000],
-    ['Capture only 0:45 of https://youtu.be/abcdefghijk?t=90s.', [], 45000, 90000],
-    ['Re-inspect the saved 0:30 frame of https://youtu.be/abcdefghijk. Do not recapture it if reuse fails. Capture only 1:00.', [30000], 60000, 30000],
-  ] as const)('repairs an unauthorized capture before the provider can receive it: %s', async (message, saved, fresh, forbidden) => {
-    const videoId = 'abcdefghijk';
-    const route = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
-    const valid = [{ videoId, savedTimestampsMs: [...saved], captureTimestampsMs: [fresh] }];
-    const invalid = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [fresh, forbidden] }];
-    const model = sequenceClassifier([{ ...route, frameAccess: invalid }, { ...route, frameAccess: valid }]);
-    const assets = saved.map(time => ({ kind: 'frame' as const, version: 'a'.repeat(64), videoId, current: true, collectedAt: 1, details: { timestampMs: time } }));
-    const decision = await classifyCapabilityWithModel({ model, message, sessionBrief: { assets, memories: [] }, signal: new AbortController().signal });
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(decision).toMatchObject({ frameAccess: valid });
-    if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
-    const context = inspectContext();
-    const frames = vi.fn<NonNullable<typeof context.provider.frames>>().mockResolvedValue({ value: { videoId,
-      frames: [{ timestampMs: fresh, width: 1, height: 1, mimeType: 'image/jpeg', imageBase64: '/9j/2Q==' }],
-      failures: [], meta: { partial: false, warnings: [] } }, cacheStatus: 'miss' });
-    context.provider.frames = frames;
-    await runResearchAgentWithModel({ message, decision, context, model: finalizingModel([
-      { name: 'get_video_frames', input: { videoId, timestampsMs: [fresh, forbidden] } },
-      { name: 'get_video_frames', input: { videoId, timestampsMs: [fresh] } },
-    ]) });
-    expect(frames.mock.calls.map(([request]) => request.timestampsMs)).toEqual([[fresh]]);
-
-    // A pre-upgrade turn being resumed must also close this path.
-    await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: invalid }, message, priorAssets: assets,
-      classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-  });
-
-  it.each([
-    ['Capture the linked instant at https://youtu.be/abcdefghijk?t=0', 0],
-    ['Capture the linked instant at https://www.youtube.com/embed/abcdefghijk?start=45', 45000],
-    ['Capture the linked instant at https://youtu.be/abcdefghijk#t=1m30s', 90000],
-    ['Capture only 0:30 of https://youtu.be/abcdefghijk?t=45', 30000],
-  ] as const)('resolves the exact capture position for %s', (message, time) => {
-    expect(readFrameRequest(message).positions).toEqual([{ videoIds: ['abcdefghijk'], role: 'capture', time }]);
-  });
-
-  it('ignores unrelated URL parameters and seek times on other hosts', () => {
-    expect(readFrameRequest('Inspect https://youtu.be/abcdefghijk?tracking=90s and https://example.org/watch?v=lmnopqrstuv&t=45s').positions).toEqual([]);
-  });
-
-  it.each([['0:30', 30000], ['1:00', 60000]] as const)('compares a saved frame with a new %s frame on another video', async (clock, time) => {
-    const a = 'abcdefghijk', b = 'lmnopqrstuv';
-    const frameAccess = [{ videoId: a, savedTimestampsMs: [30000], captureTimestampsMs: [] },
-      { videoId: b, savedTimestampsMs: [], captureTimestampsMs: [time] }];
-    const route = { route: 'topic_research', comparisonVideoIds: [a, b], frameAccess, visualEvidence: 'required', visualRequirements: ['compare frames'] };
-    const model = classifierModel(route);
-    const message = `Compare the saved 0:30 frame of https://youtu.be/${a} with a new ${clock} frame from https://youtu.be/${b}.`;
-    const assets = [{ videoId: a, kind: 'frame' as const, version: 'a'.repeat(64), current: true, collectedAt: 1, details: { timestampMs: 30000 } }];
-    const decision = await classifyCapabilityWithModel({ model, message, sessionBrief: { assets, memories: [] }, signal: new AbortController().signal });
-    expect(decision).toMatchObject({ route: 'topic_research', frameAccess });
-    expect(model.doGenerateCalls).toHaveLength(1);
-    const swapped = frameAccess.map(entry => ({ ...entry, videoId: entry.videoId === a ? b : a }));
-    await expect(resolveCapabilityRoute({ persisted: { ...decision, frameAccess: swapped }, message, priorAssets: assets,
-      classify: vi.fn(), persist: vi.fn() })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-  });
-
-  it('keeps exact capture permissions paired with each linked video', async () => {
-    const [a, b] = ['abcdefghijk', 'lmnopqrstuv'] as const;
-    const at = (videoId: string, time: number) => ({ videoId, savedTimestampsMs: [], captureTimestampsMs: [time] });
-    const route = { route: 'topic_research', comparisonVideoIds: [a, b], visualEvidence: 'required', visualRequirements: ['compare scenes'] };
-    const valid = [at(a, 30000), at(b, 60000)];
-    const model = sequenceClassifier([{ ...route, frameAccess: [at(a, 60000), at(b, 30000)] }, { ...route, frameAccess: valid }]);
-    const message = `Capture only 0:30 of https://youtu.be/${a} and capture 1:00 of https://youtu.be/${b}. Compare the scenes.`;
-    await expect(classifyCapabilityWithModel({ model, message, signal: new AbortController().signal })).resolves.toMatchObject({ frameAccess: valid });
-    expect(model.doGenerateCalls).toHaveLength(2);
-  });
-
-  it('closes a bad capture list when every classification attempt repeats it', async () => {
-    const videoId = 'abcdefghijk';
-    const model = classifierModel({ route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'],
-      frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [45000, 90000] }] });
-    await expect(classifyCapabilityWithModel({ message: `Capture only 0:45 of https://youtu.be/${videoId}.`, model,
-      signal: new AbortController().signal })).resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-  });
-
   it('retrieves only the requested storyboard sheet while exact capture remains closed', async () => {
     const videoId = 'abcdefghijk';
     const message = `Retrieve the storyboard sheet containing 1:30 of https://youtu.be/${videoId}. Do not capture any exact frames.`;
-    const classifier = classifierModel({ route: 'inspect_video', videoId, frameAccess: 'storyboard_only',
+    const classifier = classifierModel({ route: 'inspect_video', videoId, frameAccess: { storyboardSelections: [{ videoId, timestampsMs: [90000] }] },
       visualEvidence: 'required', visualRequirements: ['scene'] });
     const decision = await classifyCapabilityWithModel({ message, model: classifier, signal: new AbortController().signal });
     expect(classifier.doGenerateCalls).toHaveLength(1);
-    expect(decision).toMatchObject({ frameAccess: { storyboardTimestampsMs: [90000] } });
+    expect(decision).toMatchObject({ frameAccess: { storyboardSelections: [{ videoId, timestampsMs: [90000] }] } });
     if (decision.route !== 'inspect_video') throw new Error('Expected inspection.');
-    const resume = (persisted: unknown) => resolveCapabilityRoute({ persisted, message, classify: vi.fn(), persist: vi.fn() });
+    const resume = (persisted: unknown) => resolveCapabilityRoute({ persisted, classify: vi.fn(), persist: vi.fn() });
     await expect(resume(JSON.parse(JSON.stringify(decision)))).resolves.toEqual(decision);
-    await expect(resume({ ...decision, frameAccess: { storyboardTimestampsMs: [90000, 120000] } }))
-      .resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+    // An older single-video route has the same effective tool limit.
+    const legacy = { ...decision, frameAccess: { storyboardTimestampsMs: [90000] } };
+    await expect(resume(legacy)).resolves.toEqual(legacy);
     const context = inspectContext();
     const storyboard = vi.fn<NonNullable<typeof context.provider.storyboard>>().mockResolvedValue({ cacheStatus: 'miss',
       value: { videoId, frameCount: 20, intervalMs: 5000, sheets: [{ imageBase64: '/9j/2Q==', tileWidth: 100, tileHeight: 100,
@@ -1430,43 +1295,12 @@ describe('YouTube agent capability router', () => {
   it('accepts a capture list that excludes a saved frame the user set aside', async () => {
     const videoId = 'abcdefghijk';
     const frameAccess = [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [60000] }];
-    const model = sequenceClassifier([{ route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'], frameAccess,
-      setAsideFrames: [{ videoId, timestampMs: 30000 }] }]);
+    const model = sequenceClassifier([{ route: 'inspect_video', videoId, refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['scene'], frameAccess }]);
     const route = await classifyCapabilityWithModel({ model, message: `Ignore the old 0:30 frame entirely. Capture only 1:00 of https://youtu.be/${videoId}.`,
       sessionBrief: { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame', current: true, collectedAt: 1, details: { timestampMs: 30000 } }] },
       signal: new AbortController().signal });
     expect(route).toMatchObject({ route: 'inspect_video', frameAccess });
-    expect(route).not.toHaveProperty('setAsideFrames');
     expect(model.doGenerateCalls).toHaveLength(1);
-  });
-
-  it.each([[false], [true]])('limits a discovery capture to 1m30s or asks (classifier keeps agent_selected: %s)', async persists => {
-    const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial', visualEvidence: 'required', visualRequirements: ['dough'] };
-    const frameAccess = [{ savedTimestampsMs: [], captureTimestampsMs: [90000] }];
-    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }, ...(persists ? [] : [{ ...discovery, frameAccess }])]);
-    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
-      message: 'Find a sourdough tutorial and capture only 1m30s of that video. No other timestamps.' });
-    if (persists) expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-    else expect(route).toMatchObject({ route: 'topic_research', frameAccess });
-    expect(route).not.toHaveProperty('frameAccess', 'agent_selected');
-  });
-
-  // One parser serves both checks, so every format limits capture and requires the saved frame alike.
-  it.each(['1:30', '1m30s', '90 seconds', '1 minute 30 seconds', 'the 90-second mark'])('treats %s as a named time in both checks', async time => {
-    const videoId = 'abcdefghijk';
-    const sessionBrief = { memories: [], assets: [{ videoId, version: 'a'.repeat(64), kind: 'frame' as const, current: true, collectedAt: 1, details: { timestampMs: 90000 } }] };
-    const base = { route: 'inspect_video', videoId, visualEvidence: 'required', visualRequirements: ['scene'] };
-    const permission = sequenceClassifier([{ ...base, frameAccess: 'agent_selected' },
-      { ...base, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [90000] }] }]);
-    // No saved frame here, so only the capture-permission check can reject agent_selected.
-    await classifyCapabilityWithModel({ model: permission, signal: new AbortController().signal,
-      message: `Capture only ${time} of https://youtu.be/${videoId}.` });
-    expect(permission.doGenerateCalls).toHaveLength(2);
-    const saved = sequenceClassifier([{ ...base, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [120000] }] },
-      { ...base, frameAccess: [{ videoId, savedTimestampsMs: [90000], captureTimestampsMs: [120000] }] }]);
-    await classifyCapabilityWithModel({ model: saved, sessionBrief, signal: new AbortController().signal,
-      message: `Re-inspect the saved frame at ${time} and capture 2:00 of https://youtu.be/${videoId}.` });
-    expect(saved.doGenerateCalls).toHaveLength(2);
   });
 
   it.each([
@@ -1482,52 +1316,13 @@ describe('YouTube agent capability router', () => {
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
-  it.each(['0:30', '30 seconds', '0m30s'])('enforces a capture window within %s of the start during discovery', async limit => {
-    const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial',
-      refreshFramesOnly: true, visualEvidence: 'required', visualRequirements: ['dough'] };
-    const captureAt = (time: number) => [{ savedTimestampsMs: [], captureTimestampsMs: [time] }];
-    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }, { ...discovery, frameAccess: captureAt(30001) }]);
-    const fallbackModel = sequenceClassifier([{ ...discovery, frameAccess: captureAt(30000) }]);
-    const route = await classifyCapabilityWithModel({ model, fallbackModel, signal: new AbortController().signal,
-      message: `Find a sourdough tutorial under 5 minutes and capture a frame only within ${limit} of the start. Do not capture anything later.` });
-    expect(route).toMatchObject({ route: 'topic_research', frameAccess: captureAt(30000) });
-    expect(fallbackModel.doGenerateCalls).toHaveLength(1);
-  });
-
-  it('asks for clarification if every attempt leaves the capture window unrestricted', async () => {
-    const model = sequenceClassifier([{ route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial',
-      frameAccess: 'agent_selected', visualEvidence: 'required', visualRequirements: ['dough'] }]);
-    const route = await classifyCapabilityWithModel({ model, signal: new AbortController().signal,
-      message: 'Find a sourdough tutorial and capture a frame only within 0:30 of the start. Do not capture anything later.' });
-    expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
-  });
-
   it('keeps a fixed capture time when discovery chooses the video', async () => {
     const discovery = { route: 'topic_research', researchBreadth: 'focused', searchQuery: 'sourdough tutorial', visualEvidence: 'required', visualRequirements: ['dough'] };
     const frameAccess = [{ savedTimestampsMs: [], captureTimestampsMs: [30000] }];
-    const model = sequenceClassifier([{ ...discovery, frameAccess: 'agent_selected' }, { ...discovery, frameAccess }]);
+    const model = classifierModel({ ...discovery, frameAccess });
     const route = await classifyCapabilityWithModel({ model, message: 'Find a sourdough tutorial and capture only 0:30.', signal: new AbortController().signal });
     expect(route).toMatchObject({ route: 'topic_research', frameAccess });
-    expect(model.doGenerateCalls).toHaveLength(2);
-  });
-
-  it.each([
-    ['different times', 30000, 60000, 'Reuse the saved 0:30 frame and capture 1:00 of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
-    ['the same time', 30000, 30000, 'Re-inspect the saved 0:30 frame and capture a new 0:30 frame of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
-    ['a time in seconds', 30000, 60000, 'Reuse the saved frame at 30 seconds and capture 1:00 of https://youtu.be/lmnopqrstuv. Compare the outfits.'],
-  ])('recovers both requested operations when a plan drops the saved video (%s)', async (_name, savedTime, captureTime, message) => {
-    const [saved, linked] = ['abcdefghijk', 'lmnopqrstuv'];
-    const visual = { visualEvidence: 'required', visualRequirements: ['outfits'] };
-    const both = [{ videoId: saved, savedTimestampsMs: [savedTime], captureTimestampsMs: [] }, { videoId: linked, savedTimestampsMs: [], captureTimestampsMs: [captureTime] }];
-    const model = sequenceClassifier([
-      { route: 'inspect_video', videoId: linked, ...visual, frameAccess: [both[1]] },
-      { route: 'topic_research', comparisonVideoIds: [saved, linked], ...visual, frameAccess: both },
-    ]);
-    const route = await classifyCapabilityWithModel({ model, message, signal: new AbortController().signal,
-      sessionBrief: { memories: [], assets: [{ videoId: saved, version: 'a'.repeat(64), kind: 'frame', current: true, collectedAt: 1, details: { timestampMs: savedTime } }] } });
-    expect(route).toMatchObject({ route: 'topic_research', comparisonVideoIds: [saved, linked], frameAccess: both });
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(JSON.stringify(model.doGenerateCalls[1]!.prompt)).toContain(`saved 0:30 frame of ${saved}`);
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 
   it.each([
@@ -1545,6 +1340,15 @@ describe('YouTube agent capability router', () => {
       frameAccess: [{ videoId, savedTimestampsMs: [60000], captureTimestampsMs: [60000] }] }]);
     const route = await expectLastResort(classifyCapabilityWithModel({ model, message: `Refresh the frames of https://youtu.be/${videoId}`, signal: new AbortController().signal }));
     expect(route).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+  });
+
+  it('asks when failed classifier attempts disagree about capture scope', async () => {
+    const videoId = 'abcdefghijk';
+    const invalidRoute = { videoId, route: 'inspect_video', visualEvidence: 'invalid' };
+    const model = sequenceClassifier([{ ...invalidRoute, frameAccess: [{ videoId, savedTimestampsMs: [], captureTimestampsMs: [30000] }] },
+      { ...invalidRoute, frameAccess: 'agent_selected' }]);
+    await expect(classifyCapabilityWithModel({ model, message: `Refresh https://youtu.be/${videoId}`, signal: new AbortController().signal }))
+      .resolves.toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
   });
 
   it('keeps frame access outside the persisted route closed on resume', async () => {

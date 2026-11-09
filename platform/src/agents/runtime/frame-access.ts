@@ -101,7 +101,7 @@ export interface InventoryFrame { version: string; videoId: string; timestampMs?
  * An image is saved when the session stored it before this run started, however this run reached it.
  */
 export function frameTurnNotes(options: {
-  runId: string; startedAt: number; access?: FrameAccess; requestedSaved?: boolean; inventory: readonly InventoryFrame[]; packets: readonly EvidencePacket[];
+  runId: string; startedAt: number; access?: FrameAccess; inventory: readonly InventoryFrame[]; packets: readonly EvidencePacket[];
   cited: ReadonlyArray<{ packet: EvidencePacket; startMs: number; videoId?: string; title?: string }>;
 }): string[] {
   const { runId, access, inventory, packets } = options;
@@ -131,8 +131,6 @@ export function frameTurnNotes(options: {
     notes.push(`I re-inspected the saved ${named(additional[0]!.videoId, additional[0]!.timestampMs)}.`);
   else if (additional.length) notes.push(`I re-inspected ${additional.length} saved frame${additional.length === 1 ? '' : 's'} in this turn.`);
   const plannedSaved = access?.filter(entry => entry.savedTimestampsMs.length) ?? [];
-  if (options.requestedSaved && !plannedSaved.length && !reinspected.length)
-    notes.push('No frame saved before this turn was re-inspected in this turn.');
   const unplaced = new Set(savedBefore.filter(frame => frame.timestampMs === undefined && !analyzed.has(frame.version)
     && plannedSaved.some(entry => entry.videoId === frame.videoId)).map(frame => frame.videoId));
   for (const videoId of unplaced) notes.push(`Saved frames of "${title(videoId) ?? videoId}" have no recorded position, so this turn could not match them to requested times or re-inspect them.`);

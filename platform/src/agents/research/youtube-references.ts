@@ -1,9 +1,7 @@
-import { seekMilliseconds } from './timestamp-expression';
-
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
 // Consume the whole URL before checking its host. Embedded links and v= parameters belong to that URL.
-export const urlCandidates = /(?:https?:\/\/|(?<![\w./@-])(?:[\w-]+\.)+[a-z]{2,}\/)[^\s<>"']+/gi;
+const urlCandidates = /(?:https?:\/\/|(?<![\w./@-])(?:[\w-]+\.)+[a-z]{2,}\/)[^\s<>"']+/gi;
 function youTubeUrl(candidate: string): URL | undefined {
   const normalized = candidate.replace(/[\])},.!?;:'"]+$/g, '');
   try {
@@ -24,17 +22,6 @@ function videoIdsFromUrl(url: URL): string[] {
   const candidates = url.hostname.endsWith('youtu.be') ? [kind]
     : [url.searchParams.get('v'), ...(['shorts', 'live', 'embed'].includes(kind ?? '') ? [id] : [])];
   return candidates.filter((value): value is string => !!value && VIDEO_ID_PATTERN.test(value));
-}
-
-/** Seek parameters belong to their linked video. Numeric values are seconds. */
-export function linkedSeek(candidate: string): { videoIds: string[]; time: number } | undefined {
-  const url = youTubeUrl(candidate);
-  if (!url) return;
-  const videoIds = videoIdsFromUrl(url);
-  const value = url.searchParams.get('t') ?? url.searchParams.get('start') ?? new URLSearchParams(url.hash.slice(1)).get('t');
-  if (!videoIds.length || !value) return;
-  const time = seekMilliseconds(value);
-  if (time !== undefined) return { videoIds, time };
 }
 
 export function extractYouTubeVideoIds(message: string): string[] {

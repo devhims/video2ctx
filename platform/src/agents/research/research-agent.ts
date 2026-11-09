@@ -189,9 +189,6 @@ async function executeResearchRunWithAssets(options: {
   if (!options.persistedRoute) await options.onClassifying?.(classificationDeadlineAt);
   const decision = await resolveCapabilityRoute({
     persisted: options.persistedRoute,
-    message: options.message,
-    priorAssets: options.persistedRoute && 'frameAccess' in options.persistedRoute
-      ? options.session?.brief().assets.filter(asset => asset.collectedAt < (options.startedAt ?? Infinity)) : undefined,
     classify: () => withRunDeadline(classificationDeadlineAt, options.signal, signal => classifyCapabilityWithModel({
       message: options.message,
       conversationHistory: options.conversationHistory,
@@ -791,6 +788,9 @@ async function runResearchAgentWithModelWithinDeadline(options: {
       && packet.sources.some(source => source.videoId && !trackedContext.transcriptSelection?.tooLong?.has(source.videoId)
         && !trackedContext.transcriptSelection?.regionRestricted?.has(source.videoId)));
   const needsVisualWork = () => {
+    // Permission alone does not make optional images prerequisites for an answer.
+    if (!visualRequired && !options.decision.refreshFramesOnly
+      && !(options.decision.route === 'inspect_video' && options.decision.timestampedFrameQuestion)) return false;
     const failed = new Set([...toolFailures.values()].map(failure => failure.toolName));
     if (frameScope) {
       const { saved, captures, inspectedVersions, pendingCaptureVersions } = frameActivity(frameScope, options.context.runId, evidence.values());
@@ -918,7 +918,7 @@ async function runResearchAgentWithModelWithinDeadline(options: {
             ...(savedEvidenceSkill && !verifySaved ? ['Reuse supplied visual observations. Saved visual analysis tools remain available only for requested visual facts that are still missing; they do not replace required original caption/comment reads.'] : []),
             ...(!verifySaved ? ['For exact quotations or source corrections, use search_originals: omit assetVersion to find which saved source says it, then read that source by its version. Analyst summaries are not verbatim evidence. Read original passages before completing research.'] : []),
             ...(options.decision.savedOnly ? ['This run is saved-only. Retrieval and discovery are disabled, including incidental metadata calls. Missing saved assets are gaps, not permission to fetch.'] : []),
-            ...(frameScope ? [`Exact frame access for this turn: ${JSON.stringify(frameScope)}. Analyze the saved positions by their session asset versions. If saved inspection fails, stop that inspection and report the gap. Independently retrieve the authorized new positions. Earlier observations cannot stand in for a successful re-inspection.`] : []),
+            ...(frameScope ? [`Exact frame access for this turn: ${JSON.stringify(frameScope)}.`] : []),
             ...(requestedKinds.length ? [requestedEvidenceGuidance(requestedKinds)] : []),
             // The skill accompanies exactly the visual tools this model can call.
             ...(providerToolNames.some(name => VISUAL_TOOL_NAMES.includes(name)) ? [VISUAL_INSPECTION_SKILL] : []),
