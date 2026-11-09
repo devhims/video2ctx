@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { cpus, homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 
 import { YouTubeClientError, getDetails, getTranscript, type Transcript } from 'all-things-youtube';
 import { createRequestFetch } from '../direct/cli';
@@ -622,12 +622,21 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv) {
     const directory = join(project, 'overlay', id);
     await mkdir(join(directory, 'assets'), { recursive: true });
     await copyFile(video, join(directory, 'assets', `${id}.mp4`));
+    let hookImageFile: string | undefined;
+    const hookImage = short.spec.overlay?.hookImage;
+    if (hookImage) {
+      const source = resolve(project, hookImage.src);
+      if (!(await stat(source).catch(() => undefined))?.isFile()) throw new ShortsInputError(`${id} hookImage not found at ${source}.`);
+      hookImageFile = `hook-image${extname(source).toLowerCase() || '.jpg'}`;
+      await copyFile(source, join(directory, 'assets', hookImageFile));
+    }
     const faces = await detectFaces(ffmpeg, video);
     if (faces) await writeFile(join(directory, 'faces.json'), `${JSON.stringify(faces)}\n`);
     else issues.push({ short: id, level: 'warning', message: 'Face detection needs macOS (Vision); placing overlays around typical face areas for each framing. Check snapshots closely.' });
     const plan = buildOverlay({
       id,
       faces,
+      hookImageFile,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),

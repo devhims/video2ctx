@@ -36,6 +36,21 @@ Rank by how strong the hook is, then how surprising or useful the payoff is, the
 
 Start each cut on the first word of a sentence or speaker turn and end on a sentence end. Keep a speaker's own hedges ("if I understand correctly") when the clip makes a factual claim.
 
+## Write hook variants
+
+The first 3 seconds decide whether anyone stays, and the first try is rarely the best. For each short, write two variants beside the original as their own shorts, `<id>-b` and `<id>-c`, each with its own `hook` text:
+
+- **Teaser**: the clip's most vivid line, 1.5 to 4 s, as cut 1, then the original cuts. Pick an image or a turn ("sell the house to buy flour for the cake"), not a setup.
+- **Late start**: begin at the strongest sentence and drop the warm-up before it. This often shortens the short too.
+
+Write hook text for a stranger:
+
+- Name what makes the speaker credible ("Ex-OpenAI leader"), or what makes a person recognisable ("the future Microsoft CEO"), rather than a bare name few viewers know.
+- Prefer a question, a claim, or a stake ("It may take AI disasters") over a restatement of the topic.
+- Keep the speaker's own hedges: a disputed claim becomes a question.
+
+Use the channel's own title patterns, so they read as the channel's. Render the variants (`plan`, `render`, `overlay`), then compare only their openings: first 6 seconds, each with its hook on screen. Prefer openings on a single-person shot, since a hook over a split screen covers the top person's face. Give the user a ranked pick per short with a reason, and render in full only the variants they choose. Their real view-through results beat your judgment, so offer to swap a variant after a trial.
+
 ## Risks to note in the brief
 
 - **Unverified claims**: news events, statistics, or accusations. Keep the hedges and keep titles from stating them as fact.

@@ -19023,7 +19023,7 @@ var require_undici = __commonJS({
 // src/shorts/cli.ts
 import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
-import { join as join6, resolve as resolve3 } from "node:path";
+import { extname as extname2, join as join6, resolve as resolve3 } from "node:path";
 
 // ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
@@ -22273,6 +22273,7 @@ var CAPTION_HEIGHT = 102;
 var SEAM_CAPTION_TOP = 960 - CAPTION_HEIGHT / 2;
 var BROW_LINE = 0.3;
 var HEADING_GAP = 48;
+var HOOK_IMAGE_SIZE = 220;
 var TOP_SLOT_Y = 236;
 function timelineSegments(segments) {
   let offset = 0;
@@ -22486,7 +22487,10 @@ function buildOverlay(input) {
     placed.push({ ...timed, y: headingTop, height, xRange });
     return headingTop;
   };
-  const hookY = hook ? place("hook", hook, hookHeight(hookLines, 74, 18), FULL_WIDTH) : 0;
+  const withImage = Boolean(hook && input.hookImageFile);
+  const hookFont = withImage ? 60 : 74;
+  const hookBlockHeight = withImage ? Math.max(HOOK_IMAGE_SIZE, hookHeight(hookLines, hookFont, 16)) : hookHeight(hookLines, hookFont, 18);
+  const hookY = hook ? place("hook", hook, hookBlockHeight, FULL_WIDTH) : 0;
   const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, CARD_X)]));
   const endY = endCard ? place("end card", endCard, hookHeight(brand.endCard, 58, 22), FULL_WIDTH) : 0;
   const cutPoints = [.../* @__PURE__ */ new Set([
@@ -22527,7 +22531,8 @@ function buildOverlay(input) {
   if (hook) {
     tweens.push(
       `tl.from("#hook .hook-line", { y: 40, opacity: 0, duration: 0.35, ease: "power3.out", stagger: 0.12 }, ${sec(hook.startSec)});`,
-      `tl.to("#hook .hook-inner", { opacity: 0, y: -20, duration: 0.25, ease: "power2.in" }, ${sec(hook.endSec - 0.25)});`
+      ...withImage ? [`tl.from("#hook .hook-img", { scale: 0.6, opacity: 0, duration: 0.35, ease: "back.out(1.7)" }, ${sec(hook.startSec)});`] : [],
+      `tl.to(${withImage ? '"#hook .hook-row"' : '"#hook .hook-inner"'}, { opacity: 0, y: -20, duration: 0.25, ease: "power2.in" }, ${sec(hook.endSec - 0.25)});`
     );
   }
   for (const slot of visibleSlots) {
@@ -22566,6 +22571,11 @@ function buildOverlay(input) {
       .wm-tag { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 30px; }
       #hook { position: absolute; left: 0; right: 0; }
       .hook-inner, .end-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
+      .hook-row { display: flex; align-items: center; gap: 28px; padding: 0 56px; }
+      .hook-img { width: ${HOOK_IMAGE_SIZE}px; height: ${HOOK_IMAGE_SIZE}px; flex: none; border-radius: 50%; object-fit: cover; object-position: 50% 20%;
+        border: 6px solid var(--accent); box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+      .hook-side { align-items: flex-start; padding: 0; }
+      .hook-side .hook-line { font-size: 60px; text-align: left; }
       .hook-line, .end-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
         color: #fff; text-transform: uppercase; text-align: center; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
       .hook-hi span { background: var(--accent); padding: 4px 22px 8px; text-shadow: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
@@ -22588,7 +22598,7 @@ function buildOverlay(input) {
       <video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>
       <div id="scrim" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="1"></div>
       ${wordmark}
-      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px"><div class="hook-inner">${hookHtml}</div></div>` : ""}
+      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px">${withImage ? `<div class="hook-row"><img class="hook-img" src="assets/${escapeHtml(input.hookImageFile)}" alt="${escapeHtml(overlay.hookImage?.alt ?? "")}" /><div class="hook-inner hook-side">${hookHtml}</div></div>` : `<div class="hook-inner">${hookHtml}</div>`}</div>` : ""}
       ${slotHtml}
       ${endHtml}
       ${captionHtml}
@@ -23905,6 +23915,14 @@ async function commandOverlay(flags, environment) {
     const directory = join6(project, "overlay", id);
     await mkdir4(join6(directory, "assets"), { recursive: true });
     await copyFile2(video, join6(directory, "assets", `${id}.mp4`));
+    let hookImageFile;
+    const hookImage = short.spec.overlay?.hookImage;
+    if (hookImage) {
+      const source = resolve3(project, hookImage.src);
+      if (!(await stat2(source).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${id} hookImage not found at ${source}.`);
+      hookImageFile = `hook-image${extname2(source).toLowerCase() || ".jpg"}`;
+      await copyFile2(source, join6(directory, "assets", hookImageFile));
+    }
     const faces = await detectFaces(ffmpeg, video);
     if (faces) await writeFile4(join6(directory, "faces.json"), `${JSON.stringify(faces)}
 `);
@@ -23912,6 +23930,7 @@ async function commandOverlay(flags, environment) {
     const plan = buildOverlay({
       id,
       faces,
+      hookImageFile,
       short: rendered,
       words: captionWords(words, rendered, edl.glossary),
       segments: renderSegments(rendered),

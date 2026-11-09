@@ -37,6 +37,8 @@ export interface OverlayCard {
 export interface ShortOverlay {
   /** Speaker id from `speakers` to introduce with a name tag. */
   nameTag?: { speaker: string; atSec?: number; atPhrase?: string; durationSec?: number };
+  /** A photo shown beside the hook, e.g. of a person the hook names. `src` is a local image file. */
+  hookImage?: { src: string; alt?: string };
   /** Caption words to colour with the accent (matched ignoring case and punctuation). */
   emphasis?: string[];
   cards?: OverlayCard[];
@@ -76,6 +78,8 @@ const SEAM_CAPTION_TOP = 960 - CAPTION_HEIGHT / 2;
 const BROW_LINE = 0.3;
 /** Headings (hook, name tag, cards, end card) start this far below the wordmark. */
 const HEADING_GAP = 48;
+/** Diameter of the round photo beside a hook. */
+const HOOK_IMAGE_SIZE = 220;
 /** Vertical slot for the hook, name tag, cards, and end card. */
 const TOP_SLOT_Y = 236;
 
@@ -256,6 +260,8 @@ export interface OverlayInput {
   overlay: ShortOverlay;
   /** Faces in the rendered short; typical zones per framing are used when absent. */
   faces?: FaceSample[];
+  /** File name of the hook image inside the project's assets, when the overlay has one. */
+  hookImageFile?: string;
 }
 
 export interface OverlayPlan {
@@ -372,7 +378,11 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
     placed.push({ ...timed, y: headingTop, height, xRange });
     return headingTop;
   };
-  const hookY = hook ? place('hook', hook, hookHeight(hookLines, 74, 18), FULL_WIDTH) : 0;
+  // With a photo, the hook text shrinks to sit beside a round headshot.
+  const withImage = Boolean(hook && input.hookImageFile);
+  const hookFont = withImage ? 60 : 74;
+  const hookBlockHeight = withImage ? Math.max(HOOK_IMAGE_SIZE, hookHeight(hookLines, hookFont, 16)) : hookHeight(hookLines, hookFont, 18);
+  const hookY = hook ? place('hook', hook, hookBlockHeight, FULL_WIDTH) : 0;
   const slotY = new Map(visibleSlots.map((slot) => [slot.id, place(slot.id, slot, slot.height, CARD_X)]));
   const endY = endCard ? place('end card', endCard, hookHeight(brand.endCard!, 58, 22), FULL_WIDTH) : 0;
   // One caption position per stretch of unchanging screen: a camera shot, split wherever a title
@@ -431,7 +441,8 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   if (hook) {
     tweens.push(
       `tl.from("#hook .hook-line", { y: 40, opacity: 0, duration: 0.35, ease: "power3.out", stagger: 0.12 }, ${sec(hook.startSec)});`,
-      `tl.to("#hook .hook-inner", { opacity: 0, y: -20, duration: 0.25, ease: "power2.in" }, ${sec(hook.endSec - 0.25)});`,
+      ...(withImage ? [`tl.from("#hook .hook-img", { scale: 0.6, opacity: 0, duration: 0.35, ease: "back.out(1.7)" }, ${sec(hook.startSec)});`] : []),
+      `tl.to(${withImage ? '"#hook .hook-row"' : '"#hook .hook-inner"'}, { opacity: 0, y: -20, duration: 0.25, ease: "power2.in" }, ${sec(hook.endSec - 0.25)});`,
     );
   }
   for (const slot of visibleSlots) {
@@ -476,6 +487,11 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       .wm-tag { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 30px; }
       #hook { position: absolute; left: 0; right: 0; }
       .hook-inner, .end-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 60px; }
+      .hook-row { display: flex; align-items: center; gap: 28px; padding: 0 56px; }
+      .hook-img { width: ${HOOK_IMAGE_SIZE}px; height: ${HOOK_IMAGE_SIZE}px; flex: none; border-radius: 50%; object-fit: cover; object-position: 50% 20%;
+        border: 6px solid var(--accent); box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+      .hook-side { align-items: flex-start; padding: 0; }
+      .hook-side .hook-line { font-size: 60px; text-align: left; }
       .hook-line, .end-line { font-family: "Montserrat", sans-serif; font-weight: 900; font-size: 74px; line-height: 1.04;
         color: #fff; text-transform: uppercase; text-align: center; text-shadow: 0 4px 18px rgba(0,0,0,.55); }
       .hook-hi span { background: var(--accent); padding: 4px 22px 8px; text-shadow: none; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
@@ -498,7 +514,9 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       <video id="a-roll" class="clip" src="assets/${escapeHtml(input.videoFile)}" playsinline data-start="0" data-duration="${sec(durationSec)}" data-track-index="0" data-has-audio="true"></video>
       <div id="scrim" class="clip" data-start="0" data-duration="${sec(durationSec)}" data-track-index="1"></div>
       ${wordmark}
-      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px"><div class="hook-inner">${hookHtml}</div></div>` : ''}
+      ${hook ? `<div id="hook" class="clip" data-start="${sec(hook.startSec)}" data-duration="${sec(hook.endSec - hook.startSec)}" data-track-index="3" style="top:${hookY}px">${withImage
+        ? `<div class="hook-row"><img class="hook-img" src="assets/${escapeHtml(input.hookImageFile!)}" alt="${escapeHtml(overlay.hookImage?.alt ?? '')}" /><div class="hook-inner hook-side">${hookHtml}</div></div>`
+        : `<div class="hook-inner">${hookHtml}</div>`}</div>` : ''}
       ${slotHtml}
       ${endHtml}
       ${captionHtml}

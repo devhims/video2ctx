@@ -117,6 +117,14 @@ describe('face-aware overlay', () => {
     expect(plan.html).toMatch(/id="hook"[^>]*style="top:310px/);
   });
 
+  test('puts a round photo beside the hook when one is given', () => {
+    const plan = buildOverlay({ id: 'S4', short, words, segments: one, durationSec: 6, videoFile: 'S4.mp4', brand: {}, speakers: {},
+      overlay: { hookImage: { src: 'satya.jpg', alt: 'Satya Nadella' } }, hookImageFile: 'hook-image.jpg' });
+    expect(plan.html).toContain('<img class="hook-img" src="assets/hook-image.jpg" alt="Satya Nadella" />');
+    expect(plan.html).toContain('<div class="hook-row">');
+    expect(plan.html).toContain('tl.from("#hook .hook-img"');
+  });
+
   test('falls back to typical face zones per framing', () => {
     expect(typicalFaces(timelineSegments(one))[0]!.boxes).toEqual([{ x: 120, y: 380, w: 840, h: 980 }]);
   });

@@ -74,6 +74,7 @@ Use the channel's own words and colours. Cards state only facts you can source: 
 
 - `wordmark`: when there are three or more lines, the first is set small (as in "the").
 - `nameTag` and `cards`: time them with `atPhrase` (the first matching caption words) or `atSec` (seconds into the short). A name tag with neither follows the hook.
+- `hookImage` (`{ "src": "images/person.jpg", "alt": "Name" }`): a round photo beside the hook, for when the hook names someone viewers may not recognise. `src` is a local file, relative to the project. Use only images whose license allows it, such as Wikimedia Commons or the person's official press kit. Ask before downloading one, crop it around the face, and put the credit the license requires in the description.
 - `emphasis`: 3 to 10 words per short, the ones carrying the meaning. A word coloured everywhere stops meaning anything.
 - Fonts are HyperFrames' bundled Montserrat (hook, end card), Oswald (wordmark, card titles), Poppins (captions) and Inter (card text). To use the channel's own fonts, add `@font-face` rules and the font files to the generated project.
 
