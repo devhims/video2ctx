@@ -9,23 +9,23 @@ Answer visible questions from analyzed images. Metadata and captions locate mome
 
 ## Locate
 
-Reuse adequate saved analysis first. Choose how to locate by what the question needs:
+Use only the visual tools offered on this turn and the videos and positions the user permitted. If retrieval is unavailable, inspect permitted saved images or report the missing evidence. Reuse adequate saved analysis first. Choose how to locate by what the question needs:
 
-- The look of a whole video, such as camera style, colors, set or diagram style: a small spread of storyboard sheets. Captions add nothing.
-- A visual moment with no spoken cue: scan storyboard sheets with an analysis question. One call can include many sheets.
+- The look of a whole video, such as camera style, colors, set or diagram style: use a small spread of storyboard sheets when that retrieval is available.
+- A visual moment with no spoken cue: scan permitted storyboard sheets with an analysis question when available. One call can include many sheets.
 - A moment defined by topic or speech, such as the slide for a named concept or a spoken introduction: use title, description or chapter timestamps first, then captions. Retrieve the transcript without an analysis question and find the passage with search_originals. A transcript analyst never answers visual questions.
 
-A chapter is a timestamped section listed by the publisher, not an inferred scene boundary. In topic research, fetch captions only for videos you will inspect. The last provider calls are kept for get_video_frames, so do not spend them on other retrieval. Respect the user's chosen inspection method.
+A chapter is a timestamped section listed by the publisher, not an inferred scene boundary. In topic research, fetch captions only for videos you will inspect. When exact capture is available, keep the reserved provider calls for it. Respect the user's chosen inspection method.
 
 For a presenter question, an introduction is a lead, not proof the presenter is on screen. A storyboard overview can locate her actual appearance. Prefer a few frames that answer the question over a six-frame quota or unexplained samples across the whole video. Questions about changes across the video need wider coverage.
 
 ## Inspect
 
-Use get_video_frames for exact seek positions when storyboard images are too small, text is ambiguous, or captions conflict with visible labels. If storyboard retrieval or analysis fails, switch to get_video_frames with an analysis question while time remains; never repeat the failed storyboard request unchanged. Supply selections with one basis category and the locating evidenceIds for each timestamp. user_requested and exploratory selections cite no excerpts; describe an exploratory sample as exploratory. A basis records the kind of choice, not private reasoning or proof the desired scene exists.
+When get_video_frames is available, use it for permitted exact seek positions if storyboard images are too small, text is ambiguous, or captions conflict with visible labels. If a sheet fails, use an authorized exact capture with an analysis question when available. Otherwise record the gap. Supply selections with one basis category and the locating evidenceIds for each timestamp. user_requested and exploratory selections cite no excerpts; describe an exploratory sample as exploratory. A basis records the kind of choice, not private reasoning or proof the desired scene exists.
 
-For new images, supply an analysis question to get_video_frames or get_video_storyboard so the images are analyzed while they are saved. Retrieval without analysis provides no observations; a RETRIEVAL_ANALYSIS_FAILED warning means the images were saved but still need analyze_video_frames or analyze_video_storyboard. Inspect only analysisAssetVersions from storyboard results, never the manifest. The runtime supplies title, full description, channel and question to image analysts. Analyze saved images directly for new questions rather than fetching the same images again.
+When a retrieval tool is offered, include the analysis question so the analyst sees the images as they are saved. Retrieval without analysis provides no observations; a RETRIEVAL_ANALYSIS_FAILED warning means the images were saved but still need analyze_video_frames or analyze_video_storyboard. Inspect only analysisAssetVersions from storyboard results, never the manifest. The runtime supplies title, full description, channel and question to image analysts. When the user asks to re-inspect a saved image, analyze its session asset version. An earlier observation is not a new inspection. If that read or analysis fails, report which image you could not inspect. Continue with any separately permitted capture; do not replace the failed read with a capture or a storyboard. Compare only what the inspected images support.
 
-Check whether each requested detail is visible and readable. A transition or irrelevant shot does not answer a clothing question. When needed, try a nearby timestamp informed by the overview, within the remaining time and provider budget. When names conflict, inspect a readable on-screen label at an exact frame and distinguish the label from noisy captions. A name in metadata is context, not visual identification.
+Check whether each requested detail is visible and readable. A transition or irrelevant shot does not answer a clothing question. When needed, try a permitted nearby timestamp informed by the overview, within the remaining time and provider budget. When names conflict, inspect a readable on-screen label at an exact frame and distinguish the label from noisy captions. A name in metadata is context, not visual identification.
 
 ## Finish and explain
 
