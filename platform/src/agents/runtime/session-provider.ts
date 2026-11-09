@@ -19,6 +19,7 @@ export function sessionProvider(
   onRetrieved?: (claim: string, version: string) => void,
   assetCache?: RunAssetCache,
   refreshFrames = refresh,
+  refreshSheets = refresh,
 ): YouTubeAgentProvider {
   const refreshed = new Set<string>();
   const remember = (result: CachedResult<unknown>, generation: number) => {
@@ -162,7 +163,7 @@ export function sessionProvider(
             // Sheet indexes are level-specific, so each served resolution has its own manifest.
             const requested = options.resolution ?? 'standard';
             const manifestKey = (resolution: StoryboardResolution) => `storyboard:${id}:manifest${resolution === 'high' ? ':high' : ''}`;
-            const fresh = rediscovering || (refresh && !refreshed.has(manifestKey(requested))) || !!options.refresh;
+            const fresh = rediscovering || (refreshSheets && !refreshed.has(manifestKey(requested))) || !!options.refresh;
             let prefetched: CachedResult<Storyboard> | undefined;
             let loaded = false;
             const retrieveManifest = (resolution: StoryboardResolution, reload: boolean, load: () => Promise<CachedResult<Storyboard>>) => store.retrieve(
@@ -216,7 +217,7 @@ export function sessionProvider(
               if (generation !== store.generation()) throw new Error('Session assets changed during retrieval.');
               const key = `storyboard:${id}:${manifestVersion}:${index}`;
               const hit =
-                !prefetched && !(refresh && !refreshed.has(key)) && !options.refresh && (await store.lookup<Storyboard>(key));
+                !prefetched && !(refreshSheets && !refreshed.has(key)) && !options.refresh && (await store.lookup<Storyboard>(key));
               return { index, hit };
             }));
             for (const { index, hit } of cached) {
@@ -233,7 +234,7 @@ export function sessionProvider(
               const fetched = prefetched ?? await provider.storyboard!(
                 id,
                 undefined,
-                { sheetIndexes: missing, maxSheets: missing.length, ...(served === 'high' ? { resolution: served } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refresh || options.refresh) ? {refresh:true} : {}) },
+                { sheetIndexes: missing, maxSheets: missing.length, ...(served === 'high' ? { resolution: served } : {}), ...(options.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt }), ...(options.signal ? {signal:options.signal} : {}), ...((refreshSheets || options.refresh) ? {refresh:true} : {}) },
                 diagnostic,
                 onReady ? value => { if (sameManifest(value)) onReady(storyboardSchema.parse({ ...value,
                   sheets: [...results.flatMap(result => result.value.sheets), ...value.sheets].sort((a, b) => a.firstFrameIndex - b.firstFrameIndex),

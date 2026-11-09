@@ -8,7 +8,8 @@ import {
   capabilityRouteDecisionSchema,
   answerDetailSchema,
   comparisonVideoIdsSchema,
-  frameAccessSchema,
+  frameAccessListSchema,
+  unscopedImageAccessSchema,
   requestedEvidenceSchema,
   numberedItemCountSchema,
   visualEvidenceSchema,
@@ -18,6 +19,9 @@ import {
   type FinalizeAnswerInput,
 } from '../contracts';
 import { sessionBriefForModel, type SessionBrief } from '../runtime/session-evidence';
+import { extractYouTubeVideoIds, youTubeUrls } from './youtube-references';
+export { extractYouTubeVideoIds } from './youtube-references';
+import { frameRequestIssue, readFrameRequest, requestedSheets, type FrameRequest } from './frame-request';
 import { conversationAssistantMessage, type ConversationTurn } from '../runtime/conversation-memory';
 import { assertModelCostAvailable, type AgentModelCostBudget } from '../runtime/model-budget';
 import { AGENT_CLASSIFICATION_TIMEOUT_MS, withRunDeadline } from '../runtime/deadline';
@@ -30,7 +34,8 @@ const classifierDecisionSchema = z.object({
   skill: z.enum(['verify_saved_evidence']).optional().describe('Verify saved evidence: use for follow-ups that read saved original captions/comments, check exact quotations or precise passage links, or correct source claims. It does not by itself prohibit fetching; set savedOnly separately. Omit for broad summaries and visual analysis.'),
   requestedEvidence: requestedEvidenceSchema.optional().describe('Evidence the user explicitly asks to be read before answering: original_quotes for exact quotations, verbatim wording or precise passage links from captions; comments for what viewers or commenters say. Research must read each or report it unavailable. Omit when not explicitly requested.'),
   savedOnly: z.boolean().optional().describe('True when the user requires existing saved evidence only or prohibits fresh retrieval. All provider access is disabled for this run; use saved evidence reads and report missing assets.'),
-  frameAccess: z.union([frameAccessSchema, z.literal('agent_selected')]).optional().describe('For exact captures on one video, list only the permitted NEW capture timestamps in milliseconds. Put saved-only inspection positions separately in savedTimestampsMs, even if their assets are missing. Use agent_selected only for open-ended capture positions.'),
+  frameAccess: z.union([frameAccessListSchema, unscopedImageAccessSchema]).optional().describe('Permission to retrieve new images. Omit to disable both exact captures and storyboard retrieval. Use storyboard_only for requested storyboard sheets or an overview. A named sheet time limits the retrieval to the sheet containing that time. When the user fixes frame positions, saved or new, list one entry per video the turn touches: captureTimestampsMs holds only the permitted NEW capture positions in milliseconds, empty when nothing may be captured; savedTimestampsMs holds saved positions to re-inspect without recapture, even if their assets are missing. When the videos are still to be found by discovery, give one entry without videoId holding the capture times. Required for exact-timestamp questions and for any limit on what may be captured. Use agent_selected only when new frames may help and the user leaves every position to you.'),
+  setAsideFrames: z.array(z.object({ videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/), timestampMs: z.number().int().nonnegative() })).max(24).optional().describe('Saved frames from the session inventory at a time the user named that this turn must not use: the user excluded them, or the time refers to another video. Every saved frame at a named time belongs either in its video\'s frameAccess entry or here.'),
   timestampedFrameQuestion: z.string().trim().min(1).max(500).optional().describe('For inspect_video: when the user supplies exact timestamps and asks what is visible, copy the focused visual question here. Include this for a request to describe each specified frame. Omit for image retrieval only or saved-only requests.'),
   refreshFramesOnly: z.boolean().optional().describe('For inspection or research, including multi-video comparisons: true when the user asks to freshly capture or refresh frames only. Reuse verified video metadata. Leave refreshEvidence unset unless other source evidence must also be refreshed.'),
   refreshEvidence: z.boolean().optional().describe('Except for a frames-only refresh, true only when the user explicitly asks to fetch again, refresh or get fresh source data. Choose an executable route in that case.'),
@@ -48,7 +53,7 @@ const classifierDecisionSchema = z.object({
   channelId: capabilityRouteDecisionSchema.options[0].shape.channelId.describe('For research restricted to one supplied channel, copy its channel ID or handle from suppliedChannelIds. Never invent a channel identifier.'),
   videoId: capabilityRouteDecisionSchema.options[1].shape.videoId.optional(),
   reason: capabilityRouteDecisionSchema.options[3].shape.reason.optional().describe('Required for finalize: explain why existing context suffices, what scope is missing, or why the request is unsupported. The finalizer writes the response.'),
-  visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable storyboard and frame tools.'),
+  visualEvidence: visualEvidenceSchema.optional().describe('Required for executable routes. Whether answering needs images: none, helpful or required. helpful and required enable visual analysis. Required visuals need an explicit image grant unless the turn is saved-only. Use agent_selected for an ordinary visual question with delegated positions, or storyboard_only when only sheets are permitted.'),
   visualRequirements: visualRequirementsSchema.optional().describe('Only when visualEvidence is required: each requested fact that needs images, such as "presenter clothing".'),
 });
 
@@ -130,7 +135,10 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   // Keep the provider schema strict. Normalize a copy only at the acceptance
   // boundary, retaining which fields needed a fallback before the SDK parses them.
   const input = { ...value } as Record<string, unknown>;
-  if (input.frameAccess && typeof input.frameAccess === 'object' && input.refreshFramesOnly !== true) {
+  // Fixed captures imply a frames refresh. A saved-only conflict is reported against frameAccess below.
+  const capturesFrames = Array.isArray(input.frameAccess) && input.frameAccess.some(entry =>
+    Array.isArray((entry as { captureTimestampsMs?: unknown })?.captureTimestampsMs) && (entry as { captureTimestampsMs: unknown[] }).captureTimestampsMs.length > 0);
+  if (capturesFrames && input.refreshFramesOnly !== true && input.savedOnly !== true) {
     input.refreshFramesOnly = true;
     defaultedFields.push('refreshFramesOnly');
   }
@@ -172,11 +180,24 @@ function validateClassifierDecision(value: unknown, options: ClassifierValidatio
   }
   if (input.refreshFramesOnly === true && input.visualEvidence === 'none') issue('visualEvidence', 'Refreshing frames requires visual tool access.');
   const scope = parsed.success && parsed.data.frameAccess;
-  if (scope && scope !== 'agent_selected') {
-    if (!suppliedVideoIds.includes(scope.videoId) || (input.route === 'inspect_video' && input.videoId !== scope.videoId))
-      issue('frameAccess', 'Scope frame access to the supplied video being inspected.');
-    const times = [...scope.savedTimestampsMs, ...scope.captureTimestampsMs];
-    if (new Set(times).size !== times.length) issue('frameAccess', 'Give each timestamp exactly one role, saved inspection or fresh capture.');
+  if (scope && input.route === 'finalize') issue('route', 'Image retrieval or saved-frame inspection requires an executable route.');
+  if (typeof scope === 'string' && input.savedOnly === true)
+    issue('frameAccess', 'Saved-only requests cannot retrieve new images. Omit frameAccess, or list only savedTimestampsMs.');
+  if (Array.isArray(scope)) {
+    const scoped = scope.flatMap(entry => entry.videoId ? [entry.videoId] : []);
+    const open = scope.filter(entry => !entry.videoId);
+    // Every scoped video must be a subject of the route, or its frames cannot be read or captured.
+    const subjects = input.route === 'inspect_video' ? [input.videoId]
+      : input.route === 'topic_research' && Array.isArray(input.comparisonVideoIds) ? input.comparisonVideoIds : [];
+    if (input.savedOnly === true && capturesFrames)
+      issue('frameAccess', 'Saved-only requests cannot capture frames. List only savedTimestampsMs, or omit savedOnly if the user authorized new captures.');
+    else if (scoped.some(id => !suppliedVideoIds.includes(id) || !subjects.includes(id)) || new Set(scoped).size !== scoped.length)
+      issue('frameAccess', 'List one frameAccess entry per video, only for the route\'s subjects. When saved or new frames span several videos, use topic_research with every one in comparisonVideoIds.');
+    else if (open.length && (open.length > 1 || scope.length > 1 || open.some(entry => entry.savedTimestampsMs.length)
+      || input.route !== 'topic_research' || input.comparisonVideoIds !== undefined))
+      issue('frameAccess', 'An entry without videoId fixes capture times for videos that discovery will select. Use it alone, once, without saved positions, and only for topic_research without comparisonVideoIds.');
+    else if (scope.some(entry => new Set([...entry.savedTimestampsMs, ...entry.captureTimestampsMs]).size !== entry.savedTimestampsMs.length + entry.captureTimestampsMs.length))
+      issue('frameAccess', 'Give each timestamp exactly one role, saved inspection or fresh capture.');
   }
   if (input.timestampedFrameQuestion && input.route !== 'inspect_video')
     issue('route', 'Exact frame requests require single-video inspection.');
@@ -206,7 +227,6 @@ function classifierToolSchema(options: ClassifierValidationOptions, defaultedFie
   } });
 }
 
-const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
 export interface ClassificationDiagnostic {
   attempt: number;
@@ -268,6 +288,7 @@ const RECONSIDERATION_MIN_MS = 1_500;
 
 async function classifyWithinDeadline(input: CapabilityClassifierInput, deadlineAt: number): Promise<CapabilityRouteDecision> {
   assertModelCostAvailable(input.modelBudget);
+  const request = readFrameRequest(input.message);
   const conversationHistory = input.conversationHistory ?? [];
   const videoIds = [...new Set([
     ...extractYouTubeVideoIds(input.message),
@@ -289,7 +310,8 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
       'Select skill verify_saved_evidence for follow-ups that recover saved original captions/comments, verify exact quotations or passage links, or correct source claims. This replaces general discovery and analysis with a verification workflow. The skill does not prohibit fetching: a request that also needs evidence not yet saved, such as comments, still gets it unless savedOnly is set. Omit the skill for broad summaries or visual analysis.',
       'Set requestedEvidence for each kind of evidence the user explicitly asks for: original_quotes for exact quotations, verbatim wording or precise passage links; comments for what viewers or commenters say. Include every requested kind in one decision, alongside any explanation. Research cannot complete until each is read or reported unavailable, so choose an executable route.',
       'Set savedOnly true whenever the user prohibits fresh retrieval or asks to use existing saved sources only. Keep this restriction on follow-ups when it remains in force. Missing saved evidence is a gap, never permission to fetch. Use the saved reader instead of transcript retrieval or discovery.',
-      'When a turn mixes saved and new frames, omit savedOnly and supply frameAccess. For example, re-inspect saved 10:30 and capture only 10:45 means savedTimestampsMs [630000] and captureTimestampsMs [645000]. A prohibition on recapturing 10:30 still allows the requested 10:45. Times mentioned for comparison, narration or history do not authorize capture.',
+      'A video length limit filters the source. A capture window limits the seek positions. For a tutorial under five minutes with a capture within the first 30 seconds, choose a captureTimestampsMs value between 0 and 30000 inclusive. Use an exact list even when the user lets you choose a position inside the window.',
+      'Set frameAccess from the user request. For example, re-inspect saved 10:30 and capture only 10:45 means [{ videoId, savedTimestampsMs: [630000], captureTimestampsMs: [645000] }]. If the images belong to different videos, include both in comparisonVideoIds. A saved image that cannot be read stays a saved inspection. Times mentioned for comparison, narration or history do not authorize capture.',
       'Requests for exact quotations from original saved captions/comments, precise passage-start links, or explicit original-asset reads require inspect_video or topic_research with the resolved subjects, even if prior summaries discuss the topic. Research can call search_originals without fetching YouTube. Quoting a source is different from quoting a prior conversation message. Do not route an original-source read directly to finalize.',
       'For every context_answer set contextScope: history for listing, quoting, recalling or correcting conversation messages or preferences; video for claims about video content; mixed only when the requested answer needs both. A video URL inside a quoted earlier message does not require video evidence.',
       'For finalize give a short routing reason, not a user-facing answer. Choose responseIntent clarification for missing scope, or rejected for unsupported requests. Do not use the legacy clarification or rejected routes for new decisions.',
@@ -370,7 +392,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
     }] : parsed.success ? [] : parsed.error.issues.map(issue => ({
       path: issue.path.map(String).join('.'), code: issue.code, message: issue.message,
     }));
-    if (parsed.success && feedback.length === 0) feedback = semanticIssues(parsed.data, input, videoIds);
+    if (parsed.success && feedback.length === 0) feedback = semanticIssues(parsed.data, input, videoIds, request);
     // Advisory only: the reconsideration may keep its choice, so a keyword match never fails classification.
     let advisory = false;
     if (parsed.success && feedback.length === 0 && context.attempt === 1) {
@@ -404,7 +426,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
   const lastResort = (evaluations: Evaluation[]) => {
     // The fallback uses no model, but an exhausted budget still ends the run.
     assertModelCostAvailable(input.modelBudget);
-    const built = lastResortDecision(evaluations, input, videoIds, channelIds, explicitVideoIds);
+    const built = lastResortDecision(evaluations, input, videoIds, channelIds, explicitVideoIds, request);
     console.warn(JSON.stringify({ event: 'agent_classification_last_resort', modelCallId: callId, method: built.method,
       candidates: evaluations.length, defaultedFields: built.defaultedFields }));
     input.onDiagnostic?.({ attempt: 0, stage: 'last_resort', lastResort: built.method, outcome: 'valid', modelId: '',
@@ -414,7 +436,7 @@ async function classifyWithinDeadline(input: CapabilityClassifierInput, deadline
 
   const decision = await coordinateClassification(call, input.signal, deadlineAt, callId,
     { fallbackModel: Boolean(input.fallbackModel), managedTimeouts: hasModelTimeouts(input.model), lastResort });
-  return finishClassification(decision, videoIds, channelIds, explicitVideoIds, input.message);
+  return bindStoryboardSelection(finishClassification(decision, videoIds, channelIds, explicitVideoIds, input.message), request);
 }
 
 type ClassificationIssue = { path: string; code: string; message: string };
@@ -584,7 +606,7 @@ const ROUTE_FIELDS = {
   finalize: ['responseIntent', 'contextScope', 'historySelection', 'reason', 'comparisonVideoIds'],
 } as const satisfies Record<ClassifierDecision['route'], readonly DefaultedClassificationField[]>;
 const SHARED_FIELDS = ['skill', 'savedOnly', 'requestedEvidence', 'answerDetail', 'numberedItemCount', 'refreshEvidence', 'refreshDynamicData',
-  'visualEvidence', 'visualRequirements'] as const satisfies readonly DefaultedClassificationField[];
+  'visualEvidence', 'visualRequirements', 'setAsideFrames'] as const satisfies readonly DefaultedClassificationField[];
 
 function candidateObject(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === 'string') {
@@ -593,16 +615,22 @@ function candidateObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[]): ClassificationIssue[] {
-  // An explicit prohibition rules out an unrestricted fallback. Only the classifier
-  // resolves which video and positions the user authorized.
-  const prohibitsRecapture = /\b(?:without|never|do not|don['’]t)\s+re-?captur(?:e|ing)\b/i.test(input.message);
-  if (decision.frameAccess === 'agent_selected' && prohibitsRecapture) {
-    return [{ path: 'frameAccess', code: 'prohibited_recapture', message: 'The request prohibits recapture. Supply the fixed fresh positions and keep the saved inspection positions separate.' }];
+function pinnedFrameAccess<T extends { videoId?: string }>(entries: T[], videoId: string) {
+  return entries.map(entry => ({ ...entry, videoId: entry.videoId ?? videoId }));
+}
+
+function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifierInput, videoIds: string[], request: FrameRequest): ClassificationIssue[] {
+  // A single linked video pins inspection to itself, which would leave another video's frames out of reach.
+  const linked = extractYouTubeVideoIds(input.message);
+  if (decision.frameAccess && decision.route === 'inspect_video' && linked.length === 1 && linked[0] !== decision.videoId) {
+    return [{ path: 'frameAccess', code: 'frame_scope_outside_link', message: `The message links ${linked[0]}. Inspect that video, or use topic_research with comparisonVideoIds for every video whose frames this turn uses.` }];
   }
-  if (decision.refreshFramesOnly && !decision.frameAccess && !decision.comparisonVideoIds?.length
-    && (decision.route === 'inspect_video' || videoIds.length === 1)) {
-    return [{ path: 'frameAccess', code: 'missing_capture_scope', message: 'Specify saved and authorized new timestamps separately, or agent_selected if the user delegated the capture positions.' }];
+  if (decision.route !== 'finalize') {
+    const pin = decision.route === 'topic_research' && !decision.comparisonVideoIds?.length && !decision.playlistListing && linked.length === 1;
+    const plan = pin ? { ...decision, route: 'inspect_video', videoId: linked[0],
+      frameAccess: Array.isArray(decision.frameAccess) ? pinnedFrameAccess(decision.frameAccess, linked[0]!) : decision.frameAccess } : decision;
+    const issue = frameRequestIssue(plan, request, input.sessionBrief?.assets);
+    if (issue) return [{ path: 'frameAccess', code: 'invalid_frame_access', message: issue }];
   }
   const scope = comparisonScopeIssues(decision, input, videoIds);
   return scope.length ? scope : searchQueryNumberIssues(decision, input);
@@ -615,7 +643,7 @@ function semanticIssues(decision: ClassifierDecision, input: CapabilityClassifie
  * request defaults alone. Candidates from later attempts are preferred.
  */
 function lastResortDecision(
-  evaluations: Evaluation[], input: CapabilityClassifierInput, videoIds: string[], channelIds: string[], explicitVideoIds: string[],
+  evaluations: Evaluation[], input: CapabilityClassifierInput, videoIds: string[], channelIds: string[], explicitVideoIds: string[], request: FrameRequest,
 ): { decision: ClassifierDecision; method: LastResortMethod; defaultedFields: DefaultedClassificationField[] } {
   const candidates = [...evaluations].sort((a, b) => b.context.attempt - a.context.attempt)
     .flatMap(item => { const candidate = candidateObject(item.candidate); return candidate ? [candidate] : []; });
@@ -636,10 +664,16 @@ function lastResortDecision(
   // Requirements any candidate stated, or the request implies, survive every fallback:
   // fresh data needs an executable route, required visuals stay required, and a
   // follow-up comparison keeps both of its subjects.
+  // A bounded list that no attempt stated validly is never widened, not even to another attempt's agent_selected.
+  const listing = candidates.filter(candidate => Array.isArray(candidate.frameAccess));
+  const frameAccess = firstValid('frameAccess', listing.length ? listing : candidates);
+  if (listing.length && !frameAccess) {
+    const clarification = { route: 'finalize', responseIntent: 'clarification', reason: 'Clarify the saved and permitted fresh frame positions for each video.', answerDetail: 'standard' };
+    return { decision: classifierDecisionSchema.parse(clarification), method: 'defaults',
+      defaultedFields: Object.keys(clarification) as DefaultedClassificationField[] };
+  }
   const constraints = {
-    // Preserve a bounded list even when a later failed attempt proposed open-ended selection.
-    frameAccess: firstValid('frameAccess', candidates.filter(candidate => candidate.frameAccess !== 'agent_selected'))
-      ?? firstValid('frameAccess'),
+    frameAccess,
     savedOnly: candidates.some(candidate => candidate.savedOnly === true),
     requestedEvidence: [...new Set(candidates.flatMap(candidate => requestedEvidenceSchema.safeParse(candidate.requestedEvidence).data ?? []))],
     refreshFramesOnly: candidates.some(candidate => candidate.refreshFramesOnly === true),
@@ -654,7 +688,7 @@ function lastResortDecision(
       return kept.length >= 2 ? [kept] : [];
     })[0] ?? []])].slice(0, 8),
   };
-  const needsFreshData = constraints.frameAccess || constraints.refreshFramesOnly || constraints.refreshEvidence || constraints.refreshDynamicData;
+  const needsFreshData = (Array.isArray(constraints.frameAccess) && constraints.frameAccess.some(entry => entry.captureTimestampsMs.length)) || constraints.refreshFramesOnly || constraints.refreshEvidence || constraints.refreshDynamicData;
   if (needsFreshData && constraints.savedOnly) {
     const clarification = { route: 'finalize', responseIntent: 'clarification',
       reason: 'Routing attempts disagree about saved-only access and fresh retrieval. Ask which sources may be refreshed before retrieving or answering from stale data.', answerDetail: 'standard' };
@@ -736,7 +770,7 @@ function lastResortDecision(
   };
   const accept = (decision: Record<string, unknown>) => {
     const parsed = validateClassifierDecision(decision, validation);
-    return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds) } : undefined;
+    return parsed.success ? { parsed: parsed.data, issues: semanticIssues(parsed.data, input, videoIds, request) } : undefined;
   };
 
   // Recover a missing route from one candidate as returned. The recovered decision
@@ -818,11 +852,13 @@ function expectedComparisonSubjects(input: CapabilityClassifierInput): string[] 
 function finishClassification(
   decision: z.infer<typeof classifierDecisionSchema>, videoIds: string[], channelIds: string[], explicitVideoIds: string[], message: string,
 ): CapabilityRouteDecision {
-  const { explicitSourceCount, frameAccess, ...fields } = withVisualAccess(decision);
-  const classified = { ...fields, ...(frameAccess && frameAccess !== 'agent_selected' ? { frameAccess } : {}) };
+  // Set-aside frames only check the classification; the route carries what research may use.
+  const { explicitSourceCount, setAsideFrames: _setAside, ...classified } = withVisualAccess(decision);
   const pinned = !(decision.route === 'topic_research' && decision.playlistListing) && explicitVideoIds.length === 1 && !decision.comparisonVideoIds?.length
     && (decision.route !== 'finalize' || (decision.responseIntent === 'context_answer' && decision.contextScope !== 'history'));
-  const route = pinned ? { ...classified, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
+  const pinnedAccess = pinned && Array.isArray(classified.frameAccess)
+    ? pinnedFrameAccess(classified.frameAccess, explicitVideoIds[0]!) : classified.frameAccess;
+  const route = pinned ? { ...classified, frameAccess: pinnedAccess, route: 'inspect_video' as const, videoId: explicitVideoIds[0]!,
     visualEvidence: classified.visualEvidence ?? 'helpful', useStoryboard: classified.visualEvidence !== 'none' } : classified;
   const researchVideoCount = route.route === 'inspect_video' ? 1 : route.route === 'topic_research'
     ? Math.min(8, route.comparisonVideoIds?.length ?? explicitSourceCount ?? (route.researchBreadth === 'comparative' ? 4 : 2)) : 0;
@@ -917,47 +953,39 @@ export function extractYouTubeChannelIds(message: string): string[] {
   return [...ids];
 }
 
-// Consume the whole URL before checking its host. Embedded links and v= parameters belong to that URL.
-const urlCandidates = /(?:https?:\/\/|(?<![\w./@-])(?:[\w-]+\.)+[a-z]{2,}\/)[^\s<>"']+/gi;
-function* youTubeUrls(message: string): Generator<URL> {
-  for (const candidate of message.match(urlCandidates) ?? []) {
-    const normalized = candidate.replace(/[\])},.!?;:'"]+$/g, '');
-    let url: URL;
-    try {
-      url = new URL(/^https?:\/\//i.test(normalized) ? normalized : `https://${normalized}`);
-    } catch {
-      continue;
-    }
-    const host = url.hostname.toLowerCase();
-    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be', 'm.youtu.be'].includes(host)) yield url;
-  }
-}
-
-export function extractYouTubeVideoIds(message: string): string[] {
-  const ids = new Set<string>();
-  for (const url of youTubeUrls(message)) {
-    if (url.hostname.endsWith('youtu.be')) {
-      addVideoId(ids, url.pathname.split('/').filter(Boolean)[0]);
-      continue;
-    }
-    addVideoId(ids, url.searchParams.get('v') ?? undefined);
-    const [kind, pathId] = url.pathname.split('/').filter(Boolean);
-    if (kind === 'shorts' || kind === 'live' || kind === 'embed') addVideoId(ids, pathId);
-  }
-
-  const labelledIdPattern = /(?:^|[\s(])(?:video(?:\s+id)?|v)\s*[:=]\s*([A-Za-z0-9_-]{11})(?=$|\s|[),.!?;])/gi;
-  for (const match of message.replace(urlCandidates, ' ').matchAll(labelledIdPattern)) addVideoId(ids, match[1]);
-  const trimmed = message.trim();
-  if (VIDEO_ID_PATTERN.test(trimmed)) ids.add(trimmed);
-  return [...ids];
+function bindStoryboardSelection(decision: CapabilityRouteDecision, request: FrameRequest): CapabilityRouteDecision {
+  if ((decision.route !== 'inspect_video' && decision.route !== 'topic_research') || decision.frameAccess !== 'storyboard_only') return decision;
+  const selections = requestedSheets(decision, request);
+  const scoped = request.refreshSheets ? { ...decision, refreshFramesOnly: true } : decision;
+  if (!selections?.length) return scoped;
+  return { ...scoped, frameAccess: decision.route === 'inspect_video'
+    ? { storyboardTimestampsMs: selections[0]!.timestampsMs } : { storyboardSelections: selections } };
 }
 
 export async function resolveCapabilityRoute(options: {
+  message?: string;
+  priorAssets?: SessionBrief['assets'];
   persisted?: unknown;
   classify: () => Promise<CapabilityRouteDecision>;
   persist: (decision: CapabilityRouteDecision) => void | Promise<void>;
 }): Promise<CapabilityRouteDecision> {
-  if (options.persisted !== undefined) return capabilityRouteDecisionSchema.parse(options.persisted);
+  if (options.persisted !== undefined) {
+    const decision = capabilityRouteDecisionSchema.parse(options.persisted);
+    // Routes persisted before every scoped video had to be a route subject could pin another
+    // video after validation. Resuming must not run them without the access the user gave.
+    const subjects = decision.route === 'inspect_video' ? [decision.videoId]
+      : decision.route === 'topic_research' ? decision.comparisonVideoIds ?? [] : [];
+    if ('frameAccess' in decision && Array.isArray(decision.frameAccess) && decision.frameAccess.some(entry => entry.videoId ? !subjects.includes(entry.videoId) : decision.route === 'inspect_video' || subjects.length > 0)) {
+      return { route: 'finalize', responseIntent: 'clarification', reason: 'Clarify which video the saved and fresh frame positions refer to.' };
+    }
+    if (options.message && (decision.route === 'inspect_video' || decision.route === 'topic_research')) {
+      const request = readFrameRequest(options.message);
+      const issue = frameRequestIssue(decision, request, options.priorAssets, true);
+      if (issue) return { route: 'finalize', responseIntent: 'clarification', reason: issue };
+      return bindStoryboardSelection(decision, request);
+    }
+    return decision;
+  }
   const decision = capabilityRouteDecisionSchema.parse(await options.classify());
   await options.persist(decision);
   return decision;
@@ -984,8 +1012,4 @@ function resolveClassification(
       ? 'Which YouTube video would you like me to inspect? Please provide its URL or video ID.'
       : 'Which supplied YouTube video would you like me to inspect?',
   };
-}
-
-function addVideoId(ids: Set<string>, candidate: string | undefined): void {
-  if (candidate && VIDEO_ID_PATTERN.test(candidate)) ids.add(candidate);
 }

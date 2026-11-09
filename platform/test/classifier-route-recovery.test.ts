@@ -173,19 +173,19 @@ describe('classifier last resort', () => {
   it.each([
     ['5d3f5302', 'dQw4w9WgXcQ', 'inspect_video</arg_value><arg_key>videoId'],
     ['794f5142', 'tXcT3OE7G1g', 'inspect_video<arg_key>videoId'],
-  ])('recovers run %s from attempt 1 when the repair has corrupted keys and the fallback errors', async (_run, videoId, key) => {
+  ])('asks for missing frame permission for run %s when the repair has corrupted keys and the fallback errors', async (_run, videoId, key) => {
     const result = await classify(framesMessage(videoId),
       rawClassifier(production.inspectVideo(videoId), production.corruptedRepair(videoId, key)),
       { fallbackModel: rawClassifier({ error: 'fallback unavailable' }) });
-    expect(result.decision).toMatchObject({ route: 'inspect_video', videoId, visualEvidence: 'required' });
-    expect(result.lastResort).toMatchObject({ lastResort: 'route_recovery', defaultedFields: ['route'] });
+    expect(result.decision).toMatchObject({ route: 'finalize', responseIntent: 'clarification' });
+    expect(result.decision).not.toHaveProperty('frameAccess');
   });
 
   it.each([
     'inspect_video</arg_value><arg_key>videoId',
     'inspect_video<arg_key>videoId',
   ])('never reads corrupted keys, and assembles the remaining valid fields: %s', async key => {
-    const corrupted = production.corruptedRepair('aaaaaaaaaaa', key);
+    const corrupted = { ...production.corruptedRepair('aaaaaaaaaaa', key), frameAccess: 'agent_selected' };
     const result = await classify(framesMessage('dQw4w9WgXcQ'), rawClassifier(corrupted));
     // The video comes from the request, not from the corrupted key's value.
     expect(result.decision).toMatchObject({ route: 'inspect_video', videoId: 'dQw4w9WgXcQ', visualEvidence: 'required' });
@@ -239,7 +239,7 @@ describe('classifier last resort', () => {
   it('keeps required visuals mandatory, taking the requirements from the request when the model gave none', async () => {
     const message = 'What did the keynote presenters wear?';
     const result = await classify(message, rawClassifier({ answerDetail: 'standard',
-      researchBreadth: 'focused', searchQuery: 'keynote presenter outfits', visualEvidence: 'required' }));
+      researchBreadth: 'focused', searchQuery: 'keynote presenter outfits', frameAccess: 'agent_selected', visualEvidence: 'required' }));
     expect(result.decision).toMatchObject({ route: 'topic_research', visualEvidence: 'required', visualRequirements: [message],
       useStoryboard: true, searchQuery: 'keynote presenter outfits' });
     expect(result.lastResort!.defaultedFields).toContain('visualRequirements');
@@ -248,7 +248,7 @@ describe('classifier last resort', () => {
   it('keeps required visuals even when the decision falls back to request defaults', async () => {
     // A corrupted key blocks recovery; the candidate still said the answer needs images.
     const result = await classify('What did the presenter wear in https://youtu.be/dQw4w9WgXcQ?',
-      rawClassifier({ answerDetail: 'standard', 'route<arg_key>': 'inspect_video', visualEvidence: 'required',
+      rawClassifier({ answerDetail: 'standard', 'route<arg_key>': 'inspect_video', frameAccess: 'agent_selected', visualEvidence: 'required',
         visualRequirements: ['presenter clothing'] }));
     expect(result.decision).toMatchObject({ route: 'inspect_video', videoId: 'dQw4w9WgXcQ', visualEvidence: 'required',
       visualRequirements: ['presenter clothing'] });
@@ -286,7 +286,7 @@ describe('classifier last resort', () => {
     // its route, has no refresh flag, and says no visuals are needed.
     const first = { route: 'finalize', answerDetail: 'standard', responseIntent: 'context_answer', contextScope: 'video',
       reason: 'Saved data answers this.', refreshDynamicData: true, visualEvidence: 'required', visualRequirements: ['thumbnail text'] };
-    const repair = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'MrBeast current views', visualEvidence: 'none' };
+    const repair = { answerDetail: 'standard', researchBreadth: 'focused', searchQuery: 'MrBeast current views', frameAccess: 'agent_selected', visualEvidence: 'none' };
     const result = await classify('What do the current MrBeast thumbnails say, and how many views do they have now?', rawClassifier(first, repair));
     expect(result.lastResort).toMatchObject({ lastResort: 'route_recovery' });
     expect(result.decision).toMatchObject({ route: 'topic_research', searchQuery: 'MrBeast current views', refreshDynamicData: true,

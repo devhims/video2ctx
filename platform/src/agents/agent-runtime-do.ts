@@ -14,6 +14,8 @@ import { storedExtractionDiagnosticSchema, type StoredExtractionDiagnostic } fro
 import { transcriptDiagnosticSchema, type TranscriptDiagnostic } from './runtime/transcript-diagnostics';
 import { agentDraftSchema, agentRunProgressSchema, toolTrace, type AgentDraft } from './runtime/run-progress';
 import { framePreviewKey, recordedFramePreviews, saveFramePreviews, type SavedFrame } from './runtime/frame-previews';
+import { readFrameRequest } from './research/frame-request';
+import { frameList, isFrameTurn } from './runtime/frame-access';
 import { saveStoryboardPreviews } from './runtime/storyboard-previews';
 import { compactAgentRun, compactAgentResult } from './response';
 import { queuedRunIdentitySchema, type QueuedRunIdentity } from './runtime/admission-queue';
@@ -708,6 +710,7 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
         },
         onExtractionDiagnostic: event => this.recordExtractionDiagnostic(runId, event),
         onTranscriptDiagnostic: event => this.recordTranscriptDiagnostic(runId, event),
+        startedAt: row.created_at,
         persistedRoute: this.readRoute(runId),
         persistRoute: (selected) => {
           this.persistRoute(runId, selected);
@@ -1038,6 +1041,8 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
     const history = this.readConversationHistory(run);
     const citedIds=answerCitationIds(parsedInput.answer);
     const citedSessionEvidence=this.sessionStore.evidenceForCitations(citedIds);
+    const requestedSaved = readFrameRequest(run.execution_message ?? run.message).requestsSaved;
+    const needsFrameInventory = requestedSaved || isFrameTurn(decision) || citedSessionEvidence.some(packet => packet.kind === 'youtube_frames');
     const result = buildAgentTurnResult({
       runId,
       conversationId: run.conversation_id,
@@ -1050,7 +1055,9 @@ export class AgentRuntimeDO extends Agent<Env, AgentRuntimeState> {
       requestedVideoIds: decision.route === 'inspect_video' ? [decision.videoId] : decision.comparisonVideoIds ?? [],
       // An application fallback is checked against what this run had, not earlier turns' cited content.
       runPackets: this.admittedRunEvidence(runId, history),
-    } : undefined);
+    } : undefined, needsFrameInventory ? { requestedSaved, access: frameList(decision), startedAt: run.created_at,
+      inventory: this.sessionStore.brief().assets.flatMap(asset => asset.kind === 'frame' ? [{ version: asset.version, videoId: asset.videoId,
+        collectedAt: asset.collectedAt, ...(typeof asset.details.timestampMs === 'number' ? { timestampMs: asset.details.timestampMs } : {}) }] : []) } : undefined);
     // Hash the accepted text: unmatched citations may have been removed from the input.
     const answerHash = createHash('sha256').update(result.answer).digest('hex');
     const serialized = JSON.stringify(result);
