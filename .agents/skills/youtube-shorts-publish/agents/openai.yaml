@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube Shorts Publish"
+  short_description: "Upload copy, covers, and schedule for Shorts"
+  default_prompt: "Use $youtube-shorts-publish to write titles, descriptions, hashtags, covers, and a schedule for rendered Shorts, checked against YouTube's limits."
