@@ -25,7 +25,7 @@ export interface EndCard {
   cta?: string;
 }
 
-/** snap: quick 1.16x with a whoosh; push: slow 1.15x over a second; punch: hard 1.22x with a bass hit. */
+/** snap: quick 1.16x; push: slow 1.15x over a second; punch: hard 1.22x with a bass hit. */
 export type ZoomKind = 'snap' | 'push' | 'punch';
 
 export interface OverlayZoom {
@@ -35,6 +35,8 @@ export interface OverlayZoom {
   scale?: number;
   /** Seconds held at full zoom before easing back. */
   holdSec?: number;
+  /** Plays the zoom's sound (a whoosh on snap, a bass hit on punch). Defaults to punch only. */
+  sound?: boolean;
 }
 
 /**
@@ -53,6 +55,10 @@ export interface OverlayScene {
   /** A bottom scene grows to cover the frame from this phrase or second. */
   expandAtPhrase?: string;
   expandAtSec?: number;
+  /** false drops the whoosh as the scene opens. */
+  enterSound?: boolean;
+  /** true adds a whoosh as the scene closes. */
+  exitSound?: boolean;
 }
 
 /** Bundled HyperFrames sound effects the overlay uses, keyed by library name. */
@@ -342,10 +348,19 @@ interface PlacedScene extends Timed {
   file: string;
   mode: 'bottom' | 'full';
   expandSec?: number;
+  /** Starts on a cut to a split screen, appearing with it instead of sliding in. */
+  onCut: boolean;
+  enterSound: boolean;
+  exitSound: boolean;
 }
 
+/** A bottom scene starting this soon after a cut to a split screen lets the other person flash up; it is reported. */
+const SCENE_CUT_FLASH_SEC = 0.6;
+/** A bottom scene starting this close to such a cut appears with the cut instead of sliding in. */
+const SCENE_ON_CUT_SEC = 0.05;
+
 /** Resolve scenes to times on the short, dropping (and reporting) any that do not fit. */
-function placeScenes(input: OverlayInput, issues: string[]): PlacedScene[] {
+function placeScenes(input: OverlayInput, segments: TimelineSegment[], issues: string[]): PlacedScene[] {
   const placed: PlacedScene[] = [];
   (input.overlay.scenes ?? []).forEach((scene, index) => {
     const name = `scene ${index + 1}`;
@@ -359,6 +374,12 @@ function placeScenes(input: OverlayInput, issues: string[]): PlacedScene[] {
     };
     const startSec = at(scene.atPhrase, scene.atSec, 'start');
     if (startSec === undefined) return issues.push(`${name} needs atPhrase or atSec; skipped.`);
+    const splitCuts = scene.mode === 'bottom' ? segments.filter((segment) => segment.mode === 'stack' && segment.startSec > 0).map((segment) => segment.startSec) : [];
+    const onCut = splitCuts.some((cutSec) => Math.abs(cutSec - startSec) <= SCENE_ON_CUT_SEC);
+    const flash = splitCuts.find((cutSec) => startSec - cutSec > SCENE_ON_CUT_SEC && startSec - cutSec <= SCENE_CUT_FLASH_SEC);
+    if (flash !== undefined) {
+      issues.push(`${name} starts ${(startSec - flash).toFixed(2)} s after the cut to a split screen, so the other person flashes up for a moment. Let the split play about 2 s first (from atSec ${sec(flash + 2)}), or start at atSec ${sec(flash)} to appear with the cut. Scene times count from its start.`);
+    }
     const endSec = at(scene.endPhrase, scene.durationSec === undefined ? undefined : startSec + scene.durationSec, 'end');
     if (endSec === undefined) return issues.push(`${name} needs endPhrase or durationSec; skipped.`);
     if (endSec - startSec < 0.8 || endSec > input.durationSec + 0.01) return issues.push(`${name} runs ${startSec.toFixed(2)}–${endSec.toFixed(2)}s, outside the short or under 0.8 s; skipped.`);
@@ -369,7 +390,7 @@ function placeScenes(input: OverlayInput, issues: string[]): PlacedScene[] {
     }
     const clash = placed.find((other) => startSec < other.endSec && endSec > other.startSec);
     if (clash) return issues.push(`${name} overlaps ${clash.id}; skipped.`);
-    placed.push({ id: file.compositionId, file: file.file, mode: scene.mode, startSec, endSec, expandSec });
+    placed.push({ id: file.compositionId, file: file.file, mode: scene.mode, startSec, endSec, expandSec, onCut, enterSound: scene.enterSound !== false, exitSound: scene.exitSound === true });
   });
   return placed.sort((left, right) => left.startSec - right.startSec);
 }
@@ -390,7 +411,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   const segments = timelineSegments(input.segments);
   const groups = captionGroups(input.words, segments, overlay.emphasis);
   const clampEnd = (start: number, length: number) => Math.min(start + length, durationSec - 0.1);
-  const scenes = placeScenes(input, issues);
+  const scenes = placeScenes(input, segments, issues);
 
   // Top-slot items run one at a time: hook, then name tag and cards in time order, then the end card.
   const hookText = input.short.spec.hook?.trim();
@@ -627,7 +648,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       } else {
         tweens.push(`tl.to("#cam", { scale: 1, duration: ${ZOOM_RELEASE_SEC}, ease: "power2.inOut" }, ${sec(releaseSec)});`);
       }
-      if (kind.sfx) hit(kind.sfx, startSec + 0.04, 0.3, { duration: kind.sfx === 'impact-bass-1' ? 1.2 : 0.6 });
+      if (kind.sfx && (zoom.sound ?? zoom.kind === 'punch')) hit(kind.sfx, startSec + 0.04, 0.3, { duration: kind.sfx === 'impact-bass-1' ? 1.2 : 0.6 });
       zoomFreeAt = releaseSec + ZOOM_RELEASE_SEC;
       lastZoomSec = startSec;
     });
@@ -641,10 +662,11 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
   for (const scene of scenes) {
     const host = JSON.stringify(`#${scene.id}`);
     if (scene.mode === 'bottom') {
-      tweens.push(`tl.to(${host}, { clipPath: "inset(50% 0% 0% 0%)", duration: 0.3, ease: "power3.out" }, ${sec(scene.startSec)});`);
+      tweens.push(scene.onCut
+        ? `tl.set(${host}, { clipPath: "inset(50% 0% 0% 0%)" }, ${sec(scene.startSec)});`
+        : `tl.to(${host}, { clipPath: "inset(50% 0% 0% 0%)", duration: 0.3, ease: "power3.out" }, ${sec(scene.startSec)});`);
       if (scene.expandSec !== undefined) {
         tweens.push(`tl.to(${host}, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.32, ease: "power2.inOut" }, ${sec(scene.expandSec)});`);
-        hit('whoosh-short', scene.expandSec + 0.15, 0.28);
         tweens.push(`tl.to(${host}, { clipPath: "inset(0% 0% 100% 0%)", duration: 0.28, ease: "power2.in" }, ${sec(scene.endSec - 0.3)});`);
       } else {
         tweens.push(`tl.to(${host}, { clipPath: "inset(100% 0% 0% 0%)", duration: 0.28, ease: "power2.in" }, ${sec(scene.endSec - 0.3)});`);
@@ -653,8 +675,8 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       tweens.push(`tl.to(${host}, { clipPath: "circle(125% at 50% 40%)", duration: 0.35, ease: "power2.out" }, ${sec(scene.startSec)});`);
       tweens.push(`tl.to(${host}, { clipPath: "circle(0% at 50% 55%)", duration: 0.22, ease: "power2.in" }, ${sec(scene.endSec - 0.24)});`);
     }
-    hit('whoosh', scene.startSec + 0.1, 0.3);
-    hit(scene.mode === 'full' ? 'whoosh-short' : 'whoosh', scene.endSec - 0.12, 0.28);
+    if (scene.enterSound) hit('whoosh', scene.startSec + (scene.onCut ? 0 : 0.1), 0.3);
+    if (scene.exitSound) hit(scene.mode === 'full' ? 'whoosh-short' : 'whoosh', scene.endSec - 0.12, 0.28);
   }
 
   // End card: the final frame freezes and blurs, the source thumbnail lands, a tap on its play

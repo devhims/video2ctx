@@ -168,7 +168,7 @@ describe('end card, zooms and scenes', () => {
   test('zooms on the face for key lines, with a whoosh or a hit, and reports busy or misplaced ones', () => {
     const faces = Array.from({ length: 40 }, (_, index) => ({ atSec: index / 2, boxes: [{ x: 140, y: 400, w: 800, h: 900 }] }));
     const plan = buildOverlay({ ...base, brand: {}, faces, sfx, overlay: { zooms: [
-      { atPhrase: 'get mischievous' }, { atPhrase: 'what the hell', kind: 'punch' }, { atPhrase: 'minions love', kind: 'push' },
+      { atPhrase: 'get mischievous', sound: true }, { atPhrase: 'what the hell', kind: 'punch' }, { atPhrase: 'minions love', kind: 'push' },
     ] } });
     expect(plan.html).toContain('tl.set("#cam", { transformOrigin: "50.0% 40.5%" }, 1.3);');
     expect(plan.html).toContain('tl.to("#cam", { scale: 1.16, duration: 0.14, ease: "power3.out" }, 1.3);');
@@ -197,5 +197,26 @@ describe('end card, zooms and scenes', () => {
     expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="5"[^>]*style="top:909px/);
     expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="9"[^>]*style="top:1422px/);
     expect(plan.issues).toEqual(expect.arrayContaining([expect.stringMatching(/scene 3: scenes\/none\.html has no data-composition-id/)]));
+  });
+
+  test('appears with a cut to a split screen, warns when it starts just after one, and can close silently', () => {
+    const split = [
+      { inMs: 0, outMs: 4_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } },
+      { inMs: 4_000, outMs: 20_000, layout: { atMs: 4_000, mode: 'stack' as const } },
+    ];
+    const files = [{ compositionId: 'net', file: 'net.html' }];
+    const onCut = buildOverlay({ ...base, segments: split, brand: {}, sfx, sceneFiles: files,
+      overlay: { scenes: [{ src: 'net.html', mode: 'bottom', atSec: 4, durationSec: 5 }] } });
+    expect(onCut.html).toContain('tl.set("#net", { clipPath: "inset(50% 0% 0% 0%)" }, 4);');
+    expect(onCut.html).not.toContain('tl.to("#net", { clipPath: "inset(50% 0% 0% 0%)"');
+    // Only the entrance whoosh by default; exits and zooms other than punch stay silent.
+    expect((onCut.html.match(/<audio /g) ?? []).length).toBe(1);
+    const quiet = buildOverlay({ ...base, brand: {}, sfx, sceneFiles: files,
+      overlay: { zooms: [{ atSec: 1 }], scenes: [{ src: 'net.html', mode: 'full', atSec: 8, durationSec: 4, enterSound: false }] } });
+    expect(quiet.html).not.toContain('<audio ');
+    expect(onCut.issues.filter((issue) => /scene/.test(issue))).toEqual([]);
+    const late = buildOverlay({ ...base, segments: split, brand: {}, sceneFiles: files,
+      overlay: { scenes: [{ src: 'net.html', mode: 'bottom', atSec: 4.13, durationSec: 5 }] } });
+    expect(late.issues.filter((issue) => /scene/.test(issue))).toEqual([expect.stringMatching(/starts 0\.13 s after the cut to a split screen.*atSec 6\).*atSec 4 /)]);
   });
 });

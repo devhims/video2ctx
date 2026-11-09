@@ -19,9 +19,9 @@ Plan both from the cut's `text`: mark the punchlines (zoom candidates) and the i
 
 | `kind` | Move | Sound |
 |---|---|---|
-| `snap` (default) | 1.16x in 0.14 s, held 1.2 s | whoosh |
+| `snap` (default) | 1.16x in 0.14 s, held 1.2 s | none (`"sound": true` adds a whoosh) |
 | `push` | 1.15x over 1 s, held 0.6 s | none |
-| `punch` | 1.22x in 0.12 s, held 0.9 s | bass hit |
+| `punch` | 1.22x in 0.12 s, held 0.9 s | bass hit (`"sound": false` drops it) |
 
 `scale` and `holdSec` override the defaults. Each zoom centres on the speaker's face and eases back over 0.4 s; one that runs into a full-frame scene resets under it instead.
 
@@ -41,7 +41,8 @@ A scene is a HyperFrames sub-composition file you write, in the project (such as
 - **`mode: "bottom"`** slides the scene up over the lower half while the speaker stays in view above it, with captions on the seam. Use it when the speaker's face matters, and on split screens, where it covers the listener.
 - **`mode: "full"`** opens the scene over the whole frame with an iris and closes it the same way. Use it when the idea needs the whole frame.
 - **`expandAtPhrase` / `expandAtSec`** grows a bottom scene to the whole frame partway through. Time it to a camera cut so the cut happens unseen.
-- Start with `atPhrase` or `atSec`; end with `endPhrase` (the scene closes as it starts) or `durationSec`. `overlay` adds the slide, iris and wipe transitions and their whooshes.
+- Start with `atPhrase` or `atSec`; end with `endPhrase` (the scene closes as it starts) or `durationSec`. `overlay` adds the slide, iris and wipe transitions, with a whoosh only as the scene opens (`"enterSound": false` drops it, `"exitSound": true` adds one as it closes).
+- On a split screen, let the host be seen: start a bottom scene about 2 s after the cut to the split, so the podcaster gets screen time before the scene covers their half. A scene starting exactly on the cut appears with it instead of sliding in. `overlay` reports one that starts just after the cut, where the host would only flash up.
 
 ### What a scene shows
 
@@ -57,7 +58,7 @@ Follow the HyperFrames scene format (`npx hyperframes docs compositions`). The p
 - Build anything that scales or bounces as HTML elements (absolutely positioned `div`s), and use SVG only for lines and icons inside them. GSAP measures SVG boxes for `transformOrigin` when the timeline is built, before the scene is laid out, so scaled SVG groups pivot from the wrong point and drift off their lines.
 - Draw lines with `stroke-dasharray` equal to the line's length and tween `stroke-dashoffset` to 0. Use `stroke-linecap="butt"`, since round caps show as dots before the line draws.
 - For a bottom scene, draw in the lower half (y 1010 to about 1440) and keep the upper half empty: it is masked off until an expand.
-- Sounds: `<audio class="clip" src="assets/sfx/<key>.mp3" data-start="..." data-volume="0.5">` with a local `data-start`. `overlay` fetches every key a scene names from the bundled library (`pop`, `click`, `click-soft`, `sparkle`, `whoosh`, `whoosh-short`, `impact-bass-1`, `riser`, `notification`, `error` and more). Land each sound's peak one frame after its picture: `pop` peaks 0.12 s into the file, `click` and `click-soft` 0.073 s, `sparkle` 0.027 s, `whoosh` 0.162 s. One sound per visible beat, at 0.2 to 0.6 volume. `hyperframes check` warns that nested audio times may be ambiguous; local times are what scenes use.
+- Sounds: `<audio class="clip" src="assets/sfx/<key>.mp3" data-start="..." data-volume="0.5">` with a local `data-start`. `overlay` fetches every key a scene names from the bundled library (`pop`, `click`, `click-soft`, `sparkle`, `whoosh`, `whoosh-short`, `impact-bass-1`, `riser`, `notification`, `error` and more). Land each sound's peak one frame after its picture: `pop` peaks 0.12 s into the file, `click` and `click-soft` 0.073 s, `error` 0.745 s, `impact-bass-1` 0.073 s, `whoosh` 0.162 s. At 0.2 to 0.6 volume. `hyperframes check` warns that nested audio times may be ambiguous; local times are what scenes use.
 
 ## Check
 
@@ -67,4 +68,8 @@ Snapshot each zoom at its peak, and each scene at its first beat, its middle, an
 - Nodes sit on their lines, nothing stray shows before it animates in, and the scene's bottom half (or whole frame) is fully covered with no footage peeking at the corners.
 - Captions sit on the seam under a bottom scene, and low under a full one.
 
-Then render and listen to the whole short once: each whoosh, pop and hit lands on its picture and sits under the voice.
+## Sound
+
+Less is more. A sound goes only where it has impact: the beat a scene turns on (the word "paranoid" as the wave spreads, the thud of a red X), a punch-in, the first entrance of an animation. Node pops, drawn lines, colour changes and exits stay silent; their motion is enough. A 25 to 45 s short carries about four to six sounds besides the end card, spread through it.
+
+Then render and listen to the whole short once: each sound lands on its picture, sits under the voice, and earns its place.
