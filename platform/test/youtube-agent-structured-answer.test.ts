@@ -185,6 +185,26 @@ describe('structured answer citations', () => {
   it.each(['The', "I'll look up the transcript."])('rejects a filler-only answer for one repair: %s', text => {
     expect(() => renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] })).toThrow(/fragment or promise/);
   });
+  // A placeholder would otherwise render as citation chips with no answer and complete the run.
+  const placeholderAliases = new Map([['ref_1', 'e1'], ['ref_2', 'e2']]);
+  it.each(['…', '...', '… [cite:ref_1]', '【ref_1】…', '[ref_1] [ref_2]', '(ref_1) — ref_2', '**…**', '\u200b',
+    // The renderer turns a whole supported range into citations, separator word included.
+    'ref_1 through ref_2', 'ref_1 to ref_2', '… (ref_1 thru ref_2).', '[ref_1 through ref_2]'])(
+    'rejects a placeholder-only answer for one repair: %j', text => {
+      expect(() => renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] }, placeholderAliases))
+        .toThrow(/placeholder with no answer text/);
+    });
+  it.each(['Sí.', 'El orador recomienda grabar en 4K.', '42 [cite:ref_1]', '【注意】 [cite:ref_1]',
+    // Code, links, URLs, quotes and unsupported ranges are preserved by the renderer as visible text.
+    '`ref_1`', '"(ref_1)"', '"(ref_1 through ref_2)"', '    [ref_1, ref_2]', '[ref_1](https://example.com)',
+    'https://example.com/ref_1', 'ref_2 to ref_1'])('keeps an answer whose rendered text remains: %j', text => {
+    expect(() => renderStructuredAnswer({ ...base, blocks: [{ text, evidenceIds: ['e1'] }] }, placeholderAliases)).not.toThrow();
+  });
+  it('judges a bare range by the aliases that render it', () => {
+    // Without the aliases the renderer leaves the range as literal text, so it is text.
+    expect(fillerOnlyAnswer({ blocks: [{ text: 'ref_1 through ref_2' }] })).toBe(false);
+    expect(fillerOnlyAnswer({ blocks: [{ text: 'ref_1 through ref_2' }] }, placeholderAliases)).toBe(true);
+  });
   it('renders bounded provisional text without model-written source markers', () => {
     expect(renderPartialAnswer({ blocks: [
       { text: 'First draft [cite:ref_1]' },
@@ -210,6 +230,9 @@ describe('structured answer citations', () => {
   it('flags filler-only answers as a signal', () => {
     expect(fillerOnlyAnswer({ blocks: [{ text: "I'll look up the transcript." }] })).toBe(true);
     expect(fillerOnlyAnswer({ blocks: [{ text: 'The' }, { text: 'No.' }] })).toBe(false);
+    expect(fillerOnlyAnswer({ blocks: [{ text: '… [cite:e1]' }, { text: '...' }] })).toBe(true);
+    // One substantive block is an answer; any further placeholder is a formatting issue.
+    expect(fillerOnlyAnswer({ blocks: [{ text: '… [cite:e1]' }, { text: 'La respuesta. [cite:e1]' }] })).toBe(false);
   });
   it('allows a complete long paragraph without forcing a citation into a word at 2000 characters', () => {
     const text = 'A complete supported sentence. '.repeat(75).trim();
