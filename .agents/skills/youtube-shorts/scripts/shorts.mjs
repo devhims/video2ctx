@@ -22363,8 +22363,8 @@ var round = (value) => Math.round(value * 100) / 100;
 
 // src/shorts/fit.ts
 var FIT_AREAS = {
-  /** Below the seam captions, above YouTube's bottom UI. */
-  bottom: { centerX: 540, centerY: 1225, maxWidth: 900, maxHeight: 410 },
+  /** The bottom half, centred at its middle; the captions sit on the seam above it. */
+  bottom: { centerX: 540, centerY: 1440, maxWidth: 900, maxHeight: 520 },
   /** Below the wordmark, above the low captions. */
   full: { centerX: 540, centerY: 830, maxWidth: 900, maxHeight: 1e3 }
 };

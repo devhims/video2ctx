@@ -30,16 +30,16 @@ describe('unionBox', () => {
 });
 
 describe('fitFor', () => {
-  test('moves a high, small bottom-half drawing to the centre of its area and fills the width', () => {
-    // 450 x 200 px drawn around (500, 1150): the width limit (900 px) wins.
+  test('moves a drawing that floats high in the bottom half to the half\'s middle, and scales it up', () => {
+    // 450 x 200 px drawn around (500, 1150): it moves down to y 1440 and grows to the 1.6x cap.
     const fit = fitFor({ x1: 275, y1: 1050, x2: 725, y2: 1250 }, 'bottom');
-    expect(fit).toEqual({ x: 40, y: 75, scale: 1.6, originX: 500, originY: 1150 });
+    expect(fit).toEqual({ x: 40, y: 290, scale: 1.6, originX: 500, originY: 1150 });
   });
 
   test('shrinks a tall bottom-half drawing to the area height', () => {
     const fit = fitFor({ x1: 200, y1: 1000, x2: 880, y2: 1820 }, 'bottom');
-    expect(fit.scale).toBe(0.5);
-    expect(fit).toMatchObject({ x: 0, y: -185, originX: 540, originY: 1410 });
+    expect(fit.scale).toBe(0.634);
+    expect(fit).toMatchObject({ x: 0, y: 30, originX: 540, originY: 1410 });
   });
 
   test('centres a full-frame drawing below the wordmark', () => {
@@ -53,7 +53,7 @@ describe('applyFit', () => {
   test('adds one marked rule inside the template, replacing an earlier one', () => {
     const once = applyFit(scene, { x: 40, y: 75, scale: 1.2, originX: 500, originY: 1150 });
     expect(once).toContain('<template>\n<style data-fit-style>[data-fit] { transform-origin: 500px 1150px; transform: translate(40px, 75px) scale(1.2); }</style>\n');
-    const twice = applyFit(once, { x: 0, y: 0, scale: 1, originX: 540, originY: 1225 });
+    const twice = applyFit(once, { x: 0, y: 0, scale: 1, originX: 540, originY: 1440 });
     expect(twice.match(/data-fit-style/g)).toHaveLength(1);
     expect(twice).toContain('scale(1)');
   });
