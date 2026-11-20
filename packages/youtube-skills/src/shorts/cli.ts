@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
@@ -24,10 +26,13 @@ import {
 import {
   MediaError,
   runFfmpeg,
+  audioLevelDb,
   burnCaptions,
+  detectAllShotChanges,
   detectCapabilities,
-  detectShotChanges,
+  detectSceneChanges,
   detectSilences,
+  mergeShotChanges,
   extractSpeechAudio,
   extractThumbnail,
   assembleShort,
@@ -37,6 +42,7 @@ import {
   tileImages,
   type MasterInfo,
 } from './media';
+import { EDGE_WINDOW_MS, edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem } from './check';
 import { OVERLAY_SFX, buildOverlay, type SfxKey } from './overlay';
 import { detectFaces } from './faces';
 import { openYouTubeSource } from './source';
@@ -54,6 +60,7 @@ Usage:
   shorts.mjs shots  --project <dir> (--master <file> | --from-youtube) [--only <id,...>] [--scene <0-1>]
   shorts.mjs render --project <dir> (--master <file> | --from-youtube) [--only <id,...>]
   shorts.mjs overlay --project <dir> [--only <id,...>]
+  shorts.mjs check  --project <dir> [--master <file>] [--only <id,...>] [--variant <name>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
 
@@ -84,12 +91,18 @@ Commands:
           the last word, each placed clear of the faces detected in the short
           (macOS Vision); sound effects come from HyperFrames' bundled library.
           Render it with HyperFrames
+  check   Check every rendered short for what a viewer notices: shots under
+          1 s (flashes of the wrong framing), speech at a cut edge (a clipped
+          word, or the next one starting; needs --master), cuts ending on a
+          word that starts the next thought, an overlay project built from an
+          older cut, and an overlay video that no longer matches its cut
 
 Options:
   --master <file>       The creator's source file for this exact upload
   --from-youtube        Review copy: stream YouTube's own video with audio (usually
                         360p) instead of a master. Not publishing quality
-  --only <id,...>       Limit shots or render to these short ids
+  --only <id,...>       Limit shots, render, overlay or check to these short ids
+  --variant <name>      Overlay video for check to compare: render/<id>-<name>.mp4; default overlay
   --scene <0-1>         Shot-change sensitivity; default 0.3 (lower finds more)
   --silence-db <dB>     Pause threshold for snapping cuts in render; default -35
                         (raise toward -30 for noisy rooms)
@@ -111,6 +124,7 @@ const commandFlags = {
   shots: ['project', 'master', 'from-youtube', 'only', 'scene', 'ffmpeg-path', 'proxy'],
   render: ['project', 'master', 'from-youtube', 'only', 'ffmpeg-path', 'proxy', 'silence-db'],
   overlay: ['project', 'only', 'ffmpeg-path'],
+  check: ['project', 'master', 'only', 'variant', 'ffmpeg-path'],
   fetch: ['project', 'max-height', 'yt-dlp-path', 'ffmpeg-path', 'proxy'],
   transcribe: ['project', 'master', 'from-youtube', 'model', 'language', 'ffmpeg-path', 'proxy', 'whisper-path', 'whisper-model'],
 } as const;
@@ -466,7 +480,17 @@ async function shotsFrom(project: string, shorts: ResolvedShort[], media: Prepar
     await rm(directory, { recursive: true, force: true });
     const shots: Array<{ n: number; atMs: number; at: string; durationSec: number; cut: number; thumb: string }> = [];
     for (const [cutIndex, cut] of short.cuts.entries()) {
-      const changes = await detectShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
+      const all = await detectAllShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
+      const changes = mergeShotChanges(all, cut.inMs, cut.outMs);
+      for (const hug of edgeHuggingChanges(all, cut.inMs, cut.outMs)) {
+        const where = hug.edge === 'end' ? 'before this cut ends' : 'after this cut starts';
+        issues.push({
+          short: short.spec.id,
+          level: 'warning',
+          message: `cuts[${cutIndex}]: the source changes shot ${(hug.gapMs / 1_000).toFixed(2)}s ${where} (${formatTime(hug.atMs)}), which plays as a flash. ` +
+            `${hug.edge === 'end' ? 'End the cut before it (pin endMs' : 'Start the cut after it (pin startMs'} if the phrase can't), or give that moment a layout entry that carries smoothly into the next shot.`,
+        });
+      }
       const starts = [cut.inMs, ...changes];
       for (const [index, startMs] of starts.entries()) {
         const endMs = starts[index + 1] ?? cut.outMs;
@@ -781,6 +805,90 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv, depe
   return { shorts: output, issues };
 }
 
+async function fileDigest(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+async function commandCheck(flags: Flags, environment: NodeJS.ProcessEnv) {
+  const project = resolve(required(flags, 'project'));
+  const { words, edl } = await loadProject(project);
+  const { shorts, issues: planIssues } = requireResolved(words, edl, onlySet(flags));
+  const ffmpeg = await resolveFfmpeg(flags, environment);
+  const master = typeof flags.master === 'string' ? resolve(flags.master) : undefined;
+  if (master && !(await stat(master).catch(() => undefined))?.isFile()) throw new ShortsInputError(`${master} not found.`);
+  const variant = typeof flags.variant === 'string' ? flags.variant : 'overlay';
+  const issues: Issue[] = planIssues.filter((issue) => / ends on "/.test(issue.message));
+  const warnings: string[] = [];
+  if (!master) warnings.push('Pass --master to check the audio at every cut edge.');
+  const output = [];
+  for (const short of shorts) {
+    const id = short.spec.id;
+    const cutVideo = join(project, 'render', `${id}.mp4`);
+    const cutStat = await stat(cutVideo).catch(() => undefined);
+    if (!cutStat?.isFile()) {
+      issues.push({ short: id, level: 'warning', message: 'Not rendered yet; run render first.' });
+      continue;
+    }
+    const cutInfo = await probeMaster(ffmpeg, cutVideo);
+
+    const flashes = flashShots(await detectSceneChanges(ffmpeg, cutVideo), cutInfo.durationSec);
+    for (const flash of flashes) {
+      issues.push({
+        short: id,
+        level: 'error',
+        message: `Flash shot: ${(flash.endSec - flash.startSec).toFixed(2)}s of a different framing at ${flash.startSec.toFixed(2)}-${flash.endSec.toFixed(2)}s. ` +
+          'Move the cut edge before the source change, or put the layout entry on the first frame of the new shot.',
+      });
+    }
+
+    const edges: Array<{ cut: number; startDb: number; endDb: number }> = [];
+    if (master) {
+      const manifest = await readJson(join(project, 'render', `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`) as { cuts?: ResolvedCut[] };
+      for (const [index, cut] of (manifest.cuts ?? []).entries()) {
+        const startDb = await audioLevelDb(ffmpeg, master, cut.inMs, EDGE_WINDOW_MS);
+        const endDb = await audioLevelDb(ffmpeg, master, cut.outMs - EDGE_WINDOW_MS, EDGE_WINDOW_MS);
+        edges.push({ cut: index, startDb: Math.round(startDb * 10) / 10, endDb: Math.round(endDb * 10) / 10 });
+        if (edgeHasSpeech(startDb)) {
+          issues.push({ short: id, level: 'warning', message: `cuts[${index}] starts on sound (${startDb.toFixed(0)} dB at ${formatTime(cut.inMs)}): the previous word may bleed in. Listen; start in the pause before the first word.` });
+        }
+        if (edgeHasSpeech(endDb)) {
+          issues.push({ short: id, level: 'warning', message: `cuts[${index}] ends on sound (${endDb.toFixed(0)} dB at ${formatTime(cut.outMs)}): the last word may be clipped or the next one has begun. Listen; end in the pause after the last word, or pin endMs at the quietest moment between the two words.` });
+        }
+      }
+    }
+
+    const asset = join(project, 'overlay', id, 'assets', `${id}.mp4`);
+    const assetStat = await stat(asset).catch(() => undefined);
+    const staleProject = Boolean(assetStat?.isFile() && (assetStat.size !== cutStat.size || await fileDigest(asset) !== await fileDigest(cutVideo)));
+    if (staleProject) {
+      issues.push({ short: id, level: 'error', message: `overlay/${id} was built from an older cut; run overlay again before rendering it.` });
+    }
+
+    const overlayVideo = join(project, 'render', `${id}-${variant}.mp4`);
+    const overlayStat = await stat(overlayVideo).catch(() => undefined);
+    if (overlayStat?.isFile()) {
+      const overlayInfo = await probeMaster(ffmpeg, overlayVideo);
+      const problem = overlayVideoProblem(
+        { durationSec: overlayInfo.durationSec, modifiedMs: overlayStat.mtimeMs },
+        { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs },
+      );
+      if (problem) issues.push({ short: id, level: 'error', message: `${basename(overlayVideo)} ${problem}.` });
+    }
+
+    output.push({
+      id,
+      durationSec: Math.round(cutInfo.durationSec * 100) / 100,
+      flashShots: flashes,
+      edges,
+      overlayProject: assetStat?.isFile() ? (staleProject ? 'stale' : 'current') : 'none',
+      overlayVideo: overlayStat?.isFile() ? overlayVideo : undefined,
+    });
+  }
+  return { ok: !issues.some((issue) => issue.level === 'error'), shorts: output, issues, warnings };
+}
+
 function errorPayload(error: unknown): { error: Record<string, unknown> } {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -813,6 +921,8 @@ export async function runShortsCli(
             ? await commandRender(flags, environment)
             : command === 'overlay'
               ? await commandOverlay(flags, environment, dependencies)
+              : command === 'check'
+                ? await commandCheck(flags, environment)
               : command === 'fetch'
                 ? await commandFetch(flags, environment)
                 : await commandTranscribe(flags, environment);

@@ -19021,6 +19021,8 @@ var require_undici = __commonJS({
 });
 
 // src/shorts/cli.ts
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
 import { basename as basename2, extname as extname2, join as join6, resolve as resolve3 } from "node:path";
@@ -21776,6 +21778,7 @@ function validateLayout(short, cuts, issues) {
 }
 var SNAP_PRE_ROLL_MS = 80;
 var SNAP_TAIL_MS = 120;
+var NEXT_WORD_SLACK_MS = 60;
 var inside = (ms, silence) => ms >= silence.startMs && ms <= silence.endMs;
 function snapCutToSilence(cut, silences, label) {
   const notes = [];
@@ -21790,7 +21793,7 @@ function snapCutToSilence(cut, silences, label) {
     if (!best) notes.push(`${label}: no pause at the start; the first word may be clipped or the previous word may bleed in.`);
   }
   if (!silences.some((silence) => inside(outMs, silence))) {
-    const candidates = silences.filter((silence) => silence.startMs >= cut.lastWordStartMs + 150 && silence.startMs <= cut.outMs + 300);
+    const candidates = silences.filter((silence) => silence.startMs >= cut.lastWordStartMs + 150 && silence.startMs <= cut.outMs + NEXT_WORD_SLACK_MS);
     const best = candidates.sort((a, b) => Math.abs(a.startMs - cut.outMs) - Math.abs(b.startMs - cut.outMs))[0];
     if (best) outMs = Math.min(best.endMs, best.startMs + SNAP_TAIL_MS);
     else softOut = true;
@@ -21801,10 +21804,11 @@ function snapCutToSilence(cut, silences, label) {
 }
 function alignCutToFrames(cut, fps) {
   const frameMs = 1e3 / fps;
-  const align = (ms) => Math.round(ms / frameMs) * frameMs;
-  const inMs = align(cut.inMs);
-  return { ...cut, inMs, outMs: Math.max(inMs + frameMs, align(cut.outMs)) };
+  const inMs = Math.ceil(cut.inMs / frameMs - 1e-6) * frameMs;
+  const outMs = Math.floor(cut.outMs / frameMs + 1e-6) * frameMs;
+  return { ...cut, inMs, outMs: Math.max(inMs + frameMs, outMs) };
 }
+var DANGLING_WORDS = /* @__PURE__ */ new Set(["and", "so", "but", "or", "because", "then", "which", "that", "like", "um", "uh"]);
 function resolveShorts(words, edl, only) {
   const issues = [];
   const leadInMs = edl.leadInMs ?? DEFAULT_LEAD_IN_MS;
@@ -21829,6 +21833,12 @@ function resolveShorts(words, edl, only) {
         }
       }
     }
+    cuts.forEach((cut, index) => {
+      const last = [...words].reverse().find((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs < cut.endMs);
+      if (last && DANGLING_WORDS.has(last.norm) && !/[.?!]["'”’)]*$/.test(last.text.trim())) {
+        issues.push({ short: spec.id, level: "warning", message: `cuts[${index}] ends on "${last.text.trim()}", which starts the next thought; end at the sentence before it.` });
+      }
+    });
     const durationMs = cuts.reduce((total, cut) => total + cut.outMs - cut.inMs, 0);
     if (durationMs > SHORTS_MAX_SEC * 1e3) {
       issues.push({ short: spec.id, level: "error", message: `Runs ${(durationMs / 1e3).toFixed(1)}s; Shorts allow at most ${SHORTS_MAX_SEC}s.` });
@@ -22091,7 +22101,7 @@ async function detectCapabilities(ffmpeg) {
   return { encoder: "mpeg4", videoCodecArgs: ["-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p"], canBurnCaptions };
 }
 var seconds = (ms) => (ms / 1e3).toFixed(3);
-async function detectShotChanges(ffmpeg, master, inMs, outMs, threshold) {
+async function detectAllShotChanges(ffmpeg, master, inMs, outMs, threshold) {
   const { stderr } = await mustRun(ffmpeg, [
     "-ss",
     seconds(inMs),
@@ -22106,12 +22116,46 @@ async function detectShotChanges(ffmpeg, master, inMs, outMs, threshold) {
     "null",
     "-"
   ], "detect shot changes");
-  const changes = [];
-  for (const match of stderr.matchAll(/pts_time:\s*([\d.]+)/g)) {
-    const at = inMs + Math.round(Number(match[1]) * 1e3);
-    if (!changes.length || at - changes.at(-1) > 500) changes.push(at);
+  return [...stderr.matchAll(/pts_time:\s*([\d.]+)/g)].map((match) => inMs + Math.round(Number(match[1]) * 1e3));
+}
+function mergeShotChanges(changes, inMs, outMs) {
+  const merged = [];
+  for (const at of changes) {
+    if (!merged.length || at - merged.at(-1) > 500) merged.push(at);
   }
-  return changes.filter((at) => at > inMs + 200 && at < outMs - 200);
+  return merged.filter((at) => at > inMs + 200 && at < outMs - 200);
+}
+async function detectSceneChanges(ffmpeg, video, threshold = 0.3) {
+  const { stderr } = await mustRun(ffmpeg, [
+    "-i",
+    video,
+    "-an",
+    "-vf",
+    `scale=320:-2,select='gt(scene\\,${threshold})',showinfo`,
+    "-f",
+    "null",
+    "-"
+  ], "detect scene changes", { timeoutMs: PROBE_TIMEOUT_MS * 4 });
+  return [...stderr.matchAll(/pts_time:\s*([\d.]+)/g)].map((match) => Number(match[1]));
+}
+async function audioLevelDb(ffmpeg, source, atMs, durationMs) {
+  const { stderr } = await mustRun(ffmpeg, [
+    "-ss",
+    seconds(Math.max(0, atMs)),
+    "-t",
+    seconds(durationMs),
+    "-i",
+    source,
+    "-vn",
+    "-af",
+    "astats=measure_perchannel=none",
+    "-f",
+    "null",
+    "-"
+  ], "measure audio level", { timeoutMs: PROBE_TIMEOUT_MS });
+  const level = [...stderr.matchAll(/RMS level dB:\s*(-?inf|-?[\d.]+)/g)].at(-1)?.[1];
+  if (level === void 0) return Number.NaN;
+  return level.endsWith("inf") ? Number.NEGATIVE_INFINITY : Number(level);
 }
 async function detectSilences(ffmpeg, master, fromMs, toMs, noiseDb = -35, minMs = 50) {
   const start = Math.max(0, fromMs);
@@ -22260,6 +22304,42 @@ async function previewSheet(ffmpeg, video, durationMs, path) {
     await Promise.all(images.map((image) => rm2(image, { force: true })));
   }
 }
+
+// src/shorts/check.ts
+var MIN_SHOT_SEC = 1;
+var EDGE_SPEECH_DB = -40;
+var EDGE_WINDOW_MS = 20;
+var MAX_END_CARD_SEC = 3.5;
+function flashShots(changesSec, durationSec, minSec = MIN_SHOT_SEC) {
+  const marks = [0, ...[...changesSec].sort((a, b) => a - b).filter((at) => at > 0 && at < durationSec), durationSec];
+  const flashes = [];
+  for (let index = 0; index < marks.length - 1; index += 1) {
+    const [startSec, endSec] = [marks[index], marks[index + 1]];
+    if (endSec - startSec < minSec) flashes.push({ startSec: round(startSec), endSec: round(endSec) });
+  }
+  return flashes;
+}
+function edgeHuggingChanges(changesMs, inMs, outMs, windowMs = MIN_SHOT_SEC * 1e3) {
+  const found = [];
+  for (const atMs of changesMs) {
+    if (atMs <= inMs || atMs >= outMs) continue;
+    if (atMs - inMs < windowMs) found.push({ atMs, edge: "start", gapMs: Math.round(atMs - inMs) });
+    else if (outMs - atMs < windowMs) found.push({ atMs, edge: "end", gapMs: Math.round(outMs - atMs) });
+  }
+  return found;
+}
+function edgeHasSpeech(levelDb, thresholdDb = EDGE_SPEECH_DB) {
+  return Number.isFinite(levelDb) && levelDb > thresholdDb;
+}
+function overlayVideoProblem(video, cut) {
+  if (video.modifiedMs < cut.modifiedMs) return "was rendered before the current cut; run overlay again and render it";
+  const extra = video.durationSec - cut.durationSec;
+  if (extra < -0.15 || extra > MAX_END_CARD_SEC) {
+    return `runs ${video.durationSec.toFixed(2)}s, but the current cut is ${cut.durationSec.toFixed(2)}s (plus at most a ${MAX_END_CARD_SEC}s end card); run overlay again and render it`;
+  }
+  return void 0;
+}
+var round = (value) => Math.round(value * 100) / 100;
 
 // src/shorts/overlay.ts
 var SFX_PEAK = {
@@ -22642,6 +22722,11 @@ function buildOverlay(input) {
     const kind = ZOOMS[zoom.kind ?? "snap"];
     const peakSec = startSec + kind.inSec;
     let releaseSec = Math.min(peakSec + (zoom.holdSec ?? kind.holdSec), durationSec - ZOOM_RELEASE_SEC);
+    const shotEndSec = segments.find((segment) => startSec + 0.05 >= segment.startSec && startSec + 0.05 < segment.endSec)?.endSec ?? durationSec;
+    if (releaseSec + ZOOM_RELEASE_SEC > shotEndSec) {
+      releaseSec = shotEndSec - ZOOM_RELEASE_SEC;
+      if (releaseSec < peakSec + 0.3) return issues.push(`${name} at ${startSec.toFixed(2)}s has no room to ease back before the camera cut at ${shotEndSec.toFixed(2)}s; skipped.`);
+    }
     tweens.push(`tl.set("#cam", { transformOrigin: "${zoomOrigin(startSec + 0.3)}" }, ${sec(startSec)});`);
     tweens.push(`tl.to("#cam", { scale: ${zoom.scale ?? kind.scale}, duration: ${kind.inSec}, ease: "${kind.ease}" }, ${sec(startSec)});`);
     const covering = scenes.find((scene) => scene.startSec >= peakSec - 0.05 && scene.startSec < releaseSec + ZOOM_RELEASE_SEC && scene.mode === "full");
@@ -23579,6 +23664,7 @@ Usage:
   shorts.mjs shots  --project <dir> (--master <file> | --from-youtube) [--only <id,...>] [--scene <0-1>]
   shorts.mjs render --project <dir> (--master <file> | --from-youtube) [--only <id,...>]
   shorts.mjs overlay --project <dir> [--only <id,...>]
+  shorts.mjs check  --project <dir> [--master <file>] [--only <id,...>] [--variant <name>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
 
@@ -23609,12 +23695,18 @@ Commands:
           the last word, each placed clear of the faces detected in the short
           (macOS Vision); sound effects come from HyperFrames' bundled library.
           Render it with HyperFrames
+  check   Check every rendered short for what a viewer notices: shots under
+          1 s (flashes of the wrong framing), speech at a cut edge (a clipped
+          word, or the next one starting; needs --master), cuts ending on a
+          word that starts the next thought, an overlay project built from an
+          older cut, and an overlay video that no longer matches its cut
 
 Options:
   --master <file>       The creator's source file for this exact upload
   --from-youtube        Review copy: stream YouTube's own video with audio (usually
                         360p) instead of a master. Not publishing quality
-  --only <id,...>       Limit shots or render to these short ids
+  --only <id,...>       Limit shots, render, overlay or check to these short ids
+  --variant <name>      Overlay video for check to compare: render/<id>-<name>.mp4; default overlay
   --scene <0-1>         Shot-change sensitivity; default 0.3 (lower finds more)
   --silence-db <dB>     Pause threshold for snapping cuts in render; default -35
                         (raise toward -30 for noisy rooms)
@@ -23633,6 +23725,7 @@ var commandFlags = {
   shots: ["project", "master", "from-youtube", "only", "scene", "ffmpeg-path", "proxy"],
   render: ["project", "master", "from-youtube", "only", "ffmpeg-path", "proxy", "silence-db"],
   overlay: ["project", "only", "ffmpeg-path"],
+  check: ["project", "master", "only", "variant", "ffmpeg-path"],
   fetch: ["project", "max-height", "yt-dlp-path", "ffmpeg-path", "proxy"],
   transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"]
 };
@@ -23956,7 +24049,16 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
     await rm4(directory, { recursive: true, force: true });
     const shots = [];
     for (const [cutIndex, cut] of short.cuts.entries()) {
-      const changes = await detectShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
+      const all = await detectAllShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
+      const changes = mergeShotChanges(all, cut.inMs, cut.outMs);
+      for (const hug of edgeHuggingChanges(all, cut.inMs, cut.outMs)) {
+        const where = hug.edge === "end" ? "before this cut ends" : "after this cut starts";
+        issues.push({
+          short: short.spec.id,
+          level: "warning",
+          message: `cuts[${cutIndex}]: the source changes shot ${(hug.gapMs / 1e3).toFixed(2)}s ${where} (${formatTime(hug.atMs)}), which plays as a flash. ${hug.edge === "end" ? "End the cut before it (pin endMs" : "Start the cut after it (pin startMs"} if the phrase can't), or give that moment a layout entry that carries smoothly into the next shot.`
+        });
+      }
       const starts = [cut.inMs, ...changes];
       for (const [index, startMs] of starts.entries()) {
         const endMs = starts[index + 1] ?? cut.outMs;
@@ -24257,6 +24359,82 @@ async function commandOverlay(flags, environment, dependencies) {
   }
   return { shorts: output, issues };
 }
+async function fileDigest(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+async function commandCheck(flags, environment) {
+  const project = resolve3(required(flags, "project"));
+  const { words, edl } = await loadProject(project);
+  const { shorts, issues: planIssues } = requireResolved(words, edl, onlySet(flags));
+  const ffmpeg = await resolveFfmpeg(flags, environment);
+  const master = typeof flags.master === "string" ? resolve3(flags.master) : void 0;
+  if (master && !(await stat2(master).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${master} not found.`);
+  const variant = typeof flags.variant === "string" ? flags.variant : "overlay";
+  const issues = planIssues.filter((issue) => / ends on "/.test(issue.message));
+  const warnings = [];
+  if (!master) warnings.push("Pass --master to check the audio at every cut edge.");
+  const output = [];
+  for (const short of shorts) {
+    const id = short.spec.id;
+    const cutVideo = join6(project, "render", `${id}.mp4`);
+    const cutStat = await stat2(cutVideo).catch(() => void 0);
+    if (!cutStat?.isFile()) {
+      issues.push({ short: id, level: "warning", message: "Not rendered yet; run render first." });
+      continue;
+    }
+    const cutInfo = await probeMaster(ffmpeg, cutVideo);
+    const flashes = flashShots(await detectSceneChanges(ffmpeg, cutVideo), cutInfo.durationSec);
+    for (const flash of flashes) {
+      issues.push({
+        short: id,
+        level: "error",
+        message: `Flash shot: ${(flash.endSec - flash.startSec).toFixed(2)}s of a different framing at ${flash.startSec.toFixed(2)}-${flash.endSec.toFixed(2)}s. Move the cut edge before the source change, or put the layout entry on the first frame of the new shot.`
+      });
+    }
+    const edges = [];
+    if (master) {
+      const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+      for (const [index, cut] of (manifest.cuts ?? []).entries()) {
+        const startDb = await audioLevelDb(ffmpeg, master, cut.inMs, EDGE_WINDOW_MS);
+        const endDb = await audioLevelDb(ffmpeg, master, cut.outMs - EDGE_WINDOW_MS, EDGE_WINDOW_MS);
+        edges.push({ cut: index, startDb: Math.round(startDb * 10) / 10, endDb: Math.round(endDb * 10) / 10 });
+        if (edgeHasSpeech(startDb)) {
+          issues.push({ short: id, level: "warning", message: `cuts[${index}] starts on sound (${startDb.toFixed(0)} dB at ${formatTime(cut.inMs)}): the previous word may bleed in. Listen; start in the pause before the first word.` });
+        }
+        if (edgeHasSpeech(endDb)) {
+          issues.push({ short: id, level: "warning", message: `cuts[${index}] ends on sound (${endDb.toFixed(0)} dB at ${formatTime(cut.outMs)}): the last word may be clipped or the next one has begun. Listen; end in the pause after the last word, or pin endMs at the quietest moment between the two words.` });
+        }
+      }
+    }
+    const asset = join6(project, "overlay", id, "assets", `${id}.mp4`);
+    const assetStat = await stat2(asset).catch(() => void 0);
+    const staleProject = Boolean(assetStat?.isFile() && (assetStat.size !== cutStat.size || await fileDigest(asset) !== await fileDigest(cutVideo)));
+    if (staleProject) {
+      issues.push({ short: id, level: "error", message: `overlay/${id} was built from an older cut; run overlay again before rendering it.` });
+    }
+    const overlayVideo = join6(project, "render", `${id}-${variant}.mp4`);
+    const overlayStat = await stat2(overlayVideo).catch(() => void 0);
+    if (overlayStat?.isFile()) {
+      const overlayInfo = await probeMaster(ffmpeg, overlayVideo);
+      const problem = overlayVideoProblem(
+        { durationSec: overlayInfo.durationSec, modifiedMs: overlayStat.mtimeMs },
+        { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs }
+      );
+      if (problem) issues.push({ short: id, level: "error", message: `${basename2(overlayVideo)} ${problem}.` });
+    }
+    output.push({
+      id,
+      durationSec: Math.round(cutInfo.durationSec * 100) / 100,
+      flashShots: flashes,
+      edges,
+      overlayProject: assetStat?.isFile() ? staleProject ? "stale" : "current" : "none",
+      overlayVideo: overlayStat?.isFile() ? overlayVideo : void 0
+    });
+  }
+  return { ok: !issues.some((issue) => issue.level === "error"), shorts: output, issues, warnings };
+}
 function errorPayload(error) {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -24273,7 +24451,7 @@ async function runShortsCli(argv, io, environment = process.env, dependencies = 
   }
   try {
     const { command, flags } = parseArguments(argv);
-    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
+    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
     return 0;

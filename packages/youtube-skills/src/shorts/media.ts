@@ -103,18 +103,50 @@ export async function detectCapabilities(ffmpeg: string): Promise<Capabilities> 
 
 const seconds = (ms: number) => (ms / 1_000).toFixed(3);
 
-/** Source times (ms) of hard cuts between `inMs` and `outMs`. */
-export async function detectShotChanges(ffmpeg: string, master: string, inMs: number, outMs: number, threshold: number): Promise<number[]> {
+/** Every source time (ms) with a hard cut between `inMs` and `outMs`, including ones right at the edges. */
+export async function detectAllShotChanges(ffmpeg: string, master: string, inMs: number, outMs: number, threshold: number): Promise<number[]> {
   const { stderr } = await mustRun(ffmpeg, [
     '-ss', seconds(inMs), '-t', seconds(outMs - inMs), '-i', master,
     '-an', '-vf', `scale=320:-2,select='gt(scene\\,${threshold})',showinfo`, '-f', 'null', '-',
   ], 'detect shot changes');
-  const changes: number[] = [];
-  for (const match of stderr.matchAll(/pts_time:\s*([\d.]+)/g)) {
-    const at = inMs + Math.round(Number(match[1]) * 1_000);
-    if (!changes.length || at - changes.at(-1)! > 500) changes.push(at);
+  return [...stderr.matchAll(/pts_time:\s*([\d.]+)/g)].map((match) => inMs + Math.round(Number(match[1]) * 1_000));
+}
+
+/**
+ * Source times (ms) of hard cuts between `inMs` and `outMs` that can take a layout entry: changes
+ * within 0.5 s of each other are merged and those within 0.2 s of an edge are left out. Report the
+ * ones left out with `edgeHuggingChanges`; they play as flashes.
+ */
+export async function detectShotChanges(ffmpeg: string, master: string, inMs: number, outMs: number, threshold: number): Promise<number[]> {
+  return mergeShotChanges(await detectAllShotChanges(ffmpeg, master, inMs, outMs, threshold), inMs, outMs);
+}
+
+/** Merge changes within 0.5 s of each other and drop those within 0.2 s of a cut edge. */
+export function mergeShotChanges(changes: number[], inMs: number, outMs: number): number[] {
+  const merged: number[] = [];
+  for (const at of changes) {
+    if (!merged.length || at - merged.at(-1)! > 500) merged.push(at);
   }
-  return changes.filter((at) => at > inMs + 200 && at < outMs - 200);
+  return merged.filter((at) => at > inMs + 200 && at < outMs - 200);
+}
+
+/** Times (seconds) of every hard cut in a whole video file, such as a rendered short. */
+export async function detectSceneChanges(ffmpeg: string, video: string, threshold = 0.3): Promise<number[]> {
+  const { stderr } = await mustRun(ffmpeg, [
+    '-i', video, '-an', '-vf', `scale=320:-2,select='gt(scene\\,${threshold})',showinfo`, '-f', 'null', '-',
+  ], 'detect scene changes', { timeoutMs: PROBE_TIMEOUT_MS * 4 });
+  return [...stderr.matchAll(/pts_time:\s*([\d.]+)/g)].map((match) => Number(match[1]));
+}
+
+/** RMS level (dB) of the audio from `atMs` for `durationMs`; negative infinity for digital silence. */
+export async function audioLevelDb(ffmpeg: string, source: string, atMs: number, durationMs: number): Promise<number> {
+  const { stderr } = await mustRun(ffmpeg, [
+    '-ss', seconds(Math.max(0, atMs)), '-t', seconds(durationMs), '-i', source,
+    '-vn', '-af', 'astats=measure_perchannel=none', '-f', 'null', '-',
+  ], 'measure audio level', { timeoutMs: PROBE_TIMEOUT_MS });
+  const level = [...stderr.matchAll(/RMS level dB:\s*(-?inf|-?[\d.]+)/g)].at(-1)?.[1];
+  if (level === undefined) return Number.NaN;
+  return level.endsWith('inf') ? Number.NEGATIVE_INFINITY : Number(level);
 }
 
 /** Pauses (absolute ms) in the audio between `fromMs` and `toMs`, at or below `noiseDb` for at least `minMs`. */
