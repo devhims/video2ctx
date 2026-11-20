@@ -638,6 +638,13 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       const kind = ZOOMS[zoom.kind ?? 'snap'];
       const peakSec = startSec + kind.inSec;
       let releaseSec = Math.min(peakSec + (zoom.holdSec ?? kind.holdSec), durationSec - ZOOM_RELEASE_SEC);
+      // A zoom stays inside its camera shot: held across a cut, the next shot would open zoomed in,
+      // and a split after it would crop both people. Ease back before the cut, or skip when there's no room.
+      const shotEndSec = segments.find((segment) => startSec + 0.05 >= segment.startSec && startSec + 0.05 < segment.endSec)?.endSec ?? durationSec;
+      if (releaseSec + ZOOM_RELEASE_SEC > shotEndSec) {
+        releaseSec = shotEndSec - ZOOM_RELEASE_SEC;
+        if (releaseSec < peakSec + 0.3) return issues.push(`${name} at ${startSec.toFixed(2)}s has no room to ease back before the camera cut at ${shotEndSec.toFixed(2)}s; skipped.`);
+      }
       tweens.push(`tl.set("#cam", { transformOrigin: "${zoomOrigin(startSec + 0.3)}" }, ${sec(startSec)});`);
       tweens.push(`tl.to("#cam", { scale: ${zoom.scale ?? kind.scale}, duration: ${kind.inSec}, ease: "${kind.ease}" }, ${sec(startSec)});`);
       // When a full-frame scene covers the end of the hold, reset under it instead of easing back on screen.

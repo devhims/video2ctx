@@ -183,6 +183,22 @@ describe('end card, zooms and scenes', () => {
     expect(onSplit.html).not.toContain('tl.to("#cam"');
   });
 
+  test('eases a zoom back before a camera cut instead of holding it into the next shot', () => {
+    // A single-person shot until 3 s, then a split.
+    const cutToSplit = [
+      { inMs: 0, outMs: 3_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } },
+      { inMs: 3_000, outMs: 20_000, layout: { atMs: 3_000, mode: 'stack' as const } },
+    ];
+    const plan = buildOverlay({ ...base, segments: cutToSplit, brand: {}, overlay: { zooms: [{ atSec: 1.5 }] } });
+    // The default snap would release at 1.5 + 0.14 + 1.2 = 2.84 s and finish at 3.24 s; it releases at 2.6 s instead.
+    expect(plan.html).toContain('tl.to("#cam", { scale: 1, duration: 0.4, ease: "power2.inOut" }, 2.6);');
+    expect(plan.issues).toEqual([]);
+
+    const tooLate = buildOverlay({ ...base, segments: cutToSplit, brand: {}, overlay: { zooms: [{ atSec: 2.4 }] } });
+    expect(tooLate.issues).toEqual([expect.stringMatching(/no room to ease back before the camera cut at 3\.00s/)]);
+    expect(tooLate.html).not.toContain('tl.to("#cam"');
+  });
+
   test('mounts scenes in the bottom half or over the frame, with captions on the seam or low', () => {
     const plan = buildOverlay({ ...base, brand: {}, sfx, overlay: { scenes: [
       { src: 'scenes/net.html', mode: 'bottom', atPhrase: 'the minions', endPhrase: 'come on', expandAtPhrase: 'what the' },
