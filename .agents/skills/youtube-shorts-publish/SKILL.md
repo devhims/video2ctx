@@ -40,7 +40,7 @@ One entry per short, in the user's posting order.
 - **Title**: put the hook first, because the feed shows only the start. It must promise only what the clip delivers. A claim the speaker hedged stays hedged, or becomes a question.
 - **Description**: the first line pays off the title. `{episode}` becomes the full episode link and `{moment}` the link to where this clip starts. Name the speaker. Hashtags go on their own line at the end, so leave them out of the body.
 - **Hashtags**: 3 to 5. YouTube shows up to three above the title and ignores every hashtag when there are more than 60.
-- **coverSec**: a second where the hook text and a face are both on screen. The kit saves that frame for review. In YouTube the cover is chosen in the upload flow.
+- **coverSec**: a second where the hook text and a face are both on screen: the face of the person the title is about, eyes open, not a host cutaway or the edge of a graphic. When the short opens on the host, pick a moment from the guest's first shot instead, or the clearest frame of an editor graphic that carries the topic. The kit saves that frame for review. In YouTube the cover is chosen in the upload flow.
 - **publishAt**: spread the shorts out, one a day unless the user says otherwise, at the channel's usual posting time. Include a time zone.
 - **relatedVideo** defaults to the episode. **pinnedComment** points back to it too.
 

@@ -14,7 +14,7 @@ Run `node <skill-directory>/scripts/shorts.mjs <command>`, resolving `scripts/sh
 | Need | For |
 |---|---|
 | Node.js 18.17+ (with npx) | Every command |
-| FFmpeg | `shots`, `render`, `overlay`, `fetch`, `transcribe` |
+| FFmpeg | `shots`, `render`, `overlay`, `check`, `fetch`, `transcribe` |
 | HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays and their bundled sound effects; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
 | The youtube-ctx skill (`npx skills add devhims/video2ctx --skill youtube-ctx`) | Researching the channel's look before overlays (step 7) |
 | yt-dlp, installed by the user (optional) | `fetch`, a 1080p source when there is no master |
@@ -57,6 +57,8 @@ node <skill-directory>/scripts/shorts.mjs plan --project <dir>
 
 `plan` writes word-accurate `startMs`/`endMs`, corrected caption `text`, and `durationSec` back into `edl.json`. Fix every `error` issue and rerun. Then read each cut's `text` as a viewer would: it opens on a hook, ends on a payoff, never leans on earlier context, and has no glossary misses.
 
+A short must never end partway into the next thought. The last words are the end of a sentence, never a connector that starts the next one ("…where I use AI and", "…from you. So that"). `plan` warns when a cut's last word is one of these; move `to` back to the sentence end. After `render`, `check` measures the audio at every cut edge to confirm no partial word slipped in.
+
 Done when: `plan` returns `ok: true` and every cut's `text` passes that read.
 
 ## 5. Frame every shot
@@ -65,7 +67,12 @@ Done when: `plan` returns `ok: true` and every cut's `text` passes that read.
 node <skill-directory>/scripts/shorts.mjs shots --project <dir> --master <file>   # or --from-youtube
 ```
 
-Open every `sheet` image. Tiles run left to right, top to bottom, matching each shot's `n`. Write one `layout` entry per shot using its `atMs`, choosing the mode and position as [references/edl.md](references/edl.md) describes. If a sheet tile shows two shots, rerun with a lower `--scene` (such as `0.2`).
+Open every `sheet` image. Tiles run left to right, top to bottom, matching each shot's `n`. Write one `layout` entry per shot using its `atMs`, choosing the mode and position as [references/edl.md](references/edl.md) describes. If a sheet tile shows two shots, rerun with a lower `--scene` (such as `0.2`). `shots` also warns when the source changes shot within a second of a cut's edge, which no layout entry can frame in time: end the cut before it, start the cut after it, or give that moment a layout that carries smoothly into the next shot.
+
+Two kinds of shot need a closer look than the sheet gives:
+
+- **Editor graphics beside a person** (a chat panel or phone mock-up next to the speaker): frame the speaker's face, not the graphic's edge with a stray hand or shoulder beside it. The captions already carry what the graphic says. Crop on the graphic only when it fills its side of the frame and is the point of the shot.
+- **Animated transitions** (the editor shrinks a shot into a card, slides a graphic in, or cross-fades): a crop that changes at the start of the animation shows half-drawn frames. Step through the source frame by frame, hold the old framing through the animation, and put the new `atMs` on the first frame where the new composition has fully settled inside the new crop window.
 
 Done when: every shot `n` of every short has a layout entry, and `plan` reports no layout warnings.
 
@@ -75,11 +82,25 @@ Done when: every shot `n` of every short has a layout entry, and `plan` reports 
 node <skill-directory>/scripts/shorts.mjs render --project <dir> --master <file>  # or --from-youtube
 ```
 
-`render` moves each cut's edges into the nearest pause in the audio. A warning that there was "no pause" at an edge means the speech runs straight through it, so a word may be clipped, or the next one may start. Those edges get a longer fade. For each one, try moving the `from` or `to` phrase to a sentence end and rerender. If none fits, tell the user to listen to that join.
+`render` moves each cut's edges into a pause in the audio: the start into the pause before the first word, the end into the pause after the last word and before the next one. A short never ends on the first syllable of the next sentence ("so that…") or starts on the tail of the previous one. A warning that there was "no pause" at an edge means the speech runs straight through it, so a word may be clipped or the next one may start. Those edges get a longer fade. For each one, try moving the `from` or `to` phrase to a sentence end and rerender. If none fits, find the quietest moment between the two words in the audio (a 10 ms loudness profile shows it) and pin `endMs` or `startMs` there. Either let the last word finish or cut before the next one starts, never partway into it.
 
 Open every `preview` image (frames at 10%, 50%, and 90%). Faces sit inside the frame with headroom, stacked halves each show one person, and nothing important is cropped. Fix the layout and rerender with `--only <id>`. Read every `warnings` entry; a duration mismatch with the upload means the master is a different cut.
 
-Done when: every preview passes, every "no pause" edge was moved or reported, and each short's `durationSec` matches `plan` within 0.3 s.
+Then run `check`:
+
+```bash
+node <skill-directory>/scripts/shorts.mjs check --project <dir> --master <file>
+```
+
+It reports, per short:
+
+- **Flash shots:** any shot under 1 s in the render, down to a single frame of the wrong framing. Move the cut edge before the source change (pin `startMs`/`endMs` when the phrase can't), or put the layout `atMs` on the first frame of the new shot. Time that frame from a scan of the master without `-ss` (input seeking can be a frame off), and step through the frames around the change to confirm.
+- **Sound at a cut edge:** audio louder than -40 dB in the 20 ms just inside an edge, measured on the master. At an end it means a clipped word or the next one starting; at a start, the previous word bleeding in (or, sometimes, the onset of the first word, which is fine). Listen to each one and fix or accept it.
+- **Cuts ending on a word that starts the next thought** ("and", "so"), carried over from `plan`.
+
+`check` measures; it doesn't watch. It cannot see a crop that shows half of an editor's animated transition, so that still needs the frame-by-frame look from step 5.
+
+Done when: every preview passes, `check` reports no errors and every warning was fixed or accepted after listening, every "no pause" edge was moved or reported, and each short's `durationSec` matches `plan` within 0.3 s.
 
 ## 7. Add overlays
 
@@ -89,8 +110,10 @@ When the user wants on-screen design (captions, a hook title, name tags, an end 
 node <skill-directory>/scripts/shorts.mjs overlay --project <dir>
 ```
 
-Done when: every face report and motion warning from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in both references, and `<id>-overlay.mp4` is rendered.
+`overlay` copies each short's current render into its project. After any later `render` (a moved edge, a new layout entry), run `overlay` again before rendering the overlay video, or it plays the old cut. After rendering the overlay videos, run `check` once more: it fails when an overlay project was built from an older cut, or when an overlay video is older than its cut or isn't the cut's length plus at most an end card. Pass `--variant <name>` when the finished files are `render/<id>-<name>.mp4` rather than `<id>-overlay.mp4`.
+
+Done when: every face report and motion warning from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in both references, `<id>-overlay.mp4` is rendered, and `check` passes on it.
 
 ## 8. Report
 
-For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran. Say whether captions were burned in (`<id>-captioned.mp4`) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. For titles, descriptions, covers and a schedule, continue with the youtube-shorts-publish skill on the same project.
+For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. For titles, descriptions, covers and a schedule, continue with the youtube-shorts-publish skill on the same project.

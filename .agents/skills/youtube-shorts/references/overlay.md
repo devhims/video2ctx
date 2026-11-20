@@ -31,6 +31,8 @@ Text cards clutter a vertical frame. Leave `cards` out and carry the moment with
 
 Then render each one with the `render` command that `overlay` prints (`npx hyperframes@<version> render ...`). That writes `<project>/render/<id>-overlay.mp4`, at roughly 2 s of render time per second of video. HyperFrames encodes with the first FFmpeg on `PATH`, which needs libx264. If the render fails with "Unrecognized option 'preset'", put a full FFmpeg build first on `PATH` for that command.
 
+Work on snapshots, not renders. Check every heading, caption, zoom, scene and cut edge on snapshots first, gather every fix, and render once at the end: each extra pass over a batch of shorts adds about a quarter of an hour.
+
 ## Take the look from the channel
 
 Match what the channel already publishes before choosing anything. This research uses the youtube-ctx skill; install it with `npx skills add devhims/video2ctx --skill youtube-ctx` if it is missing.
@@ -77,7 +79,7 @@ Use the channel's own words and colours. Cards state only facts you can source: 
 
 - `wordmark`: when there are three or more lines, the first is set small (as in "the").
 - `endCard`: present to add the end card. `heading` (default `["Watch the", "Full episode"]`, last line on the accent bar), `channel` (the line under the thumbnail), and `cta` (default "Tap the link below"; `""` hides it). Omit `endCard` for no end card.
-- `nameTag` and `cards`: time them with `atPhrase` (the first matching caption words) or `atSec` (seconds into the short). A name tag with neither follows the hook.
+- `nameTag` and `cards`: time them with `atPhrase` (the first matching caption words) or `atSec` (seconds into the short). A name tag with neither follows the hook. The name tag must land while the named person is on screen: when a short opens on the host's question, time it with `atSec` into the guest's first shot, and remember `overlay` may still move it up to 2 s earlier to dodge a face.
 - `hookImage` (`{ "src": "images/person.jpg", "alt": "Name" }`): a round photo beside the hook, for when the hook names someone viewers may not recognise. `src` is a local file, relative to the project. Use only images whose license allows it, such as Wikimedia Commons or the person's official press kit. Ask before downloading one, crop it around the face, and put the credit the license requires in the description.
 - `emphasis`: 3 to 10 words per short, the ones carrying the meaning. A word coloured everywhere stops meaning anything.
 - `zooms` and `scenes`: see [motion.md](motion.md).
