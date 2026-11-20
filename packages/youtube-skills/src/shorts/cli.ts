@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 
@@ -31,6 +31,7 @@ import {
   detectAllShotChanges,
   detectCapabilities,
   detectSceneChanges,
+  grayFrame,
   detectSilences,
   mergeShotChanges,
   extractSpeechAudio,
@@ -43,7 +44,8 @@ import {
   type MasterInfo,
 } from './media';
 import { EDGE_WINDOW_MS, edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem } from './check';
-import { OVERLAY_SFX, buildOverlay, type SfxKey } from './overlay';
+import { FIT_AREAS, applyFit, drawnBox, fitFor, forMeasuring, hasFitTarget, unionBox, type SceneFit } from './fit';
+import { OVERLAY_SFX, buildOverlay, sceneWindows, type SfxKey } from './overlay';
 import { detectFaces } from './faces';
 import { openYouTubeSource } from './source';
 import { runCommand, ytDlpArgs } from './ytdlp';
@@ -61,6 +63,7 @@ Usage:
   shorts.mjs render --project <dir> (--master <file> | --from-youtube) [--only <id,...>]
   shorts.mjs overlay --project <dir> [--only <id,...>]
   shorts.mjs check  --project <dir> [--master <file>] [--only <id,...>] [--variant <name>]
+  shorts.mjs fit    --project <dir> [--only <id,...>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
 
@@ -96,6 +99,10 @@ Commands:
           word, or the next one starting; needs --master), cuts ending on a
           word that starts the next thought, an overlay project built from an
           older cut, and an overlay video that no longer matches its cut
+  fit     Centre each scene's drawing in its area and size it to fill it: renders
+          every scene on its own with HyperFrames, measures what its [data-fit]
+          element draws, and writes the translate and scale into the scene's
+          "fit" in edl.json, which overlay then applies. "fit": false skips one
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -125,6 +132,7 @@ const commandFlags = {
   render: ['project', 'master', 'from-youtube', 'only', 'ffmpeg-path', 'proxy', 'silence-db'],
   overlay: ['project', 'only', 'ffmpeg-path'],
   check: ['project', 'master', 'only', 'variant', 'ffmpeg-path'],
+  fit: ['project', 'only', 'ffmpeg-path'],
   fetch: ['project', 'max-height', 'yt-dlp-path', 'ffmpeg-path', 'proxy'],
   transcribe: ['project', 'master', 'from-youtube', 'model', 'language', 'ffmpeg-path', 'proxy', 'whisper-path', 'whisper-model'],
 } as const;
@@ -735,7 +743,8 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv, depe
       const file = basename(source);
       if (sceneFiles.some((other) => other?.file === file)) throw new ShortsInputError(`${id} uses ${file} for two scenes; give each scene its own file.`);
       await mkdir(join(directory, 'compositions'), { recursive: true });
-      await copyFile(source, join(directory, 'compositions', file));
+      if (scene.fit && !hasFitTarget(text)) issues.push({ short: id, level: 'warning', message: `${scene.src} has a fit but no [data-fit] element; it plays as written.` });
+      await writeFile(join(directory, 'compositions', file), scene.fit && hasFitTarget(text) ? applyFit(text, scene.fit) : text);
       const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1];
       sceneFiles.push(compositionId ? { compositionId, file } : undefined);
       for (const match of text.matchAll(/assets\/sfx\/([a-z0-9-]+)\.mp3/g)) sceneSfx.add(match[1]!);
@@ -889,6 +898,114 @@ async function commandCheck(flags: Flags, environment: NodeJS.ProcessEnv) {
   return { ok: !issues.some((issue) => issue.level === 'error'), shorts: output, issues, warnings };
 }
 
+/** Snapshot of a scene file rendered on its own: no footage, captions or wordmark to confuse the measurement. */
+async function measureScene(ffmpeg: string, text: string, file: string, durationSec: number, mode: 'bottom' | 'full'): Promise<{ box?: { x1: number; y1: number; x2: number; y2: number }; error?: string }> {
+  const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1] ?? 'scene';
+  const directory = await mkdtemp(join(tmpdir(), 'shorts-fit-'));
+  try {
+    await mkdir(join(directory, 'compositions'), { recursive: true });
+    await writeFile(join(directory, 'compositions', file), forMeasuring(text));
+    await writeFile(join(directory, 'hyperframes.json'), `${JSON.stringify({ paths: { blocks: 'compositions', components: 'compositions/components', assets: 'assets' } }, null, 2)}\n`);
+    await writeFile(join(directory, 'index.html'), [
+      '<!doctype html>',
+      '<html lang="en"><head><meta charset="UTF-8" />',
+      '<script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>',
+      '<style>* { margin: 0; padding: 0; box-sizing: border-box; } html, body { width: 1080px; height: 1920px; overflow: hidden; background: #000; } .scene { position: absolute; inset: 0; }</style>',
+      '</head><body>',
+      `<div id="root" data-composition-id="main" data-start="0" data-duration="${durationSec.toFixed(3)}" data-width="1080" data-height="1920">`,
+      `<div id="${compositionId}" class="scene" data-composition-id="${compositionId}" data-composition-src="compositions/${file}" data-start="0" data-duration="${durationSec.toFixed(3)}" data-track-index="1" data-track-kind="graphics" data-width="1080" data-height="1920"></div>`,
+      '</div>',
+      '<script>const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;</script>',
+      '</body></html>',
+    ].join('\n'));
+    // The middle of the scene, and its final state just before it closes.
+    const times = [0.35, 0.6, 0.85].map((share) => durationSec * share).concat(Math.max(0, durationSec - 0.3));
+    const snaps = join(directory, 'snaps');
+    const result = await runCommand('npx', ['-y', `hyperframes@${HYPERFRAMES_VERSION}`, 'snapshot', directory, '--at', times.map((at) => at.toFixed(2)).join(','), '--no-end', '-o', snaps], 180_000);
+    if (result.code !== 0) return { error: `HyperFrames could not snapshot ${file}: ${result.stderr.trim().split('\n').slice(-2).join(' ')}` };
+    const images = (await readdir(snaps).catch(() => [] as string[])).filter((name) => /^frame-.*\.png$/.test(name)).map((name) => join(snaps, name));
+    if (!images.length) return { error: `HyperFrames wrote no snapshots for ${file}.` };
+    // Quarter resolution is enough to place a drawing to within 4 px.
+    const [width, height] = [270, 480];
+    const rows: [number, number] = mode === 'bottom' ? [height / 2, height] : [0, height];
+    const boxes = await Promise.all(images.map(async (image) => drawnBox(await grayFrame(ffmpeg, image, width, height), width, height, rows)));
+    const box = unionBox(boxes);
+    return box ? { box: { x1: box.x1 * 4, y1: box.y1 * 4, x2: box.x2 * 4, y2: box.y2 * 4 } } : { error: `Nothing drawn was found in ${file}; check it renders on its own.` };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function commandFit(flags: Flags, environment: NodeJS.ProcessEnv) {
+  const project = resolve(required(flags, 'project'));
+  const { words, edl } = await loadProject(project);
+  const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
+  const ffmpeg = await resolveFfmpeg(flags, environment);
+  const edlPath = join(project, 'edl.json');
+  const raw = JSON.parse(await readFile(edlPath, 'utf8')) as { shorts: Array<{ id: string; overlay?: { scenes?: Array<Record<string, unknown>> } }> };
+  const fitted: Array<{ id: string; scene: string; mode: 'bottom' | 'full'; box: { x1: number; y1: number; x2: number; y2: number }; fit: SceneFit }> = [];
+  for (const short of shorts) {
+    const id = short.spec.id;
+    const scenes = short.spec.overlay?.scenes ?? [];
+    if (!scenes.length) continue;
+    const video = join(project, 'render', `${id}.mp4`);
+    if (!(await stat(video).catch(() => undefined))?.isFile()) {
+      issues.push({ short: id, level: 'warning', message: 'Not rendered yet; run render before fit.' });
+      continue;
+    }
+    const info = await probeMaster(ffmpeg, video);
+    const manifest = await readJson(join(project, 'render', `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`) as { cuts?: ResolvedCut[] };
+    const rendered: ResolvedShort = { ...short, cuts: manifest.cuts ?? short.cuts };
+    const texts = await Promise.all(scenes.map((scene) => readFile(resolve(project, scene.src), 'utf8').catch(() => undefined)));
+    const windows = sceneWindows({
+      id,
+      short: rendered,
+      words: captionWords(words, rendered, edl.glossary),
+      segments: renderSegments(rendered),
+      durationSec: Math.floor(info.durationSec * 100) / 100,
+      videoFile: `${id}.mp4`,
+      brand: edl.brand ?? {},
+      speakers: edl.speakers ?? {},
+      overlay: short.spec.overlay ?? {},
+      sceneFiles: scenes.map((scene, index) => {
+        const compositionId = texts[index] && /data-composition-id="([^"]+)"/.exec(texts[index]!)?.[1];
+        return compositionId ? { compositionId, file: basename(scene.src) } : undefined;
+      }),
+    });
+    const entry = raw.shorts.find((candidate) => candidate.id === id);
+    for (const [index, scene] of scenes.entries()) {
+      const text = texts[index];
+      if (scene.fit === false) continue;
+      if (text === undefined) {
+        issues.push({ short: id, level: 'error', message: `scene ${index + 1} not found at ${scene.src}.` });
+        continue;
+      }
+      if (!hasFitTarget(text)) {
+        issues.push({ short: id, level: 'warning', message: `${scene.src} has no [data-fit] element; mark the drawing to fit (not the background) and run fit again.` });
+        continue;
+      }
+      const window = windows.find((candidate) => candidate.file === basename(scene.src));
+      if (!window) {
+        issues.push({ short: id, level: 'warning', message: `${scene.src} isn't placed in the short (run overlay to see why); not fitted.` });
+        continue;
+      }
+      const measured = await measureScene(ffmpeg, text, basename(scene.src), window.endSec - window.startSec, window.mode);
+      if (!measured.box) {
+        issues.push({ short: id, level: 'warning', message: measured.error ?? `${scene.src} could not be measured.` });
+        continue;
+      }
+      const fit = fitFor(measured.box, window.mode);
+      const area = FIT_AREAS[window.mode];
+      if (fit.scale < 0.75) issues.push({ short: id, level: 'warning', message: `${scene.src} draws ${measured.box.x2 - measured.box.x1}x${measured.box.y2 - measured.box.y1} px and shrinks to ${fit.scale}x to fit ${area.maxWidth}x${area.maxHeight}; check its strokes and icons still read at phone size.` });
+      const rawScene = entry?.overlay?.scenes?.[index];
+      if (rawScene) rawScene.fit = fit;
+      fitted.push({ id, scene: scene.src, mode: window.mode, box: measured.box, fit });
+    }
+  }
+  if (fitted.length) await writeFile(edlPath, `${JSON.stringify(raw, null, 2)}\n`);
+  return { edl: edlPath, scenes: fitted, next: fitted.length ? 'Run overlay to apply the fits, then snapshot each scene.' : undefined, issues };
+}
+
 function errorPayload(error: unknown): { error: Record<string, unknown> } {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -923,6 +1040,8 @@ export async function runShortsCli(
               ? await commandOverlay(flags, environment, dependencies)
               : command === 'check'
                 ? await commandCheck(flags, environment)
+              : command === 'fit'
+                ? await commandFit(flags, environment)
               : command === 'fetch'
                 ? await commandFetch(flags, environment)
                 : await commandTranscribe(flags, environment);

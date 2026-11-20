@@ -56,7 +56,7 @@ A viewer gets one glance with the sound off. Each scene must survive that.
 - **A visible change, timed to the words.** Start from a clear first state and change it on the words that carry the point (a piece greys out on each request, a marker fills as each person joins). Hold the final state long enough to read.
 - **Few elements.** Five to eight shapes, one icon style, aligned on a simple grid or circle, evenly spaced, nothing touching or overlapping.
 - **No divider.** A bottom scene meets the footage directly: no line, bar or border between them.
-- **Centred, and filling its area.** A bottom scene's area is the lower half below the seam captions (y 1010 to about 1440); a full scene's runs from below the wordmark to above the low captions (about 260 to 1400). Measure the drawn extents from snapshots (the first state, the middle and the final state), then shift the drawing to the centre of its area and scale it to about 900 px wide or the area's height, whichever comes first. Don't centre by eye in the code. Strokes stay at least 6 px at 1080 wide.
+- **Centred, and filling its area.** A bottom scene's area is the lower half below the seam captions (y 1010 to about 1440); a full scene's runs from below the wordmark to above the low captions (about 260 to 1400). The drawing sits at the centre of its area, about 900 px wide or the area's height, whichever comes first. Don't centre by eye: mark the drawing with `data-fit` and let `fit` measure and place it (see "Fitting a scene" below). Strokes stay at least 6 px at 1080 wide.
 - **Neutral palette.** A scene sits under the footage: a warm off-white for the main shapes, greys for secondary or "not this" parts, a charcoal background, and one highlight colour for the element that matters. The highlight can come from the idea (Minion yellow), but never the channel's accent colour or another saturated red; that colour belongs to the hook and caption keywords.
 - **Connectors end at outlines.** Draw lines behind shapes and stop them a few pixels short of each shape's edge: a person's head or shoulders, a card's border, a node's ring. A line aimed at a shape's centre lands, on a person icon, in the gap between head and body.
 - **Things that belong together share one anchor.** A laptop in front of a person, a marker under a figure: position both from the same coordinate, never two hand-typed numbers that can drift apart. Clip moving parts (a scrolling ruler, a flowing row) to the shape they belong to, so no stray piece shows past its end.
@@ -68,6 +68,7 @@ A viewer gets one glance with the sound off. Each scene must survive that.
 Follow the HyperFrames scene format (`npx hyperframes docs compositions`). The parts that matter here:
 
 - Everything sits inside `<template>`. The root element is `<div id="root" data-composition-id="<id>" data-width="1080" data-height="1920">`, styled as `#root { position: absolute; inset: 0; ... }` with its own background. The timeline registers as `window.__timelines["<id>"]` with the same id. `overlay` reads the id from the file.
+- Put the drawing, but not the background, inside one element marked `data-fit`: a layer covering the frame (`position: absolute; inset: 0`) or a group in a full-frame SVG. `fit` moves and scales that element, so don't animate it itself; animate the shapes inside it.
 - Times are local: 0 is the scene's start. Take each word's time from the short's captions (`render/<id>.srt`) and subtract the scene's start.
 - Use `fromTo`, never `from`, since the host re-seeks the scene each time it shows. Add `immediateRender: false` to a `fromTo` that starts later and sets a visible start state.
 - Build anything that scales or bounces as HTML elements (absolutely positioned `div`s), and use SVG only for lines and icons inside them. GSAP measures SVG boxes for `transformOrigin` when the timeline is built, before the scene is laid out, so scaled SVG groups pivot from the wrong point and drift off their lines.
@@ -75,6 +76,20 @@ Follow the HyperFrames scene format (`npx hyperframes docs compositions`). The p
 - Draw lines with `stroke-dasharray` equal to the line's length and tween `stroke-dashoffset` to 0. Use `stroke-linecap="butt"`, since round caps show as dots before the line draws.
 - For a bottom scene, draw in the lower half (y 1010 to about 1440) and keep the upper half empty: it is masked off until an expand.
 - Sounds: `<audio class="clip" src="assets/sfx/<key>.mp3" data-start="..." data-volume="0.5">` with a local `data-start`. `overlay` fetches every key a scene names from the bundled library (`pop`, `click`, `click-soft`, `sparkle`, `whoosh`, `whoosh-short`, `impact-bass-1`, `riser`, `notification`, `error` and more). Land each sound's peak one frame after its picture: `pop` peaks 0.12 s into the file, `click` and `click-soft` 0.073 s, `error` 0.745 s, `impact-bass-1` 0.073 s, `whoosh` 0.162 s. At 0.2 to 0.6 volume. `hyperframes check` warns that nested audio times may be ambiguous; local times are what scenes use.
+
+### Fitting a scene
+
+Once a short is rendered and its scenes are timed in `edl.json`:
+
+```bash
+node <skill-directory>/scripts/shorts.mjs fit --project <dir>
+```
+
+`fit` renders each scene on its own (no footage, captions or wordmark in the way), snapshots its middle and its final state, and measures what the `data-fit` element draws against the background. It writes the translate and scale that centre the drawing in the scene's area and fill it into that scene's `"fit"` in `edl.json`; `overlay` applies it as it copies the scene in, so a rerun keeps it. Run `fit` again after changing a scene's drawing or timing.
+
+- A drawing that has to shrink below 0.75x is reported: check its strokes and icons still read at phone size, or simplify it.
+- Set `"fit": false` on a scene that is meant to span the frame edge to edge, such as a row of tiles flowing across it.
+- It measures the scene's final state too, so a part that appears late (a finish flag) is included and nothing jumps.
 
 ## Check
 

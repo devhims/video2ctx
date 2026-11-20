@@ -14,8 +14,8 @@ Run `node <skill-directory>/scripts/shorts.mjs <command>`, resolving `scripts/sh
 | Need | For |
 |---|---|
 | Node.js 18.17+ (with npx) | Every command |
-| FFmpeg | `shots`, `render`, `overlay`, `check`, `fetch`, `transcribe` |
-| HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays and their bundled sound effects; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
+| FFmpeg | `shots`, `render`, `overlay`, `check`, `fit`, `fetch`, `transcribe` |
+| HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays and their bundled sound effects; measuring scenes for `fit`; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
 | The youtube-ctx skill (`npx skills add devhims/video2ctx --skill youtube-ctx`) | Researching the channel's look before overlays (step 7) |
 | yt-dlp, installed by the user (optional) | `fetch`, a 1080p source when there is no master |
 
@@ -107,10 +107,11 @@ Done when: every preview passes, `check` reports no errors and every warning was
 When the user wants on-screen design (captions, a hook title, name tags, an end card, branding), follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. For zooms on key lines and animated scenes that act an idea out, follow [references/motion.md](references/motion.md).
 
 ```bash
+node <skill-directory>/scripts/shorts.mjs fit --project <dir>       # when the shorts have scenes
 node <skill-directory>/scripts/shorts.mjs overlay --project <dir>
 ```
 
-`overlay` copies each short's current render into its project. After any later `render` (a moved edge, a new layout entry), run `overlay` again before rendering the overlay video, or it plays the old cut. After rendering the overlay videos, run `check` once more: it fails when an overlay project was built from an older cut, or when an overlay video is older than its cut or isn't the cut's length plus at most an end card. Pass `--variant <name>` when the finished files are `render/<id>-<name>.mp4` rather than `<id>-overlay.mp4`.
+`fit` centres each scene's drawing in its area and sizes it to fill it (see motion.md); run it before `overlay` whenever a scene is new or changed. `overlay` copies each short's current render into its project. After any later `render` (a moved edge, a new layout entry), run `overlay` again before rendering the overlay video, or it plays the old cut. After rendering the overlay videos, run `check` once more: it fails when an overlay project was built from an older cut, or when an overlay video is older than its cut or isn't the cut's length plus at most an end card. Pass `--variant <name>` when the finished files are `render/<id>-<name>.mp4` rather than `<id>-overlay.mp4`.
 
 Done when: every face report and motion warning from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in both references, `<id>-overlay.mp4` is rendered, and `check` passes on it.
 

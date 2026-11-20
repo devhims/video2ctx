@@ -1,3 +1,4 @@
+import type { SceneFit } from './fit';
 import { normalizeToken, phraseTokens } from './transcript';
 import type { CaptionWord, LayoutMode, RenderSegment, ResolvedShort } from './edl';
 import type { Box, FaceSample } from './faces';
@@ -59,6 +60,11 @@ export interface OverlayScene {
   enterSound?: boolean;
   /** true adds a whoosh as the scene closes. */
   exitSound?: boolean;
+  /**
+   * Written by `fit`: a translate and scale for the scene's `[data-fit]` element that centre its
+   * drawing in the scene's area and fill it. false keeps the drawing as written.
+   */
+  fit?: SceneFit | false;
 }
 
 /** Bundled HyperFrames sound effects the overlay uses, keyed by library name. */
@@ -363,6 +369,11 @@ interface PlacedScene extends Timed {
 const SCENE_CUT_FLASH_SEC = 0.6;
 /** A bottom scene starting this close to such a cut appears with the cut instead of sliding in. */
 const SCENE_ON_CUT_SEC = 0.05;
+
+/** Each scene's window on the short's timeline, placed exactly as `buildOverlay` places it. */
+export function sceneWindows(input: OverlayInput): Array<{ file: string; mode: 'bottom' | 'full'; startSec: number; endSec: number }> {
+  return placeScenes(input, timelineSegments(input.segments), []).map(({ file, mode, startSec, endSec }) => ({ file, mode, startSec, endSec }));
+}
 
 /** Resolve scenes to times on the short, dropping (and reporting) any that do not fit. */
 function placeScenes(input: OverlayInput, segments: TimelineSegment[], issues: string[]): PlacedScene[] {

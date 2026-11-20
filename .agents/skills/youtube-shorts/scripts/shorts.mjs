@@ -19023,7 +19023,7 @@ var require_undici = __commonJS({
 // src/shorts/cli.ts
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
+import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, readdir as readdir2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
 import { basename as basename2, extname as extname2, join as join6, resolve as resolve3 } from "node:path";
 
@@ -22125,6 +22125,26 @@ function mergeShotChanges(changes, inMs, outMs) {
   }
   return merged.filter((at) => at > inMs + 200 && at < outMs - 200);
 }
+function grayFrame(ffmpeg, image, width, height) {
+  return new Promise((resolve4, reject) => {
+    const child = spawn(ffmpeg, ["-hide_banner", "-nostdin", "-v", "error", "-i", image, "-vf", `scale=${width}:${height},format=gray`, "-f", "rawvideo", "-"], {
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const chunks = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-STDERR_LIMIT);
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      const data = Buffer.concat(chunks);
+      if (code !== 0 || data.length !== width * height) reject(new MediaError(`FFmpeg could not read ${basename(image)} as a ${width}x${height} frame.`, stderr));
+      else resolve4(new Uint8Array(data));
+    });
+  });
+}
 async function detectSceneChanges(ffmpeg, video, threshold = 0.3) {
   const { stderr } = await mustRun(ffmpeg, [
     "-i",
@@ -22341,6 +22361,80 @@ function overlayVideoProblem(video, cut) {
 }
 var round = (value) => Math.round(value * 100) / 100;
 
+// src/shorts/fit.ts
+var FIT_AREAS = {
+  /** Below the seam captions, above YouTube's bottom UI. */
+  bottom: { centerX: 540, centerY: 1225, maxWidth: 900, maxHeight: 410 },
+  /** Below the wordmark, above the low captions. */
+  full: { centerX: 540, centerY: 830, maxWidth: 900, maxHeight: 1e3 }
+};
+var FIT_MAX_SCALE = 1.6;
+var FIT_CONTRAST = 28;
+function drawnBox(gray, width, height, rows = [0, height]) {
+  const [top, bottom] = [Math.max(0, rows[0]), Math.min(height, rows[1])];
+  const edge = [];
+  for (let y = top; y < bottom; y += 1) {
+    for (const x of [0, 1, width - 2, width - 1]) edge.push(gray[y * width + x]);
+  }
+  edge.sort((a, b) => a - b);
+  const background = edge[Math.floor(edge.length * 0.95)] ?? 0;
+  const limit = background + FIT_CONTRAST;
+  let box;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (gray[y * width + x] <= limit) continue;
+      if (!box) box = { x1: x, y1: y, x2: x + 1, y2: y + 1 };
+      else {
+        box.x1 = Math.min(box.x1, x);
+        box.x2 = Math.max(box.x2, x + 1);
+        box.y1 = Math.min(box.y1, y);
+        box.y2 = Math.max(box.y2, y + 1);
+      }
+    }
+  }
+  return box;
+}
+function unionBox(boxes) {
+  const found = boxes.filter((box) => Boolean(box));
+  if (!found.length) return void 0;
+  return {
+    x1: Math.min(...found.map((box) => box.x1)),
+    y1: Math.min(...found.map((box) => box.y1)),
+    x2: Math.max(...found.map((box) => box.x2)),
+    y2: Math.max(...found.map((box) => box.y2))
+  };
+}
+function fitFor(box, mode) {
+  const area = FIT_AREAS[mode];
+  const width = Math.max(1, box.x2 - box.x1);
+  const height = Math.max(1, box.y2 - box.y1);
+  const originX = (box.x1 + box.x2) / 2;
+  const originY = (box.y1 + box.y2) / 2;
+  const scale = Math.min(FIT_MAX_SCALE, area.maxWidth / width, area.maxHeight / height);
+  return {
+    x: Math.round(area.centerX - originX),
+    y: Math.round(area.centerY - originY),
+    scale: Math.round(scale * 1e3) / 1e3,
+    originX: Math.round(originX),
+    originY: Math.round(originY)
+  };
+}
+function fitCss(fit) {
+  return `[data-fit] { transform-origin: ${fit.originX}px ${fit.originY}px; transform: translate(${fit.x}px, ${fit.y}px) scale(${fit.scale}); }`;
+}
+var FIT_STYLE = /<style data-fit-style>[\s\S]*?<\/style>\n?/g;
+function applyFit(sceneHtml, fit) {
+  const clean = sceneHtml.replace(FIT_STYLE, "");
+  return clean.replace(/<template>\n?/, (open) => `${open}<style data-fit-style>${fitCss(fit)}</style>
+`);
+}
+function hasFitTarget(sceneHtml) {
+  return /\sdata-fit[\s>=]/.test(sceneHtml);
+}
+function forMeasuring(sceneHtml) {
+  return sceneHtml.replace(FIT_STYLE, "").replace(/<audio\b[^>]*>(?:\s*<\/audio>)?/g, "");
+}
+
 // src/shorts/overlay.ts
 var SFX_PEAK = {
   riser: 3.472,
@@ -22493,6 +22587,9 @@ function cardHeight(title, body, source) {
 }
 var SCENE_CUT_FLASH_SEC = 0.6;
 var SCENE_ON_CUT_SEC = 0.05;
+function sceneWindows(input) {
+  return placeScenes(input, timelineSegments(input.segments), []).map(({ file, mode, startSec, endSec }) => ({ file, mode, startSec, endSec }));
+}
 function placeScenes(input, segments, issues) {
   const placed = [];
   (input.overlay.scenes ?? []).forEach((scene, index) => {
@@ -23665,6 +23762,7 @@ Usage:
   shorts.mjs render --project <dir> (--master <file> | --from-youtube) [--only <id,...>]
   shorts.mjs overlay --project <dir> [--only <id,...>]
   shorts.mjs check  --project <dir> [--master <file>] [--only <id,...>] [--variant <name>]
+  shorts.mjs fit    --project <dir> [--only <id,...>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
 
@@ -23700,6 +23798,10 @@ Commands:
           word, or the next one starting; needs --master), cuts ending on a
           word that starts the next thought, an overlay project built from an
           older cut, and an overlay video that no longer matches its cut
+  fit     Centre each scene's drawing in its area and size it to fill it: renders
+          every scene on its own with HyperFrames, measures what its [data-fit]
+          element draws, and writes the translate and scale into the scene's
+          "fit" in edl.json, which overlay then applies. "fit": false skips one
 
 Options:
   --master <file>       The creator's source file for this exact upload
@@ -23726,6 +23828,7 @@ var commandFlags = {
   render: ["project", "master", "from-youtube", "only", "ffmpeg-path", "proxy", "silence-db"],
   overlay: ["project", "only", "ffmpeg-path"],
   check: ["project", "master", "only", "variant", "ffmpeg-path"],
+  fit: ["project", "only", "ffmpeg-path"],
   fetch: ["project", "max-height", "yt-dlp-path", "ffmpeg-path", "proxy"],
   transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"]
 };
@@ -24287,7 +24390,8 @@ async function commandOverlay(flags, environment, dependencies) {
       const file = basename2(source);
       if (sceneFiles.some((other) => other?.file === file)) throw new ShortsInputError(`${id} uses ${file} for two scenes; give each scene its own file.`);
       await mkdir4(join6(directory, "compositions"), { recursive: true });
-      await copyFile2(source, join6(directory, "compositions", file));
+      if (scene.fit && !hasFitTarget(text)) issues.push({ short: id, level: "warning", message: `${scene.src} has a fit but no [data-fit] element; it plays as written.` });
+      await writeFile4(join6(directory, "compositions", file), scene.fit && hasFitTarget(text) ? applyFit(text, scene.fit) : text);
       const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1];
       sceneFiles.push(compositionId ? { compositionId, file } : void 0);
       for (const match of text.matchAll(/assets\/sfx\/([a-z0-9-]+)\.mp3/g)) sceneSfx.add(match[1]);
@@ -24435,6 +24539,111 @@ async function commandCheck(flags, environment) {
   }
   return { ok: !issues.some((issue) => issue.level === "error"), shorts: output, issues, warnings };
 }
+async function measureScene(ffmpeg, text, file, durationSec, mode) {
+  const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1] ?? "scene";
+  const directory = await mkdtemp2(join6(tmpdir2(), "shorts-fit-"));
+  try {
+    await mkdir4(join6(directory, "compositions"), { recursive: true });
+    await writeFile4(join6(directory, "compositions", file), forMeasuring(text));
+    await writeFile4(join6(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" } }, null, 2)}
+`);
+    await writeFile4(join6(directory, "index.html"), [
+      "<!doctype html>",
+      '<html lang="en"><head><meta charset="UTF-8" />',
+      '<script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>',
+      "<style>* { margin: 0; padding: 0; box-sizing: border-box; } html, body { width: 1080px; height: 1920px; overflow: hidden; background: #000; } .scene { position: absolute; inset: 0; }</style>",
+      "</head><body>",
+      `<div id="root" data-composition-id="main" data-start="0" data-duration="${durationSec.toFixed(3)}" data-width="1080" data-height="1920">`,
+      `<div id="${compositionId}" class="scene" data-composition-id="${compositionId}" data-composition-src="compositions/${file}" data-start="0" data-duration="${durationSec.toFixed(3)}" data-track-index="1" data-track-kind="graphics" data-width="1080" data-height="1920"></div>`,
+      "</div>",
+      '<script>const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;</script>',
+      "</body></html>"
+    ].join("\n"));
+    const times = [0.35, 0.6, 0.85].map((share) => durationSec * share).concat(Math.max(0, durationSec - 0.3));
+    const snaps = join6(directory, "snaps");
+    const result = await runCommand("npx", ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "snapshot", directory, "--at", times.map((at) => at.toFixed(2)).join(","), "--no-end", "-o", snaps], 18e4);
+    if (result.code !== 0) return { error: `HyperFrames could not snapshot ${file}: ${result.stderr.trim().split("\n").slice(-2).join(" ")}` };
+    const images = (await readdir2(snaps).catch(() => [])).filter((name) => /^frame-.*\.png$/.test(name)).map((name) => join6(snaps, name));
+    if (!images.length) return { error: `HyperFrames wrote no snapshots for ${file}.` };
+    const [width, height] = [270, 480];
+    const rows = mode === "bottom" ? [height / 2, height] : [0, height];
+    const boxes = await Promise.all(images.map(async (image) => drawnBox(await grayFrame(ffmpeg, image, width, height), width, height, rows)));
+    const box = unionBox(boxes);
+    return box ? { box: { x1: box.x1 * 4, y1: box.y1 * 4, x2: box.x2 * 4, y2: box.y2 * 4 } } : { error: `Nothing drawn was found in ${file}; check it renders on its own.` };
+  } finally {
+    await rm4(directory, { recursive: true, force: true });
+  }
+}
+async function commandFit(flags, environment) {
+  const project = resolve3(required(flags, "project"));
+  const { words, edl } = await loadProject(project);
+  const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
+  const ffmpeg = await resolveFfmpeg(flags, environment);
+  const edlPath = join6(project, "edl.json");
+  const raw = JSON.parse(await readFile2(edlPath, "utf8"));
+  const fitted = [];
+  for (const short of shorts) {
+    const id = short.spec.id;
+    const scenes = short.spec.overlay?.scenes ?? [];
+    if (!scenes.length) continue;
+    const video = join6(project, "render", `${id}.mp4`);
+    if (!(await stat2(video).catch(() => void 0))?.isFile()) {
+      issues.push({ short: id, level: "warning", message: "Not rendered yet; run render before fit." });
+      continue;
+    }
+    const info = await probeMaster(ffmpeg, video);
+    const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+    const rendered = { ...short, cuts: manifest.cuts ?? short.cuts };
+    const texts = await Promise.all(scenes.map((scene) => readFile2(resolve3(project, scene.src), "utf8").catch(() => void 0)));
+    const windows = sceneWindows({
+      id,
+      short: rendered,
+      words: captionWords(words, rendered, edl.glossary),
+      segments: renderSegments(rendered),
+      durationSec: Math.floor(info.durationSec * 100) / 100,
+      videoFile: `${id}.mp4`,
+      brand: edl.brand ?? {},
+      speakers: edl.speakers ?? {},
+      overlay: short.spec.overlay ?? {},
+      sceneFiles: scenes.map((scene, index) => {
+        const compositionId = texts[index] && /data-composition-id="([^"]+)"/.exec(texts[index])?.[1];
+        return compositionId ? { compositionId, file: basename2(scene.src) } : void 0;
+      })
+    });
+    const entry = raw.shorts.find((candidate) => candidate.id === id);
+    for (const [index, scene] of scenes.entries()) {
+      const text = texts[index];
+      if (scene.fit === false) continue;
+      if (text === void 0) {
+        issues.push({ short: id, level: "error", message: `scene ${index + 1} not found at ${scene.src}.` });
+        continue;
+      }
+      if (!hasFitTarget(text)) {
+        issues.push({ short: id, level: "warning", message: `${scene.src} has no [data-fit] element; mark the drawing to fit (not the background) and run fit again.` });
+        continue;
+      }
+      const window = windows.find((candidate) => candidate.file === basename2(scene.src));
+      if (!window) {
+        issues.push({ short: id, level: "warning", message: `${scene.src} isn't placed in the short (run overlay to see why); not fitted.` });
+        continue;
+      }
+      const measured = await measureScene(ffmpeg, text, basename2(scene.src), window.endSec - window.startSec, window.mode);
+      if (!measured.box) {
+        issues.push({ short: id, level: "warning", message: measured.error ?? `${scene.src} could not be measured.` });
+        continue;
+      }
+      const fit = fitFor(measured.box, window.mode);
+      const area = FIT_AREAS[window.mode];
+      if (fit.scale < 0.75) issues.push({ short: id, level: "warning", message: `${scene.src} draws ${measured.box.x2 - measured.box.x1}x${measured.box.y2 - measured.box.y1} px and shrinks to ${fit.scale}x to fit ${area.maxWidth}x${area.maxHeight}; check its strokes and icons still read at phone size.` });
+      const rawScene = entry?.overlay?.scenes?.[index];
+      if (rawScene) rawScene.fit = fit;
+      fitted.push({ id, scene: scene.src, mode: window.mode, box: measured.box, fit });
+    }
+  }
+  if (fitted.length) await writeFile4(edlPath, `${JSON.stringify(raw, null, 2)}
+`);
+  return { edl: edlPath, scenes: fitted, next: fitted.length ? "Run overlay to apply the fits, then snapshot each scene." : void 0, issues };
+}
 function errorPayload(error) {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -24451,7 +24660,7 @@ async function runShortsCli(argv, io, environment = process.env, dependencies = 
   }
   try {
     const { command, flags } = parseArguments(argv);
-    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
+    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fit" ? await commandFit(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
     return 0;

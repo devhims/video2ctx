@@ -130,6 +130,26 @@ export function mergeShotChanges(changes: number[], inMs: number, outMs: number)
   return merged.filter((at) => at > inMs + 200 && at < outMs - 200);
 }
 
+/** An image as one byte of luma per pixel, scaled to `width` x `height`. */
+export function grayFrame(ffmpeg: string, image: string, width: number, height: number): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-v', 'error', '-i', image, '-vf', `scale=${width}:${height},format=gray`, '-f', 'rawvideo', '-'], {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_LIMIT); });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      const data = Buffer.concat(chunks);
+      if (code !== 0 || data.length !== width * height) reject(new MediaError(`FFmpeg could not read ${basename(image)} as a ${width}x${height} frame.`, stderr));
+      else resolve(new Uint8Array(data));
+    });
+  });
+}
+
 /** Times (seconds) of every hard cut in a whole video file, such as a rendered short. */
 export async function detectSceneChanges(ffmpeg: string, video: string, threshold = 0.3): Promise<number[]> {
   const { stderr } = await mustRun(ffmpeg, [
