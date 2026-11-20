@@ -1,13 +1,15 @@
 # video2ctx agent skills
 
-Two [Agent Skills](https://agentskills.io) for working with YouTube context locally or through the hosted video2ctx platform. They work in skills-compatible agents such as Claude Code, Codex, Cursor, and OpenCode.
+Four [Agent Skills](https://agentskills.io) for working with YouTube context locally or through the hosted video2ctx platform, and for cutting and publishing Shorts from long videos. They work in skills-compatible agents such as Claude Code, Codex, Cursor, and OpenCode.
 
 | Skill | Reach for it when | Needs |
 | --- | --- | --- |
 | `youtube-ctx` | You want personal, one-off public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, or exact-frame verification on the user's machine | Node.js 18.17+; optional FFmpeg for exact frames |
+| `youtube-shorts` | You want vertical Shorts, Reels, or clips cut from a long video: ranked moments, word-accurate cuts, per-shot 9:16 framing, and rendered 1080x1920 files with captions and channel-styled overlays | Node.js 18.17+; FFmpeg; HyperFrames for overlays and missing captions; youtube-ctx for overlay research; the creator's master file to publish |
+| `youtube-shorts-publish` | Rendered Shorts need titles, descriptions, hashtags, cover frames, and a posting schedule checked against YouTube's limits, or an unlisted upload through the YouTube Data API | Node.js 18.17+; FFmpeg; your own Google OAuth client for uploads |
 | `video2ctx-platform` | You need managed YouTube search, transcripts, video or channel metadata, caption tracks, comments, end screens, playlists, account identity, usage and credits, recurring monitors, notifications, or delivery preferences for a production or cloud-backed workflow | A video2ctx account and the public `video2ctx` CLI |
 
-Each skill is self-contained and can be installed alone. For personal, low-to-moderate usage, start with `youtube-ctx`; its direct and visual branches choose the smallest local workflow and use FFmpeg only for exact frames. Use `video2ctx-platform` for authenticated hosted infrastructure, production applications, recurring work, or fallback when direct local access fails.
+Each skill installs on its own; `youtube-shorts` also uses `youtube-ctx` to research a channel's look before adding overlays, and hands publishing to `youtube-shorts-publish`. For personal, low-to-moderate usage, start with `youtube-ctx`; its direct and visual branches choose the smallest local workflow and use FFmpeg only for exact frames. Use `video2ctx-platform` for authenticated hosted infrastructure, production applications, recurring work, or fallback when direct local access fails.
 
 ## Install
 
@@ -31,7 +33,15 @@ npx skills add devhims/video2ctx --skill youtube-ctx
 npx skills add devhims/video2ctx --skill video2ctx-platform
 ```
 
-Install both:
+```bash
+npx skills add devhims/video2ctx --skill youtube-shorts
+```
+
+```bash
+npx skills add devhims/video2ctx --skill youtube-shorts-publish
+```
+
+Install all of them:
 
 ```bash
 npx skills add devhims/video2ctx --all
@@ -70,4 +80,4 @@ Use of the hosted video2ctx service is additionally governed by its [Terms of Se
 
 ## Contributing
 
-These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-ctx` carries its direct and visual executables; storyboard inspection needs no extra dependency, while exact-frame verification optionally uses the machine's FFmpeg installation. `video2ctx-platform` uses the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.
+These skills are maintained in the [video2ctx repository](https://github.com/devhims/video2ctx). `youtube-ctx` carries its direct and visual executables; storyboard inspection needs no extra dependency, while exact-frame verification optionally uses the machine's FFmpeg installation. `youtube-shorts` carries its own executable and uses FFmpeg to detect camera cuts and render from a master file the user supplies. `video2ctx-platform` uses the independently versioned `@video2ctx/cli` package. Repository-internal guidance lives in `reference/agents/platform-internals.md` instead.

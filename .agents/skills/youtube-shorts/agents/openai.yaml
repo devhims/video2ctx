@@ -1,0 +1,4 @@
+interface:
+  display_name: "YouTube Shorts"
+  short_description: "Cut vertical Shorts from a long YouTube video"
+  default_prompt: "Use $youtube-shorts to find standalone moments in a long YouTube video, plan word-accurate cuts and 9:16 framing, and render Shorts from the creator's master file."
