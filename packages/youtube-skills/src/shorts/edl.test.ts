@@ -56,6 +56,15 @@ describe('resolveShorts', () => {
     expect(tooLong.issues).toContainEqual(expect.objectContaining({ level: 'error', message: expect.stringMatching(/at most 180s/) }));
   });
 
+  test('warns when a cut ends on a word that starts the next thought', () => {
+    const { issues } = resolveShorts(words, edl({ cuts: [{ from: 'I walked', to: 'and' }], layout: [{ atMs: 10_000, mode: 'crop', x: 0.4 }] }));
+    expect(issues).toContainEqual(expect.objectContaining({ level: 'warning', message: expect.stringMatching(/ends on "And"/) }));
+    const asked = flattenWords([segment(30_000, [['what', 30_000], [' about', 30_300], [' that?', 30_600], [' Next', 31_000]])]);
+    expect(resolveShorts(asked, edl({ cuts: [{ from: 'what about', to: 'that' }], layout: [{ atMs: 29_000, mode: 'crop', x: 0.4 }] })).issues).toEqual([]);
+    const clean = resolveShorts(words, edl({ layout: [{ atMs: 10_000, mode: 'crop', x: 0.4 }] }));
+    expect(clean.issues).toEqual([]);
+  });
+
   test('flags repeated audio as a teaser warning, not an error', () => {
     const { issues } = resolveShorts(words, edl({ cuts: [{ startMs: 20_000, endMs: 21_000 }, { startMs: 20_500, endMs: 21_500 }] }));
     expect(issues).toContainEqual(expect.objectContaining({ level: 'warning', message: expect.stringMatching(/teaser/) }));
@@ -97,6 +106,14 @@ describe('captions', () => {
 describe('snapCutToSilence', () => {
   const cut = { startMs: 10_000, endMs: 13_000, lastWordStartMs: 12_400, inMs: 9_880, outMs: 13_000 };
 
+  test('never moves the end past the next word into a later pause', () => {
+    // "...from you. So that..": the only pause found is after "So that", 200 ms into the next words.
+    const { cut: snapped, notes } = snapCutToSilence({ ...cut, outMs: 12_990 }, [{ startMs: 13_200, endMs: 13_300 }], 'cuts[0]');
+    expect(snapped.outMs).toBe(12_990);
+    expect(snapped.softOut).toBe(true);
+    expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/no pause after the last word/)]));
+  });
+
   test('moves edges that land on sound into the nearest pause', () => {
     const { cut: snapped, notes } = snapCutToSilence(cut, [
       { startMs: 9_600, endMs: 9_850 },
@@ -122,8 +139,13 @@ describe('snapCutToSilence', () => {
 });
 
 describe('alignCutToFrames', () => {
-  test('rounds media edges to the frame grid', () => {
-    const aligned = alignCutToFrames({ startMs: 0, endMs: 0, lastWordStartMs: 0, inMs: 1_010, outMs: 2_049 }, 25);
+  test('rounds media edges inward to the frame grid', () => {
+    const aligned = alignCutToFrames({ startMs: 0, endMs: 0, lastWordStartMs: 0, inMs: 1_010, outMs: 2_079 }, 25);
+    expect(aligned).toMatchObject({ inMs: 1_040, outMs: 2_040 });
+  });
+
+  test('keeps edges already on the grid', () => {
+    const aligned = alignCutToFrames({ startMs: 0, endMs: 0, lastWordStartMs: 0, inMs: 1_000, outMs: 2_040 }, 25);
     expect(aligned).toMatchObject({ inMs: 1_000, outMs: 2_040 });
   });
 });

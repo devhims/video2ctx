@@ -34,7 +34,7 @@ Rank by how strong the hook is, then how surprising or useful the payoff is, the
 - **Drop the aside**: two cuts around a tangent in the middle.
 - **Teaser**: a 2 to 3 second punchline as cut 1, then the full moment. `plan` flags the repeated audio as a warning; that is expected.
 
-Start each cut on the first word of a sentence or speaker turn and end on a sentence end. Keep a speaker's own hedges ("if I understand correctly") when the clip makes a factual claim.
+Start each cut on the first word of a sentence or speaker turn and end on a sentence end. Never end on "and", "so", "but" or any word that opens the next thought: the viewer hears the sentence restart and the short stops mid-breath. Keep a speaker's own hedges ("if I understand correctly") when the clip makes a factual claim.
 
 ## Write hook variants
 

@@ -223,6 +223,11 @@ export interface SnapResult {
 const SNAP_PRE_ROLL_MS = 80;
 /** Keep this much of a pause after the last word before cutting. */
 const SNAP_TAIL_MS = 120;
+/**
+ * An end pause must start no later than this after the next word's caption time. A pause found
+ * later than that sits after the next word, and cutting there would play its first syllables.
+ */
+const NEXT_WORD_SLACK_MS = 60;
 
 const inside = (ms: number, silence: Silence) => ms >= silence.startMs && ms <= silence.endMs;
 
@@ -245,7 +250,7 @@ export function snapCutToSilence(cut: ResolvedCut, silences: Silence[], label: s
     if (!best) notes.push(`${label}: no pause at the start; the first word may be clipped or the previous word may bleed in.`);
   }
   if (!silences.some((silence) => inside(outMs, silence))) {
-    const candidates = silences.filter((silence) => silence.startMs >= cut.lastWordStartMs + 150 && silence.startMs <= cut.outMs + 300);
+    const candidates = silences.filter((silence) => silence.startMs >= cut.lastWordStartMs + 150 && silence.startMs <= cut.outMs + NEXT_WORD_SLACK_MS);
     const best = candidates.sort((a, b) => Math.abs(a.startMs - cut.outMs) - Math.abs(b.startMs - cut.outMs))[0];
     if (best) outMs = Math.min(best.endMs, best.startMs + SNAP_TAIL_MS);
     else softOut = true;
@@ -255,12 +260,16 @@ export function snapCutToSilence(cut: ResolvedCut, silences: Silence[], label: s
   return { cut: { ...cut, inMs, outMs, ...(softIn ? { softIn } : {}), ...(softOut ? { softOut } : {}) }, notes };
 }
 
-/** Round a cut's media edges to the source's frame grid so video and audio lengths agree exactly. */
+/**
+ * Round a cut's media edges to the source's frame grid so video and audio lengths agree exactly.
+ * Edges round inward (start later, end earlier), so alignment never reaches into the neighbouring
+ * word that snapping just cut away from.
+ */
 export function alignCutToFrames(cut: ResolvedCut, fps: number): ResolvedCut {
   const frameMs = 1_000 / fps;
-  const align = (ms: number) => Math.round(ms / frameMs) * frameMs;
-  const inMs = align(cut.inMs);
-  return { ...cut, inMs, outMs: Math.max(inMs + frameMs, align(cut.outMs)) };
+  const inMs = Math.ceil(cut.inMs / frameMs - 1e-6) * frameMs;
+  const outMs = Math.floor(cut.outMs / frameMs + 1e-6) * frameMs;
+  return { ...cut, inMs, outMs: Math.max(inMs + frameMs, outMs) };
 }
 
 export interface ResolvedShort {
@@ -268,6 +277,9 @@ export interface ResolvedShort {
   cuts: ResolvedCut[];
   durationMs: number;
 }
+
+/** Words that begin a new thought; a cut that ends on one stops partway into the next sentence. */
+const DANGLING_WORDS = new Set(['and', 'so', 'but', 'or', 'because', 'then', 'which', 'that', 'like', 'um', 'uh']);
 
 export function resolveShorts(words: Word[], edl: Edl, only?: Set<string>): { shorts: ResolvedShort[]; issues: Issue[] } {
   const issues: Issue[] = [];
@@ -293,6 +305,13 @@ export function resolveShorts(words: Word[], edl: Edl, only?: Set<string>): { sh
         }
       }
     }
+    cuts.forEach((cut, index) => {
+      const last = [...words].reverse().find((word) => !word.tag && word.norm && word.startMs >= cut.startMs && word.startMs < cut.endMs);
+      // A connector that closes a sentence ("…about that?") is fine; only an unfinished one dangles.
+      if (last && DANGLING_WORDS.has(last.norm) && !/[.?!]["'”’)]*$/.test(last.text.trim())) {
+        issues.push({ short: spec.id, level: 'warning', message: `cuts[${index}] ends on "${last.text.trim()}", which starts the next thought; end at the sentence before it.` });
+      }
+    });
     const durationMs = cuts.reduce((total, cut) => total + cut.outMs - cut.inMs, 0);
     if (durationMs > SHORTS_MAX_SEC * 1_000) {
       issues.push({ short: spec.id, level: 'error', message: `Runs ${(durationMs / 1_000).toFixed(1)}s; Shorts allow at most ${SHORTS_MAX_SEC}s.` });
