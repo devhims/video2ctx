@@ -136,7 +136,12 @@ const CARD_SEC = 4.5;
 const NAME_TAG_SEC = 3.6;
 /** Caption block top edge per layout, on the 1080x1920 frame. */
 /** Captions sit low on single-person shots, inside this band, and on the seam of split screens. */
-const CAPTION_BAND: [number, number] = [1150, 1560];
+/**
+ * Low captions move within the lower third only: high enough to clear a chin, never up toward the
+ * middle of the frame, where they read as floating over the picture. A face that reaches lower than
+ * this is a framing problem, reported rather than dodged.
+ */
+const CAPTION_BAND: [number, number] = [1350, 1560];
 const CAPTION_LOW = 1422;
 const CAPTION_HEIGHT = 102;
 const SEAM_CAPTION_TOP = 960 - CAPTION_HEIGHT / 2;
@@ -549,7 +554,7 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
     if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of a card; shorten it.`);
     else if (spot.overlap > area(CAPTION_HEIGHT, FULL_WIDTH) * FACE_TOLERANCE) {
       const share = Math.round((spot.overlap / area(CAPTION_HEIGHT, FULL_WIDTH)) * 100);
-      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face (chin or mouth): ${share}% of the caption band on average over that stretch.`);
+      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face (chin or mouth): ${share}% of the caption band on average over that stretch. Captions stay in the lower third; reframe that shot so the face sits higher.`);
     }
     return spot.y;
   });

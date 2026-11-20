@@ -125,6 +125,16 @@ describe('face-aware overlay', () => {
     expect(plan.html).toContain('tl.from("#hook .hook-img"');
   });
 
+  test('keeps captions in the lower third and reports a face that sits too low, instead of lifting them', () => {
+    // A face whose chin reaches 1480 px: dodging it would push captions up toward mid-frame.
+    const faces = [0, 1, 2, 3, 4, 5].map((atSec) => ({ atSec, boxes: [{ x: 200, y: 900, w: 680, h: 580 }] }));
+    const plan = buildOverlay({ id: 'S1', short, words, segments: one, durationSec: 6, videoFile: 'S1.mp4', brand: {}, speakers: {}, overlay: {}, faces });
+    const top = Number(/id="cap-0"[^>]*style="top:(\d+)px/.exec(plan.html)?.[1]);
+    expect(top).toBeGreaterThanOrEqual(1350);
+    expect(plan.issues.length).toBeGreaterThan(0);
+    for (const issue of plan.issues) expect(issue).toMatch(/cover a face.*reframe that shot so the face sits higher/);
+  });
+
   test('falls back to typical face zones per framing', () => {
     expect(typicalFaces(timelineSegments(one))[0]!.boxes).toEqual([{ x: 120, y: 380, w: 840, h: 980 }]);
   });

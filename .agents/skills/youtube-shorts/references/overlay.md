@@ -15,13 +15,13 @@
 
 - **Headings** (hook, name tag, cards) always sit at the top, starting 48 px below the wordmark.
 - **Captions** never go at the top:
-  - On `crop` and `fit` shots they sit low, between 1150 px and YouTube's bottom UI.
+  - On `crop` and `fit` shots they sit low, in the lower third, between 1350 px and YouTube's bottom UI.
   - On `stack` shots, and under a bottom-half scene, they sit on the seam at mid-frame.
   - Under a full-frame scene they sit low.
 
 `overlay` finds the faces in each rendered short twice a second using macOS's Vision framework, with nothing to install, and saves them to `overlay/<id>/faces.json`. Off macOS, typical face areas for each framing stand in; check those snapshots closely. Faces decide three things:
 
-- **Where low captions sit:** as low as possible while clearing the chin, re-placed only at a camera cut or when a heading or scene comes or goes.
+- **Where low captions sit:** as low as possible while clearing the chin, re-placed only at a camera cut or when a heading or scene comes or goes. They never rise above 1350 px: a face that reaches lower than that is reported, and the fix is to reframe the shot so the face sits higher, not to lift the captions toward mid-frame.
 - **When name tags and cards show:** they shift up to 2 s so they cover less face at the top.
 - **Where zooms centre:** on the speaker's face at that moment.
 

@@ -22364,7 +22364,7 @@ var ZOOMS = {
 var ZOOM_RELEASE_SEC = 0.4;
 var CARD_SEC = 4.5;
 var NAME_TAG_SEC = 3.6;
-var CAPTION_BAND = [1150, 1560];
+var CAPTION_BAND = [1350, 1560];
 var CAPTION_LOW = 1422;
 var CAPTION_HEIGHT = 102;
 var SEAM_CAPTION_TOP = 960 - CAPTION_HEIGHT / 2;
@@ -22653,7 +22653,7 @@ function buildOverlay(input) {
     if (spot.overlap >= HARD_PENALTY) issues.push(`captions from ${window.startSec.toFixed(1)}s have no room clear of a card; shorten it.`);
     else if (spot.overlap > area(CAPTION_HEIGHT, FULL_WIDTH) * FACE_TOLERANCE) {
       const share = Math.round(spot.overlap / area(CAPTION_HEIGHT, FULL_WIDTH) * 100);
-      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face (chin or mouth): ${share}% of the caption band on average over that stretch.`);
+      issues.push(`captions from ${window.startSec.toFixed(1)}s cover a face (chin or mouth): ${share}% of the caption band on average over that stretch. Captions stay in the lower third; reframe that shot so the face sits higher.`);
     }
     return spot.y;
   });
