@@ -1,16 +1,21 @@
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { diagnosticDetails, errorDetails, logDiagnostic, structuredFailure } from './diagnostics.mjs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { parseFrameRequest, parseProxyOrder } from './contract.mjs';
+import { prepareTokenProvider } from './token-provider.mjs';
+import { createPlaybackCache } from './playback-cache.mjs';
 import { runFrameJob } from './runtime.mjs';
 
-export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) {
+export function createFrameApp(run = runFrameJob, { log = logDiagnostic, prepareProvider = prepareTokenProvider } = {}) {
   const app = new Hono();
+  const playbackCache = createPlaybackCache();
   let active = false;
   app.get('/health', c => c.json({ status: 'ok', active }));
+  app.use('/frames/*', bodyLimit({ maxSize: 4096 }));
   app.use('/frames', bodyLimit({ maxSize: 4096 }));
-  app.post('/frames', async c => {
+  app.on('POST', ['/frames', '/frames/attested'], async c => {
     let request;
     try { request = parseFrameRequest(await c.req.json()); }
     catch (error) { return c.json({ error: { code: 'INVALID_INPUT', message: error.message, retryable: false } }, 422); }
@@ -19,6 +24,8 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
       return c.json({ error: { code: 'PROCESSOR_BUSY', message: 'The frame processor is busy.', retryable: true } }, 503);
     }
     const proxyOrder = parseProxyOrder(c.req.header('x-proxy-order'));
+    const attested = c.req.path === '/frames/attested';
+    if (attested && proxyOrder?.length !== 1) return c.json({ error: { code: 'INVALID_INPUT' } }, 422);
     const suppliedId = c.req.header('x-extraction-id');
     const extractionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(suppliedId ?? '') ? suppliedId : randomUUID();
     c.header('x-extraction-id', extractionId);
@@ -36,7 +43,9 @@ export function createFrameApp(run = runFrameJob, { log = logDiagnostic } = {}) 
     };
     active = true;
     try {
-      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log: safeLog, onDiagnostic: capture, ...(proxyOrder ? { proxyOrder } : {}) }), diagnostics });
+      if (attested) await prepareProvider(proxyOrder[0], c.req.raw.signal);
+      return c.json({ value: await run(request, { signal: c.req.raw.signal, extractionId, log: safeLog, onDiagnostic: capture,
+        ...(attested ? { playbackCache, jobPath: fileURLToPath(new URL('./attested-job.mjs', import.meta.url)) } : {}), ...(proxyOrder ? { proxyOrder } : {}) }), diagnostics });
     } catch (error) {
       const code = typeof error.code === 'string' ? error.code : 'FRAME_EXTRACTION_FAILED';
       const status = code === 'INVALID_INPUT' ? 422 : code === 'NOT_FOUND' ? 404 : code === 'RATE_LIMITED' ? 429

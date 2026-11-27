@@ -83,7 +83,7 @@ export async function getVideoFrames(env: Env, request: z.input<typeof frameRequ
 }
 
 async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequestSchema>, signal?: AbortSignal,
-  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink, onTransportSettled?: (settled: boolean) => void): Promise<VideoFrames> {
+  limits?: { extractionTimeoutMs: number }, onDiagnostic?: ExtractionDiagnosticSink, onTransportSettled?: (settled: boolean) => void, attested = false): Promise<VideoFrames> {
   const parsed = frameRequestSchema.safeParse(request);
   if (!parsed.success) throw new ApiError(422, 'INVALID_INPUT', 'Provide a video ID, 1 to 6 integer timestampsMs, and maxWidth from 320 to 1920.');
   const extractionTimeoutMs = z.number().int().min(5_000).max(45_000).parse(limits?.extractionTimeoutMs ?? 45_000);
@@ -97,10 +97,11 @@ async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequest
   let stage = 'container_transport';
   let failureKind: ExtractionAttempt['failureKind'];
   let finishAttempt: (outcome?: ExtractionAttempt['outcome']) => void = () => {};
-  const slot = crypto.getRandomValues(new Uint32Array(1))[0]! % 2;
   // The container walks this order and skips proxies that fail, so cooling proxies come last.
   const pool = normalizedProxyUrls(env);
   const proxyPlan = pool?.length ? await planProxyOrder(env, pool) : undefined;
+  // Prefer the same warm minter for a given proxy, subject to the existing busy retry.
+  const slot = attested && proxyPlan ? proxyPlan.order[0]! % 2 : crypto.getRandomValues(new Uint32Array(1))[0]! % 2;
   const proxyOutcomes: Array<{ slot: number; outcome: ProxyOutcome }> = [];
   try {
     return await withTransportDeadline(extractionTimeoutMs + 5_000, signal, async deadline => {
@@ -126,8 +127,8 @@ async function getVideoFramesImpl(env: Env, request: z.input<typeof frameRequest
           countVisualWork('containerAttempts');
           linkVisualExtraction(extractionId, attempt + 1);
           const response = await getContainer<YouTubeFramesContainer>(env.YOUTUBE_FRAMES, `v1-${(slot + attempt) % 2}`).fetch(
-            new Request('http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId,
-              ...(proxyPlan ? { 'x-proxy-order': proxyPlan.order.join(',') } : {}) },
+            new Request(attested ? 'http://youtube-frames/frames/attested' : 'http://youtube-frames/frames', { method: 'POST', headers: { 'content-type': 'application/json', 'x-extraction-id': extractionId,
+              ...(proxyPlan ? { 'x-proxy-order': attested ? String(proxyPlan.order[0]) : proxyPlan.order.join(',') } : {}) },
               body: JSON.stringify(input), signal: deadline }));
           responseStatus = response.status;
           stage = 'container_response';
@@ -197,6 +198,23 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     extractionId = attempt.extractionId;
     emitExtractionDiagnostic(diagnostic, attempt);
   };
+  async function runContainer(selection: z.infer<typeof frameRequestSchema>, signal: AbortSignal, end: number, attested: boolean) {
+    const lease = await acquireFrameLease(env, 'ffmpeg-job', signal);
+    let dispatched = false, settled = false;
+    try {
+      const remaining = Math.min(45000, end - Date.now());
+      if (remaining < 5000) throw new ApiError(503, 'FRAME_TIMEOUT', 'Frame extraction exhausted its allotted time.');
+      signal.throwIfAborted();
+      dispatched = true;
+      const result = await getVideoFramesImpl(env, selection, signal, { extractionTimeoutMs: remaining }, record,
+        value => { settled = value; }, attested);
+      settled = true;
+      return result;
+    } finally {
+      // An uncertain transport can still own a running process. Let its lease expire.
+      if (!dispatched || settled) await lease.release();
+    }
+  }
   return withTransportDeadline(budget + 5000, signal, async deadline => {
     let frames: VideoFrames['frames'] = [];
     // Reserve at least ten extraction seconds for FFmpeg recovery.
@@ -204,9 +222,40 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     if (mediaBudget >= 5000) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new DOMException('Media deadline', 'TimeoutError')), mediaBudget);
+      const mediaSignal = AbortSignal.any([deadline, controller.signal]);
       try {
-        const result = await getYouTubeMediaFrames(env, input, AbortSignal.any([deadline, controller.signal]), record, onFrame);
-        frames = result.frames;
+        if (env.YOUTUBE_ATTESTED_HD === 'true' && input.maxWidth >= 1280 && normalizedProxyUrls(env)?.length) {
+          const attestation = new AbortController();
+          const selected = new Map<number, VideoFrames['frames'][number]>();
+          let imageBytes = 0;
+          const select = (frame: VideoFrames['frames'][number]) => {
+            if (selected.has(frame.timestampMs)) return;
+            const bytes = Buffer.byteLength(frame.imageBase64, 'base64');
+            if (imageBytes + bytes > 8 * 1024 * 1024) return;
+            imageBytes += bytes;
+            selected.set(frame.timestampMs, frame);
+            onFrame?.(frame);
+          };
+          try {
+            // Keep the original recovery reserve and allow the first complete HD batch to finish early.
+            const hdSignal = AbortSignal.any([deadline, attestation.signal, AbortSignal.timeout(budget - 6000)]);
+            const hd = runContainer(input, hdSignal, started + budget - 6000, true)
+              .then(result => {
+                for (const frame of result.frames) if (frame.height >= 720) select(frame);
+                if (selected.size === input.timestampsMs.length) controller.abort();
+              }).catch(() => undefined);
+            const direct = await getYouTubeMediaFrames(env, input, mediaSignal, record, frame => {
+              if (frame.height >= 720) select(frame);
+              if (selected.size === input.timestampsMs.length) attestation.abort();
+            });
+            await hd;
+            deadline.throwIfAborted();
+            for (const frame of direct.frames) select(frame);
+            frames = [...selected.values()];
+          } finally { attestation.abort(); }
+        } else {
+          frames = (await getYouTubeMediaFrames(env, input, mediaSignal, record, onFrame)).frames;
+        }
       } finally { clearTimeout(timer); controller.abort(); }
     }
     deadline.throwIfAborted();
@@ -215,16 +264,8 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
     const warnings: string[] = [];
     let fallbackError: unknown;
     if (missing.length) {
-      let lease: Awaited<ReturnType<typeof acquireFrameLease>> | undefined;
-      let finished = false, dispatched = false;
       try {
-        lease = await acquireFrameLease(env, 'ffmpeg-job', deadline);
-        const remaining = budget - (Date.now() - started);
-        if (remaining < 5000) throw new ApiError(503, 'FRAME_TIMEOUT', 'Frame extraction exhausted its allotted time.');
-        dispatched = true;
-        const fallback = await getVideoFramesImpl(env, { ...input, timestampsMs: missing }, deadline,
-          { extractionTimeoutMs: Math.min(45000, remaining) }, record, settled => { finished = settled; });
-        finished = true;
+        const fallback = await runContainer({ ...input, timestampsMs: missing }, deadline, started + budget, false);
         let bytes = frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.imageBase64, 'base64'), 0);
         for (const frame of fallback.frames) {
           const size = Buffer.byteLength(frame.imageBase64, 'base64');
@@ -235,10 +276,6 @@ async function getFramesWithMedia(env: Env, request: z.input<typeof frameRequest
       } catch (error) {
         fallbackError = error instanceof FrameMediaError && error.code === 'capacity'
           ? new ApiError(503, 'PROCESSOR_BUSY', 'Frame processors are busy. Retry shortly.', { extractionId }) : error;
-      }
-      finally {
-        // Keep uncertain timeouts leased until expiry; otherwise an abandoned process could exceed admission.
-        if (lease && (!dispatched || finished)) await lease.release();
       }
     }
     deadline.throwIfAborted();

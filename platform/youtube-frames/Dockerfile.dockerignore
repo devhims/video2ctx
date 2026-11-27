@@ -11,3 +11,5 @@
 !packages/youtube-skills/src/watch/
 !packages/youtube-skills/src/watch/*.ts
 packages/youtube-skills/src/watch/*.test.ts
+
+!platform/youtube-frames/attested-player.py

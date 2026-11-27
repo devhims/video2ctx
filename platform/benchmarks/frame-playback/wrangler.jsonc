@@ -1,0 +1,29 @@
+{
+  "name": "video2ctx-frame-probe-20261106",
+  "main": "worker.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "media": {
+    "binding": "MEDIA"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_FRAME_CAPACITY",
+        "class_name": "MediaFrameCapacity"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "MediaFrameCapacity"
+      ]
+    }
+  ]
+}

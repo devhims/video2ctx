@@ -658,6 +658,94 @@ do not wait on finished work. Neither change is a prerequisite for the corrected
 preview and recovery paths, but sustained-load validation remains outstanding.
 
 
+### Attested HD playback for agent frames
+
+On a cache miss, the Media backend starts mobile-web playback immediately when
+`YOUTUBE_ATTESTED_HD=true`, a proxy pool is available, the request allows at
+least 1280 pixels of width, and the extraction budget is at least 15 seconds.
+The ordinary Media path runs concurrently. The Worker publishes an HD result
+once per timestamp, keeps lower-resolution frames in reserve, and recovers any
+remaining timestamps under the original deadline. Attested work uses the
+existing FFmpeg admission lease and the container's one-job limit. Deploy the
+frames image before enabling its Worker route. Setting the variable to `false`
+restores the previous selection policy. Existing cached frames keep their
+original dimensions.
+
+The private container endpoint `/frames/attested` uses one Worker-selected proxy
+slot for player discovery, token generation and media reads. A loopback provider
+reuses its minter for up to five minutes on that slot. A slot change or provider
+exit starts a fresh process. Only versioned public player JavaScript is cached
+on disk. On a miss, the job prepares the proof and streaming URL concurrently,
+seeks through SABR, and
+selects JPEGs using the source presentation timestamps. A second supported
+video-bound proof is eligible once if the first session-bound proof is rejected.
+Raw proofs, proxy URLs and signed stream URLs are excluded from diagnostics.
+
+To repeat the live container check, start the built image on loopback with its
+proxy pool and run `node platform/scripts/benchmark-attested-frames.mjs PORT SLOT`
+after building the local frames package. The first pass requests the original
+timestamps and the second seeks five seconds beyond the last timestamp on each
+video. The script verifies JPEG dimensions and reports the complete HTTP time,
+source setup time, and reuse mode. Add `--reverse` after the slot to swap the order. Start a fresh container to measure cold setup. These timings
+exclude Worker admission, agent analysis and catalog operations.
+
+On November 6, 2026 (IST), uncached local extraction-entry-point measurements
+used a verified sticky exit, the built Docker image, local admission and FFmpeg
+for the Cloudflare Media binding. The single frame at 5:00 of `aqz-KE-bpKQ`
+took 14.1 seconds on a fresh container and 8.5 to 8.9 seconds with warm setup.
+The four frames at 14:05, 14:08, 14:12 and 14:16 of `ZmLg3_Bv2vY` took
+24.1 seconds cold and 9.2 to 15.0 seconds warm. All six batches returned
+1920×1080 JPEGs. The respective 360p baselines took 10.6 to 10.7 seconds and
+13.4 to 15.1 seconds. A separate four-call container-only smoke test had one
+player lookup fail and three HD successes, including the next request for that
+video. Deployment startup and production percentiles require deployed measurements.
+
+The frames supervisor now keeps up to four successful playback sessions in memory
+for at most 90 seconds from resolution, ending at least five seconds before the
+signed stream expires. For a plain Oxylabs Dedicated ISP account on
+`disp.oxylabs.io` with an assigned numbered port (8001 onward), the fresh job
+checks the public exit while resolving the player. Only a successful decode whose
+signed stream IP matches the observed exit can seed reuse. The supervisor saves
+a fingerprint of the complete configured proxy URL along with that IP. A later
+seek on the same video and fixed route skips the network IP check. Port, account
+or credential changes invalidate that route identity. This relies on the
+provider's port-to-IP assignment holding for the session lifetime; clear warm
+containers if administratively reassigning an IP behind the same port. Rotating
+port 8000, unrecognized gateways or credential formats, and failed verification
+use fresh playback. [Oxylabs documents the fixed port mapping](https://developers.oxylabs.io/help-center/getting-started/start-using-dedicated-isp-proxies). A failed hit is evicted and may resolve once more for missing
+timestamps inside the original byte and time limits. Successful hits preserve
+the original expiry. Eviction, process restart and routing to another container
+can all produce a miss. Playback material crosses the child process boundary
+through private IPC. Diagnostics expose only `fresh`, `config` or `session`.
+
+For the cross-video experiment, start the local container with
+`FRAME_REUSE_MOBILE_CONFIG=true`. The same exit can then reuse anonymous
+mobile homepage configuration when its reported remote host matches the signed
+stream IP. Each new video still gets its own player response and proof. This
+experiment defaults off. Compare separately with a warm container that has the
+minter and public JavaScript ready, and exclude frame-catalog hits.
+
+In a November 6 local Docker comparison on one sticky proxy exit, a first
+request *after the other video primed the config* took 14.06 s versus 14.76 s
+with fresh config for the incident batch, and 7.87 s versus 8.50 s for the
+control at 5:00. New seeks on retained sessions took 9.96–10.06 s at 14:21
+and 5.18–5.51 s at 5:05. Matched fresh-session controls took 13.79–13.92 s
+and 8.46–8.51 s respectively; an additional fresh 14:21 seek took 16.64 s.
+These measurements used the earlier per-hit exit verification (about 1.5 s on a hit). Each reported time is
+a complete private frames HTTP request with verified 1920×1080 JPEGs, excluding
+the agent, Worker and catalog. One preliminary reversed sequence had three
+unsuccessful player/media requests before a fresh lookup succeeded. A repeat
+completed in the intended order. These observations are per-request timings,
+not population percentiles. An empty container still needs a fresh session and
+config for its first video.
+
+A local Docker A/B used the first dedicated ISP endpoint from the test pool and
+verified the JPEG dimensions at 1920×1080. With per-seek verification, setup for
+four session hits took 1.48–1.62 s. With a verified fixed route it took 4–6 ms.
+Two requests for 14:21 of `ZmLg3_Bv2vY` took 9.99–10.45 s before and
+8.46–8.55 s after. Two requests for 5:05 of `aqz-KE-bpKQ` took 5.33–5.39 s
+before and 3.90–5.51 s after. These are private frames endpoint timings, including
+media transfer, and use local test routes. The ranges are observed samples.
 ## Optional analysis during persistence
 
 Agent frame and storyboard retrieval accept an optional `analysis` question. The

@@ -78,3 +78,33 @@ test('retains fallback quality warnings', async () => {
     meta: { partial: false, warnings: ['Best-effort media fallback produced frames below 720p.'] } } }));
   expect((await getVideoFrames(env, input)).meta.warnings).toContain('Best-effort media fallback produced frames below 720p.');
 });
+
+test.each([true, false])('HD starts before direct reads finish and publishes each timestamp once (attested succeeds: %s)', async succeeds => {
+  const { env, fetch, release } = setup();
+  Object.assign(env, { YOUTUBE_ATTESTED_HD: 'true', OUTBOUND_PROXY_URLS: '["http://slot.test:80"]' });
+  let unblock!: () => void;
+  const dispatched = new Promise<void>(resolve => { unblock = resolve; });
+  const request = { ...input, maxWidth: 1920 };
+  const directHD = { ...frame(1000), width: 1920, height: 1080 };
+  const low = frame(2000);
+  vi.mocked(getYouTubeMediaFrames).mockImplementation(async (_env, _input, _signal, _diagnostic, publish) => {
+    await dispatched;
+    publish?.(directHD);
+    publish?.(low);
+    return { frames: [directHD, low] };
+  });
+  fetch.mockImplementation(async (req: Request) => {
+    expect(new URL(req.url).pathname).toBe('/frames/attested');
+    expect(req.headers.get('x-proxy-order')).toBe('0');
+    unblock();
+    if (!succeeds) return Response.json({ error: { code: 'MEDIA_UNAVAILABLE', message: 'Unavailable' } }, { status: 502 });
+    return Response.json({ value: { videoId: input.videoId, frames: [{ ...low, width: 1920, height: 1080 }],
+      failures: [{ timestampMs: 1000, code: 'MEDIA_UNAVAILABLE', message: 'Unavailable', retryable: true }],
+      meta: { partial: true, warnings: [] } } });
+  });
+  const publish = vi.fn();
+  const result = await getVideoFrames(env, request, undefined, undefined, undefined, publish);
+  expect(result.frames.map(f => [f.timestampMs, f.height])).toEqual([[1000,1080],[2000,succeeds ? 1080 : 360]]);
+  expect(publish.mock.calls.map(([f]) => [f.timestampMs, f.height])).toEqual([[1000,1080],[2000,succeeds ? 1080 : 360]]);
+  expect(release).toHaveBeenCalledTimes(1);
+});

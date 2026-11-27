@@ -47,6 +47,7 @@ export function diagnosticDetails(event) {
   const safe = { ...structuredFailure(event) };
   if (typeof event.reason === 'string' && BOT_CHALLENGE.test(event.reason)) safe.failureReason = 'bot_challenge';
   if (['direct', 'proxy'].includes(event.egress)) safe.egress = event.egress;
+  if (['fresh', 'session', 'config'].includes(event.playbackReuse)) safe.playbackReuse = event.playbackReuse;
   if (Number.isInteger(event.proxySlot) && event.proxySlot >= 0 && event.proxySlot < 4) safe.proxySlot = event.proxySlot;
   for (const key of ['stage', 'profile', 'playabilityStatus', 'reason', 'message']) {
     if (typeof event[key] === 'string') safe[key] = redact(event[key]);

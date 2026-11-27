@@ -16,3 +16,9 @@ await build({
   target: 'node22',
   format: 'esm',
 });
+
+await build({
+  entryPoints: [fileURLToPath(new URL('./jpeg.ts', source))],
+  outfile: fileURLToPath(new URL('./dist/jpeg.mjs', import.meta.url)),
+  bundle: true, platform: 'node', format: 'esm',
+});

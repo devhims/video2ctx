@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { MAX_RESPONSE_BYTES, parseFrameRequest } from './contract.mjs';
 
 export async function runFrameJob(input, { signal, timeoutMs = 60_000,
-  extractionId = randomUUID(), log = logDiagnostic, onDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace, proxyOrder } = {}) {
+  extractionId = randomUUID(), log = logDiagnostic, onDiagnostic, jobPath = fileURLToPath(new URL('./job.mjs', import.meta.url)), onWorkspace, proxyOrder, playbackCache } = {}) {
   const request = parseFrameRequest(input);
   // Leave time after the cooperative cutoff for FFmpeg shutdown and packaging.
   timeoutMs = Math.min(timeoutMs, (request.extractionTimeoutMs ?? 45_000) + 3_000);
@@ -22,9 +22,17 @@ export async function runFrameJob(input, { signal, timeoutMs = 60_000,
     if (proxyOrder) await writeFile(join(directory, 'routing.json'), JSON.stringify({ proxyOrder }));
     await new Promise((resolve, reject) => {
       // A separate process group lets a deadline stop the job AND its FFmpeg children.
+      const checkout = playbackCache?.checkout(proxyOrder[0], request.videoId);
       const child = spawn(process.execPath, [jobPath, directory], {
-        detached: true, shell: false, stdio: ['ignore', 'ignore', 'pipe'],
+        detached: true, shell: false, stdio: checkout ? ['ignore', 'ignore', 'pipe', 'ipc'] : ['ignore', 'ignore', 'pipe'],
       });
+      if (checkout) {
+        child.on('message', message => {
+          if (message === 'lookup') {
+            if (child.connected) child.send(checkout.seed, () => {});
+          } else if (message?.type === 'save' && !signal?.aborted) checkout.save(message);
+        });
+      }
       let stderr = '';
       let pending = '';
       let droppingLine = false;

@@ -34,6 +34,7 @@
     "YOUTUBE_EXTRACTION_BACKEND": "worker",
     // Roll back frame decoding with container; both routes preserve the existing frame contract.
     "YOUTUBE_FRAMES_BACKEND": "media",
+    "YOUTUBE_ATTESTED_HD": "true",
     // Set to off to disable the optional direct route without changing proxies or the image.
     "YOUTUBE_DIRECT_FALLBACK": "on",
     "YOUTUBE_EXTRACTION_TIMEOUT_MS": "120000",

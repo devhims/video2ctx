@@ -143,3 +143,18 @@ test('hands the proxy order to the job outside the request contract', async () =
     assert.equal(result.keys.includes('proxyOrder'), false);
   });
 });
+
+test('attested playback requires exactly one proxy slot and dispatches the isolated HD job', async () => {
+  let job;
+  const app = createFrameApp(async (_request, options) => { job = options; return {}; }, { prepareProvider: async () => {} });
+  const body = JSON.stringify({ videoId: 'abcdefghijk', timestampsMs: [845000] });
+  for (const order of ['', '0,1']) {
+    const denied = await app.request('/frames/attested', { method: 'POST', headers: { 'x-proxy-order': order }, body });
+    assert.equal(denied.status, 422);
+  }
+  assert.equal(job, undefined);
+  const ok = await app.request('/frames/attested', { method: 'POST', headers: { 'x-proxy-order': '1' }, body });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(job.proxyOrder, [1]);
+  assert.match(job.jobPath, /attested-job\.mjs$/);
+});
