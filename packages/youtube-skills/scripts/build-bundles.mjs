@@ -16,6 +16,10 @@ const bundles = [
     entryPoint: resolve(skillRoot, 'src/watch/entry.ts'),
     committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-ctx/scripts/watch.mjs'),
   },
+  {
+    entryPoint: resolve(skillRoot, 'src/shorts/entry.ts'),
+    committedBundle: resolve(repositoryRoot, '.agents/skills/youtube-shorts/scripts/shorts.mjs'),
+  },
 ];
 
 async function bundle(entryPoint, outfile) {
