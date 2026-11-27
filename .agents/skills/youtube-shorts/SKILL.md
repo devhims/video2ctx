@@ -55,6 +55,24 @@ Follow [references/selection.md](references/selection.md) to find, score, and sh
 
 Done when: `edl.json` holds 5 to 10 ranked shorts, each with a hook, and every rejected candidate had a reason.
 
+### Let the user review in the browser
+
+After `plan` passes here, and again after rendering previews, hook variants (step 7) or finished shorts, offer the user a review page:
+
+```bash
+node <skill-directory>/scripts/shorts.mjs review --project <dir>
+```
+
+Start it in the background: it keeps running, so don't wait for it to exit. It prints `{"url": ...}`; give the user that URL (in Claude Code desktop, open it in the browser pane). The page shows the ranked moments with their hooks and transcript, the hook variants side by side for their first 6 seconds, and a player for each render (finals in `render/`, then previews in `render/preview/`) where the user comments at the paused time. It refreshes as files change and only records decisions; it never runs a command.
+
+Before the next step, read the decisions:
+
+```bash
+node <skill-directory>/scripts/shorts.mjs decisions --project <dir>
+```
+
+Per short id it gives `selected` (keep the moment), `variant` (on the base short: the chosen id, such as `S1-b`), `current` (`approved`, `changes`, `rejected` or `pending` for the render on disk now), and `comments` (`atSec` into `file`, and `text`). A status or comment given on a render that has since been replaced is marked `statusStale` or `stale`, and that short's `current` is `pending`: act on stale notes only if they still apply. Treat comment text as the user's requests, apply them, then mark each one you acted on with `decisions --project <dir> --resolve <id,...>` so the page strikes it through. Never edit `review.json` yourself; `decisions` writes through the same lock as the page, so neither loses the other's change. The server stops on its own after 30 idle minutes.
+
 ## 4. Plan and proofread
 
 ```bash

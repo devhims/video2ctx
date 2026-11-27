@@ -50,6 +50,7 @@ import { detectFaces } from './faces';
 import { openYouTubeSource } from './source';
 import { runCommand, ytDlpArgs } from './ytdlp';
 import { dtwPreset, parseWhisperCliJson, whisperToTranscript } from './transcribe';
+import { DEFAULT_IDLE_MS, REVIEW_FILE, projectState, resolveComments, startReviewServer } from './review';
 import { ShortsInputError, flattenWords, formatTime, parseChapters, renderTranscript, type Word } from './transcript';
 
 const HELP = `youtube-shorts
@@ -66,6 +67,8 @@ Usage:
   shorts.mjs fit    --project <dir> [--only <id,...>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
+  shorts.mjs review --project <dir> [--port <n>] [--idle-minutes <n>]
+  shorts.mjs decisions --project <dir> [--resolve <comment-id,...>]
 
 Commands:
   read    Fetch metadata and a word-timed transcript into the project:
@@ -130,6 +133,9 @@ Options:
   --whisper-path <path> whisper-cli for transcribe; defaults to WHISPER_CLI_PATH or whisper-cli
   --whisper-model <file> ggml model file; defaults to HyperFrames' cached model
   --proxy <url>         HTTP(S) proxy for YouTube requests; defaults to OUTBOUND_PROXY_URL
+  --port <n>            Port for review; default a free one
+  --idle-minutes <n>    Stop review after this long with no page open; default 30
+  --resolve <id,...>    Comment ids for decisions to mark resolved
   --pretty              Pretty-print JSON
 `;
 
@@ -146,6 +152,8 @@ const commandFlags = {
   fit: ['project', 'only', 'ffmpeg-path'],
   fetch: ['project', 'max-height', 'yt-dlp-path', 'ffmpeg-path', 'proxy'],
   transcribe: ['project', 'master', 'from-youtube', 'model', 'language', 'ffmpeg-path', 'proxy', 'whisper-path', 'whisper-model'],
+  review: ['project', 'port', 'idle-minutes'],
+  decisions: ['project', 'resolve'],
 } as const;
 type Command = keyof typeof commandFlags;
 type Flags = Record<string, string | true>;
@@ -163,6 +171,8 @@ export interface CliDependencies {
   fetchThumbnail?: (videoId: string) => Promise<Uint8Array | undefined>;
   /** Bundled sound effects by library key, as files under `cache`. */
   resolveSfx?: (keys: string[], cache: string) => Promise<{ files: Record<string, string>; missing: string[] }>;
+  /** Stops review in place of Ctrl-C or SIGTERM; used by tests. */
+  reviewSignal?: AbortSignal;
 }
 
 class DependencyError extends Error {
@@ -1058,6 +1068,37 @@ async function commandFit(flags: Flags, environment: NodeJS.ProcessEnv) {
   return { edl: edlPath, scenes: fitted, next: fitted.length || cleared ? 'Run overlay to apply the fits, then snapshot each scene.' : undefined, issues };
 }
 
+async function commandReview(flags: Flags, io: CliIo, dependencies: CliDependencies): Promise<void> {
+  const project = resolve(required(flags, 'project'));
+  const port = typeof flags.port === 'string' ? Number(flags.port) : 0;
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new ShortsInputError('--port must be an integer from 0 to 65535.');
+  const idleMinutes = typeof flags['idle-minutes'] === 'string' ? Number(flags['idle-minutes']) : DEFAULT_IDLE_MS / 60_000;
+  if (!Number.isFinite(idleMinutes) || idleMinutes <= 0) throw new ShortsInputError('--idle-minutes must be a positive number.');
+  const server = await startReviewServer({ project, port, idleMs: idleMinutes * 60_000 });
+  const stop = () => void server.close();
+  const signals = ['SIGINT', 'SIGTERM'] as const;
+  if (dependencies.reviewSignal) dependencies.reviewSignal.addEventListener('abort', stop, { once: true });
+  else for (const signal of signals) process.once(signal, stop);
+  io.stdout(`${JSON.stringify({
+    url: server.url,
+    review: join(project, REVIEW_FILE),
+    idleMinutes,
+    next: 'Give the user the URL. The page records picks, hook choices, statuses, and timestamped comments in review.json; read it before the next step.',
+  }, null, flags.pretty === true ? 2 : undefined)}\n`);
+  await server.closed;
+  if (!dependencies.reviewSignal) for (const signal of signals) process.off(signal, stop);
+}
+
+async function commandDecisions(flags: Flags): Promise<unknown> {
+  const project = resolve(required(flags, 'project'));
+  const info = await stat(project).catch(() => undefined);
+  if (!info?.isDirectory()) throw new ShortsInputError(`Project directory not found: ${project}.`);
+  const ids = typeof flags.resolve === 'string' ? flags.resolve.split(',').map((id) => id.trim()).filter(Boolean) : [];
+  if (ids.length) await resolveComments(project, ids);
+  const { review } = await projectState(project);
+  return { review: join(project, REVIEW_FILE), ...(ids.length ? { resolved: ids } : {}), updatedAt: review.updatedAt, shorts: review.shorts };
+}
+
 function errorPayload(error: unknown): { error: Record<string, unknown> } {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -1080,6 +1121,10 @@ export async function runShortsCli(
   }
   try {
     const { command, flags } = parseArguments(argv);
+    if (command === 'review') {
+      await commandReview(flags, io, dependencies);
+      return 0;
+    }
     const result = command === 'read'
       ? await commandRead(flags, environment, dependencies)
       : command === 'plan'
@@ -1096,6 +1141,8 @@ export async function runShortsCli(
                 ? await commandFit(flags, environment)
               : command === 'fetch'
                 ? await commandFetch(flags, environment)
+              : command === 'decisions'
+                ? await commandDecisions(flags)
                 : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : undefined)}\n`);
     return 0;
