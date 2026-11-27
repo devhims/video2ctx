@@ -15,5 +15,6 @@ dist
 !.dev.vars.example
 .scratch/
 playwright-report/
+.playwright-cli/
 test-results/
 reference/engineering/experiments/
