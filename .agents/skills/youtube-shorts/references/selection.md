@@ -49,7 +49,7 @@ Write hook text for a stranger:
 - Prefer a question, a claim, or a stake ("It may take AI disasters") over a restatement of the topic.
 - Keep the speaker's own hedges: a disputed claim becomes a question.
 
-Use the channel's own title patterns, so they read as the channel's. Render the variants (`plan`, `render`, and `overlay` when step 7 runs), then compare only their openings: first 6 seconds, each with its hook on screen. Prefer openings on a single-person shot, since a hook over a split screen covers the top person's face. Give the user a ranked pick per short with a reason, and render in full only the variants they choose. Their real view-through results beat your judgment, so offer to swap a variant after a trial.
+Use the channel's own title patterns, so they read as the channel's. Run `plan` and `render` on the variants like any other short. `render` always renders the whole cut (there is no shorter audition render), so each variant costs a full render. Then compare only their openings: the first 6 seconds of each variant's `render/<id>-captioned.mp4` (under `render/preview/` for previews), which shows its hook for the first 3 seconds whatever style the user chose. If `render` warned that FFmpeg can't burn captions, compare the plain `<id>.mp4` openings with each hook's text beside them. Prefer openings on a single-person shot, since a hook over a split screen covers the top person's face. Give the user a ranked pick per short with a reason, keep only the chosen variant of each short in `edl.json`, and take only those through step 7 and into the report. Their real view-through results beat your judgment, so offer to swap a variant after a trial.
 
 ## Risks to note in the brief
 

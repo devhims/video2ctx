@@ -34,12 +34,16 @@ Get the video ID, then settle the source for the deliverable renders, in this or
 Ask for the output in the same message as the source, so the run doesn't stop for it later. Offer the defaults, and take "defaults" as an answer:
 
 1. **How many shorts** (default: 5 to 10, ranked).
-2. **Captions** (default: burned in): plain captions burned into the video (`<id>-captioned.mp4`), captions styled in the channel's look as part of the overlay, or caption files only (`.srt` to upload to YouTube or import into an editor).
-3. **Overlays** (default: none): none, or the channel's look: wordmark, hook title, name tags, context cards and an end card. Styled captions or the channel's look mean step 7 runs; it needs HyperFrames and the youtube-ctx skill, so check them now.
-4. **Motion** (default: off): zooms on key lines and animated scenes that act an idea out. Only with overlays; they take the longest to review.
-5. **Hook variants** (default: off): two alternative openings per short, compared before the full renders.
+2. **Style** (default: plain captions). Each gives one deliverable per short:
+   - **Plain captions:** captions burned into the video; deliver `render/<id>-captioned.mp4`.
+   - **Caption files only:** a clean video, with captions to add in YouTube Studio or an editor; deliver `render/<id>.mp4` and `render/<id>.srt`, not the `-captioned.mp4` that `render` also writes.
+   - **The channel's look:** step 7's overlay, which draws its own styled captions along with the wordmark, hook title, name tags, context cards and an end card; deliver `render/<id>-overlay.mp4`. It needs HyperFrames and the youtube-ctx skill, so check them now.
+3. **Motion** (default: off): zooms on key lines and animated scenes that act an idea out. Only with the channel's look; they take the longest to review.
+4. **Hook variants** (default: off): two alternative openings per short, each rendered in full, for the user to pick from before step 7 (see [references/selection.md](references/selection.md)).
 
-Done when: you know the deliverable source (a master of at least 1080p, or a 720p master the user accepted), or the user agreed to stop at previews, and you have the user's answers to all five output choices.
+When the user will stop at previews, ask now only for the count and hook variants. Previews are never styled or checked, so keep any style and motion answers for the run after the master arrives.
+
+Done when: you know the deliverable source (a master of at least 1080p, or a 720p master the user accepted) and the user's answers to all four output choices, or the user agreed to stop at previews and answered the count and hook variants.
 
 ## 2. Read the whole video
 
@@ -96,7 +100,7 @@ Done when: every shot `n` of every short has a layout entry, and `plan` reports 
 node <skill-directory>/scripts/shorts.mjs render --project <dir> --master <file>
 ```
 
-Without a deliverable source, render previews with `--from-youtube --preview` (or `--master <file> --preview`) and review them from `render/preview/`; render the deliverables once the master arrives.
+Without a deliverable source, render previews with `--from-youtube --preview` (or `--master <file> --preview`) and review them from `render/preview/`; render the deliverables once the master arrives. A preview-only run skips `check` and step 7, which both need a final render, and goes from the previews to step 8.
 
 `render` moves each cut's edges into a pause in the audio: the start into the pause before the first word, the end into the pause after the last word and before the next one. A short never ends on the first syllable of the next sentence ("so that…") or starts on the tail of the previous one. A warning that there was "no pause" at an edge means the speech runs straight through it, so a word may be clipped or the next one may start. Those edges get a longer fade. For each one, try moving the `from` or `to` phrase to a sentence end and rerender. If none fits, find the quietest moment between the two words in the audio (a 10 ms loudness profile shows it) and pin `endMs` or `startMs` there. Either let the last word finish or cut before the next one starts, never partway into it.
 
@@ -116,11 +120,11 @@ It reports, per short:
 
 `check` measures; it doesn't watch. It cannot see a crop that shows half of an editor's animated transition, so that still needs the frame-by-frame look from step 5.
 
-Done when: every preview passes, `check` reports no errors and every warning was fixed or accepted after listening, every "no pause" edge was moved or reported, and each short's `durationSec` matches `plan` within 0.3 s.
+Done when: every preview image passes and, for final renders, `check` reports no errors and every warning was fixed or accepted after listening, every "no pause" edge was moved or reported, and each short's `durationSec` matches `plan` within 0.3 s.
 
 ## 7. Add overlays
 
-Run this step when the user chose styled captions or the channel's look in step 1; otherwise go to step 8. Follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. Add zooms and scenes only when the user chose motion, following [references/motion.md](references/motion.md).
+Run this step for final renders when the user chose the channel's look in step 1; otherwise go to step 8. Follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. Add zooms and scenes only when the user chose motion, following [references/motion.md](references/motion.md).
 
 ```bash
 node <skill-directory>/scripts/shorts.mjs fit --project <dir>       # when the shorts have scenes
@@ -133,4 +137,4 @@ Done when: every face report and motion warning from `overlay` is fixed or accep
 
 ## 8. Report
 
-For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran, and confirm they match the output choices from step 1. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. Titles, descriptions, covers and scheduling are set in YouTube Studio; offer the title ideas and hooks as a starting point.
+For each short give its rank, title idea, hook, duration, and its deliverable for the chosen style (`<id>-captioned.mp4`, `<id>.mp4` with `<id>.srt`, or `<id>-overlay.mp4`), and confirm the files match the output choices from step 1. For a preview-only run, hand over `render/preview/` as previews: name their source size, say they were neither checked nor styled, and list what runs once the master arrives (render, check, and step 7 for the channel's look). Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. Titles, descriptions, covers and scheduling are set in YouTube Studio; offer the title ideas and hooks as a starting point.
