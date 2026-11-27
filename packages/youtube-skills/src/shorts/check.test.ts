@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem, sourceTooSoft } from './check';
+import { edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem, renderSourceProblem, sourceTooSoft } from './check';
 
 describe('flashShots', () => {
   test('finds a one-frame shot between two changes', () => {
@@ -77,7 +77,24 @@ describe('sourceTooSoft', () => {
     expect(sourceTooSoft({ width: 854, height: 480 }, 720)).toMatch(/854x480/);
   });
 
-  test('says nothing when the source is unknown', () => {
-    expect(sourceTooSoft(undefined)).toBeUndefined();
+});
+
+describe('renderSourceProblem', () => {
+  test('accepts a render cut from 1080p, or from 720p the user opted into', () => {
+    expect(renderSourceProblem({ id: 'S1', source: { width: 1920, height: 1080 }, cuts: [] })).toBeUndefined();
+    expect(renderSourceProblem({ id: 'S1', source: { width: 1280, height: 720 }, sourceFloor: 720, cuts: [] })).toBeUndefined();
+  });
+
+  test('rejects a render cut from a softer source', () => {
+    expect(renderSourceProblem({ id: 'S1', source: { width: 640, height: 360 }, cuts: [] })).toMatch(/cut from a 640x360 source/);
+    expect(renderSourceProblem({ id: 'S1', source: { width: 640, height: 360 }, sourceFloor: 720, cuts: [] })).toMatch(/640x360/);
+  });
+
+  test('treats a render with no or an unreadable source record as unverified', () => {
+    // The shape every render had before sources were recorded.
+    expect(renderSourceProblem({ id: 'S1', cuts: [] })).toMatch(/no recorded source size/);
+    expect(renderSourceProblem(undefined)).toMatch(/no recorded source size/);
+    expect(renderSourceProblem({ source: { width: '1920', height: 1080 } })).toMatch(/no recorded source size/);
+    expect(renderSourceProblem({ source: { width: 640, height: 360 }, sourceFloor: 360 })).toMatch(/no recorded source size/);
   });
 });

@@ -43,7 +43,7 @@ import {
   tileImages,
   type MasterInfo,
 } from './media';
-import { EDGE_WINDOW_MS, MIN_SOURCE_SHORT_SIDE, OPT_IN_SOURCE_SHORT_SIDE, edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem, sourceTooSoft } from './check';
+import { EDGE_WINDOW_MS, MIN_SOURCE_SHORT_SIDE, OPT_IN_SOURCE_SHORT_SIDE, edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem, renderSourceProblem, sourceTooSoft } from './check';
 import { FIT_AREAS, applyFit, drawnBox, fitFor, forMeasuring, hasFitTarget, unionBox, type SceneFit } from './fit';
 import { OVERLAY_SFX, buildOverlay, sceneWindows, type SfxKey } from './overlay';
 import { detectFaces } from './faces';
@@ -101,9 +101,10 @@ Commands:
   check   Check every rendered short for what a viewer notices: shots under
           1 s (flashes of the wrong framing), speech at a cut edge (a clipped
           word, or the next one starting; needs --master), cuts ending on a
-          word that starts the next thought, a render from a source under
-          1080p, an overlay project built from an older cut, and an overlay
-          video that no longer matches its cut
+          word that starts the next thought, a missing final render (previews
+          in render/preview are never checked), a render from a source under
+          1080p or with no recorded source size, an overlay project built from
+          an older cut, and an overlay video that no longer matches its cut
   fit     Centre each scene's drawing in its area and size it to fill it: renders
           every scene on its own with HyperFrames, measures what its [data-fit]
           element draws, and writes the translate and scale into the scene's
@@ -740,12 +741,12 @@ async function commandOverlay(flags: Flags, environment: NodeJS.ProcessEnv, depe
       throw new ShortsInputError(`${video} not found. Run render for ${id} first.`);
     }
     const info = await probeMaster(ffmpeg, video);
-    const manifest = await readJson(join(project, 'render', `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`) as { cuts?: ResolvedCut[]; source?: { width: number; height: number }; sourceFloor?: number };
+    const manifest = await readJson(join(project, 'render', `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`) as { cuts?: ResolvedCut[] };
     if (!Array.isArray(manifest.cuts) || manifest.cuts.length !== short.cuts.length) {
       throw new ShortsInputError(`${id}.cuts.json does not match edl.json; rerun render for ${id}.`);
     }
-    const soft = sourceTooSoft(manifest.source, manifest.sourceFloor);
-    if (soft) throw new ShortsInputError(`render/${id}.mp4 was cut from a ${manifest.source!.width}x${manifest.source!.height} source: ${soft}. Render ${id} again from the master.`);
+    const unqualified = renderSourceProblem(manifest);
+    if (unqualified) throw new ShortsInputError(`render/${id}.mp4 ${unqualified}. Render ${id} again from the master before adding overlays.`);
     const rendered: ResolvedShort = { ...short, cuts: manifest.cuts };
     const directory = join(project, 'overlay', id);
     await mkdir(join(directory, 'assets'), { recursive: true });
@@ -864,15 +865,18 @@ async function commandCheck(flags: Flags, environment: NodeJS.ProcessEnv) {
     const cutVideo = join(project, 'render', `${id}.mp4`);
     const cutStat = await stat(cutVideo).catch(() => undefined);
     if (!cutStat?.isFile()) {
-      issues.push({ short: id, level: 'warning', message: 'Not rendered yet; run render first.' });
+      const preview = (await stat(join(project, 'render', 'preview', `${id}.mp4`)).catch(() => undefined))?.isFile();
+      issues.push({
+        short: id,
+        level: 'error',
+        message: `No final render at render/${id}.mp4${preview ? '; previews in render/preview/ are not checked' : ''}. Render it from a master of at least 1080p.`,
+      });
       continue;
     }
     const cutInfo = await probeMaster(ffmpeg, cutVideo);
-    const recorded = await readFile(join(project, 'render', `${id}.cuts.json`), 'utf8')
-      .then((text) => JSON.parse(text) as { source?: { width: number; height: number }; sourceFloor?: number })
-      .catch(() => undefined);
-    const soft = sourceTooSoft(recorded?.source, recorded?.sourceFloor);
-    if (soft) issues.push({ short: id, level: 'error', message: `render/${id}.mp4 was cut from a ${recorded!.source!.width}x${recorded!.source!.height} source: ${soft}. Render it again from the master.` });
+    const recorded = await readFile(join(project, 'render', `${id}.cuts.json`), 'utf8').then((text) => JSON.parse(text) as unknown).catch(() => undefined);
+    const unqualified = renderSourceProblem(recorded);
+    if (unqualified) issues.push({ short: id, level: 'error', message: `render/${id}.mp4 ${unqualified}.` });
 
     const flashes = flashShots(await detectSceneChanges(ffmpeg, cutVideo), cutInfo.durationSec);
     for (const flash of flashes) {

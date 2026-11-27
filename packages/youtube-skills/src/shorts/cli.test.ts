@@ -264,7 +264,27 @@ console.log(out);
     expect(result.shorts[0].video).toBe(join(directory, 'render', 'preview', 'S1.mp4'));
     expect(await stat(join(directory, 'render', 'S1.mp4')).catch(() => undefined)).toBeUndefined();
 
-    // A render from before this rule, or copied by hand, still can't get overlays.
+    // With only a preview, check fails: nothing deliverable was checked.
+    const previewOnly = io();
+    expect(await runShortsCli(['check', '--project', directory], previewOnly), previewOnly.errors.join('')).toBe(0);
+    const previewResult = JSON.parse(previewOnly.output.join(''));
+    expect(previewResult.ok).toBe(false);
+    expect(previewResult.issues).toEqual(expect.arrayContaining([expect.objectContaining({ short: 'S1', level: 'error', message: expect.stringMatching(/No final render.*render\/preview/) })]));
+
+    // A render from before sources were recorded ({ id, cuts } only) is unverified: overlay refuses, check fails.
+    const previewManifest = JSON.parse(await readFile(join(directory, 'render', 'preview', 'S1.cuts.json'), 'utf8'));
+    await writeFile(join(directory, 'render', 'S1.mp4'), await readFile(result.shorts[0].video));
+    await writeFile(join(directory, 'render', 'S1.cuts.json'), JSON.stringify({ id: 'S1', cuts: previewManifest.cuts }));
+    const legacyOverlay = io();
+    expect(await runShortsCli(['overlay', '--project', directory], legacyOverlay)).toBe(2);
+    expect(JSON.parse(legacyOverlay.errors.join('')).error.message).toMatch(/no recorded source size/);
+    const legacyCheck = io();
+    expect(await runShortsCli(['check', '--project', directory], legacyCheck), legacyCheck.errors.join('')).toBe(0);
+    const legacyResult = JSON.parse(legacyCheck.output.join(''));
+    expect(legacyResult.ok).toBe(false);
+    expect(legacyResult.issues).toEqual(expect.arrayContaining([expect.objectContaining({ level: 'error', message: expect.stringMatching(/no recorded source size/) })]));
+
+    // A render copied by hand with its 720p manifest still can't get overlays.
     await writeFile(join(directory, 'render', 'S1.mp4'), await readFile(result.shorts[0].video));
     await writeFile(join(directory, 'render', 'S1.cuts.json'), await readFile(join(directory, 'render', 'preview', 'S1.cuts.json')));
     const overlay = io();

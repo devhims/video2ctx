@@ -22364,7 +22364,6 @@ var round = (value) => Math.round(value * 100) / 100;
 var MIN_SOURCE_SHORT_SIDE = 1080;
 var OPT_IN_SOURCE_SHORT_SIDE = 720;
 function sourceTooSoft(source, floor = MIN_SOURCE_SHORT_SIDE) {
-  if (!source) return void 0;
   const shorter = Math.min(source.width, source.height);
   if (shorter >= floor) return void 0;
   const size = `${source.width}x${source.height}`;
@@ -22372,6 +22371,17 @@ function sourceTooSoft(source, floor = MIN_SOURCE_SHORT_SIDE) {
     return `the source is ${size}; deliverable shorts need at least 1080p, or 720p with --allow-720p once the user accepts softer video`;
   }
   return `the source is ${size}; deliverable shorts need at least 1080p (720p with --allow-720p)`;
+}
+var isSize = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;
+function renderSourceProblem(manifest) {
+  const record = typeof manifest === "object" && manifest !== null ? manifest : {};
+  const source = record.source;
+  const floor = record.sourceFloor;
+  if (!source || !isSize(source.width) || !isSize(source.height) || floor !== void 0 && floor !== OPT_IN_SOURCE_SHORT_SIDE && floor !== MIN_SOURCE_SHORT_SIDE) {
+    return "has no recorded source size, so it may come from a review copy; render it again from a master of at least 1080p";
+  }
+  const soft = sourceTooSoft({ width: source.width, height: source.height }, typeof floor === "number" ? floor : MIN_SOURCE_SHORT_SIDE);
+  return soft ? `was cut from a ${source.width}x${source.height} source: ${soft}` : void 0;
 }
 
 // src/shorts/fit.ts
@@ -23813,9 +23823,10 @@ Commands:
   check   Check every rendered short for what a viewer notices: shots under
           1 s (flashes of the wrong framing), speech at a cut edge (a clipped
           word, or the next one starting; needs --master), cuts ending on a
-          word that starts the next thought, a render from a source under
-          1080p, an overlay project built from an older cut, and an overlay
-          video that no longer matches its cut
+          word that starts the next thought, a missing final render (previews
+          in render/preview are never checked), a render from a source under
+          1080p or with no recorded source size, an overlay project built from
+          an older cut, and an overlay video that no longer matches its cut
   fit     Centre each scene's drawing in its area and size it to fill it: renders
           every scene on its own with HyperFrames, measures what its [data-fit]
           element draws, and writes the translate and scale into the scene's
@@ -24404,8 +24415,8 @@ async function commandOverlay(flags, environment, dependencies) {
     if (!Array.isArray(manifest.cuts) || manifest.cuts.length !== short.cuts.length) {
       throw new ShortsInputError(`${id}.cuts.json does not match edl.json; rerun render for ${id}.`);
     }
-    const soft = sourceTooSoft(manifest.source, manifest.sourceFloor);
-    if (soft) throw new ShortsInputError(`render/${id}.mp4 was cut from a ${manifest.source.width}x${manifest.source.height} source: ${soft}. Render ${id} again from the master.`);
+    const unqualified = renderSourceProblem(manifest);
+    if (unqualified) throw new ShortsInputError(`render/${id}.mp4 ${unqualified}. Render ${id} again from the master before adding overlays.`);
     const rendered = { ...short, cuts: manifest.cuts };
     const directory = join6(project, "overlay", id);
     await mkdir4(join6(directory, "assets"), { recursive: true });
@@ -24524,13 +24535,18 @@ async function commandCheck(flags, environment) {
     const cutVideo = join6(project, "render", `${id}.mp4`);
     const cutStat = await stat2(cutVideo).catch(() => void 0);
     if (!cutStat?.isFile()) {
-      issues.push({ short: id, level: "warning", message: "Not rendered yet; run render first." });
+      const preview = (await stat2(join6(project, "render", "preview", `${id}.mp4`)).catch(() => void 0))?.isFile();
+      issues.push({
+        short: id,
+        level: "error",
+        message: `No final render at render/${id}.mp4${preview ? "; previews in render/preview/ are not checked" : ""}. Render it from a master of at least 1080p.`
+      });
       continue;
     }
     const cutInfo = await probeMaster(ffmpeg, cutVideo);
     const recorded = await readFile2(join6(project, "render", `${id}.cuts.json`), "utf8").then((text) => JSON.parse(text)).catch(() => void 0);
-    const soft = sourceTooSoft(recorded?.source, recorded?.sourceFloor);
-    if (soft) issues.push({ short: id, level: "error", message: `render/${id}.mp4 was cut from a ${recorded.source.width}x${recorded.source.height} source: ${soft}. Render it again from the master.` });
+    const unqualified = renderSourceProblem(recorded);
+    if (unqualified) issues.push({ short: id, level: "error", message: `render/${id}.mp4 ${unqualified}.` });
     const flashes = flashShots(await detectSceneChanges(ffmpeg, cutVideo), cutInfo.durationSec);
     for (const flash of flashes) {
       issues.push({

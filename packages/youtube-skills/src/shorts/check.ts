@@ -81,8 +81,7 @@ export const OPT_IN_SOURCE_SHORT_SIDE = 720;
  * 16:9 frame's width, so a 1080p source is upscaled about 1.8x and a 720p one about 2.7x; YouTube's
  * 360p review stream is never a deliverable. `floor` is 720 once the user has accepted a 720p master.
  */
-export function sourceTooSoft(source: { width: number; height: number } | undefined, floor: number = MIN_SOURCE_SHORT_SIDE): string | undefined {
-  if (!source) return undefined;
+export function sourceTooSoft(source: { width: number; height: number }, floor: number = MIN_SOURCE_SHORT_SIDE): string | undefined {
   const shorter = Math.min(source.width, source.height);
   if (shorter >= floor) return undefined;
   const size = `${source.width}x${source.height}`;
@@ -90,4 +89,22 @@ export function sourceTooSoft(source: { width: number; height: number } | undefi
     return `the source is ${size}; deliverable shorts need at least 1080p, or 720p with --allow-720p once the user accepts softer video`;
   }
   return `the source is ${size}; deliverable shorts need at least 1080p (720p with --allow-720p)`;
+}
+
+const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+/**
+ * Why a deliverable render can't be trusted, from its `<id>.cuts.json`: it was cut from a source that
+ * is too soft, or its source size is missing or unreadable (rendered before sizes were recorded, or
+ * edited by hand), so nothing shows it came from a qualified master.
+ */
+export function renderSourceProblem(manifest: unknown): string | undefined {
+  const record = typeof manifest === 'object' && manifest !== null ? manifest as { source?: { width?: unknown; height?: unknown }; sourceFloor?: unknown } : {};
+  const source = record.source;
+  const floor = record.sourceFloor;
+  if (!source || !isSize(source.width) || !isSize(source.height) || (floor !== undefined && floor !== OPT_IN_SOURCE_SHORT_SIDE && floor !== MIN_SOURCE_SHORT_SIDE)) {
+    return 'has no recorded source size, so it may come from a review copy; render it again from a master of at least 1080p';
+  }
+  const soft = sourceTooSoft({ width: source.width, height: source.height }, typeof floor === 'number' ? floor : MIN_SOURCE_SHORT_SIDE);
+  return soft ? `was cut from a ${source.width}x${source.height} source: ${soft}` : undefined;
 }
