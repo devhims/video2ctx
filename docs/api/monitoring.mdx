@@ -1,30 +1,43 @@
 ---
-title: "Monitoring API"
-description: "Create scheduled checks and consume their notifications."
+title: "YouTube video monitoring API"
+sidebarTitle: "Monitoring API"
+description: "Monitor a YouTube channel for new uploads or track the newest result for a search. Create a schedule and read new-video alerts from your application."
 ---
 
-Create a monitor with `POST /v1/monitors`. Supported intervals are 60, 360, 720, 1440, 4320, and 10080 minutes; the default is 1440 minutes.
+Use the video2ctx API to check a YouTube channel, topic, or search on a schedule. Each check compares the leading video ID with the one seen on the previous check. Your application can read changes from the notification inbox.
 
-```json
-{
-  "provider": "youtube",
-  "kind": "channel",
-  "target": "UC…",
-  "intervalMinutes": 1440,
-  "query": {
-    "label": "Example channel"
-  }
-}
+## Monitor a channel for new uploads
+
+This example checks the Google Developers channel once an hour. Set `VIDEO2CTX_API_KEY` as described in the [API quickstart](/api/quickstart), then create the monitor from your server or terminal.
+
+```bash
+curl 'https://api.video2ctx.dev/v1/monitors' \
+  --header "Authorization: Bearer $VIDEO2CTX_API_KEY" \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "provider": "youtube",
+    "kind": "channel",
+    "target": "UC_x5XG1OV2P6uZZ5FSM9Ttw",
+    "intervalMinutes": 60
+  }'
 ```
 
-The first check establishes a cursor and does not create a notification. A later leading-video change creates an in-app record and, when separately confirmed, queues an email alert.
+Save the monitor ID from the response. The default interval is 24 hours. Supported intervals in minutes are 60, 360, 720, 1440, 4320, and 10080.
 
-Use:
+## Read new-video alerts
 
-- `GET /v1/monitors` to list schedules and check state.
+For example, suppose the first check sees video A. It saves A as the baseline and sends no alert. If the channel uploads video B before the next hourly check, that check sees B and creates an inbox notification when in-app alerts are enabled (the default). If several videos arrive between checks, the monitor observes only the newest one.
+
+```bash
+curl 'https://api.video2ctx.dev/v1/notifications' \
+  --header "Authorization: Bearer $VIDEO2CTX_API_KEY"
+```
+
+Use `POST /v1/notifications/{id}/read` to mark a notification as read. For email alerts, the account owner must [enable and confirm email delivery](/dashboard/notifications).
+
+## Manage a schedule
+
+- [List monitors](/api-reference/monitoring/list-monitors) with `GET /v1/monitors` to check their state.
 - `PATCH /v1/monitors/{id}` to change query metadata, interval, or enabled state.
 - `DELETE /v1/monitors/{id}` to stop and remove a monitor.
-- `GET /v1/notifications` and `POST /v1/notifications/{id}/read` to consume the inbox.
 - `GET` and `PUT /v1/notification-preferences` to control channels.
-
-Email confirmation and unsubscribe links are first-party account flows and appear in [Platform internals](/internals/overview).
