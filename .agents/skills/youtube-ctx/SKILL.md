@@ -1,6 +1,6 @@
 ---
 name: youtube-ctx
-description: Personal, local-machine YouTube context for one-off, low-to-moderate usage. Use for public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, and optional exact-frame verification without an account or hosted service. Also use to check suspected transcript misspellings, misheard names or terms, and inaccuracies against video context or on-screen evidence. Requires Node.js 18.17+; FFmpeg is optional and needed only for exact frames.
+description: Personal, local-machine YouTube context for one-off, low-to-moderate usage. Use for public YouTube search, transcripts, metadata, comments, channels, playlists, storyboard inspection, and timestamped frame extraction for stills, preview sequences, and visual verification without an account or hosted service. Also use to check suspected transcript misspellings, misheard names or terms, and inaccuracies against video context or on-screen evidence. Requires Node.js 18.17+; FFmpeg is optional and needed only for exact frames.
 ---
 
 # YouTube Context
@@ -15,7 +15,7 @@ The bundled scripts need outbound HTTPS access to YouTube. They install nothing 
 - For slides, charts, demonstrations, interfaces, on-screen text, visual changes, or anything the transcript alone cannot answer, read [references/visual.md](references/visual.md) and follow it.
 - For a combined request, start with the visual workflow when imagery is material. For requested frames, use its timed transcript first to locate candidate timestamps; use storyboards only when the transcript is insufficient. Read both references only when the task also needs direct-only resources such as comments, channel data, playlist data, or full metadata.
 
-Extract exact frames when the user requests them or when visual details need verification. FFmpeg is required for exact frames; timed transcripts and storyboard scans work without it.
+For stills, preview sequences (including hover previews), or visual details that need verification, use the bundled `watch.mjs frames` command first. For previews, check a sample at the intended display size before considering browser capture. FFmpeg is required for exact frames; timed transcripts and storyboard scans work without it.
 
 ## Keep integration boundaries clear
 

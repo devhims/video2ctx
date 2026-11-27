@@ -370,9 +370,13 @@ const SCENE_CUT_FLASH_SEC = 0.6;
 /** A bottom scene starting this close to such a cut appears with the cut instead of sliding in. */
 const SCENE_ON_CUT_SEC = 0.05;
 
-/** Each scene's window on the short's timeline, placed exactly as `buildOverlay` places it. */
-export function sceneWindows(input: OverlayInput): Array<{ file: string; mode: 'bottom' | 'full'; startSec: number; endSec: number }> {
-  return placeScenes(input, timelineSegments(input.segments), []).map(({ file, mode, startSec, endSec }) => ({ file, mode, startSec, endSec }));
+/**
+ * Each scene's window on the short's timeline, placed exactly as `buildOverlay` places it.
+ * `expandSec` is set when a bottom scene grows to the full frame partway through.
+ */
+export function sceneWindows(input: OverlayInput): Array<{ file: string; mode: 'bottom' | 'full'; startSec: number; endSec: number; expandSec?: number }> {
+  return placeScenes(input, timelineSegments(input.segments), [])
+    .map(({ file, mode, startSec, endSec, expandSec }) => ({ file, mode, startSec, endSec, ...(expandSec === undefined ? {} : { expandSec }) }));
 }
 
 /** Resolve scenes to times on the short, dropping (and reporting) any that do not fit. */
@@ -666,7 +670,8 @@ export function buildOverlay(input: OverlayInput): OverlayPlan {
       // When a full-frame scene covers the end of the hold, reset under it instead of easing back on screen.
       const covering = scenes.find((scene) => scene.startSec >= peakSec - 0.05 && scene.startSec < releaseSec + ZOOM_RELEASE_SEC && scene.mode === 'full');
       if (covering) {
-        releaseSec = covering.startSec + 0.4;
+        // Reset once the iris has closed over the frame, but never after the cut: the next shot opens unzoomed.
+        releaseSec = Math.min(covering.startSec + 0.4, shotEndSec);
         tweens.push(`tl.set("#cam", { scale: 1 }, ${sec(releaseSec)});`);
       } else {
         tweens.push(`tl.to("#cam", { scale: 1, duration: ${ZOOM_RELEASE_SEC}, ease: "power2.inOut" }, ${sec(releaseSec)});`);

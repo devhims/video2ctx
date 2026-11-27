@@ -52,10 +52,16 @@ export function edgeHasSpeech(levelDb: number, thresholdDb = EDGE_SPEECH_DB): bo
 
 /**
  * Why an overlay video does not belong to the current cut, if it doesn't: it is older than the cut
- * it should show, or its length is not the cut's length plus at most an end card.
+ * it should show or than the overlay project it was rendered from (rebuilt after a title or caption
+ * fix, say), or its length is not the cut's length plus at most an end card.
  */
-export function overlayVideoProblem(video: { durationSec: number; modifiedMs: number }, cut: { durationSec: number; modifiedMs: number }): string | undefined {
+export function overlayVideoProblem(
+  video: { durationSec: number; modifiedMs: number },
+  cut: { durationSec: number; modifiedMs: number },
+  project?: { modifiedMs: number },
+): string | undefined {
   if (video.modifiedMs < cut.modifiedMs) return 'was rendered before the current cut; run overlay again and render it';
+  if (project && video.modifiedMs < project.modifiedMs) return 'was rendered before its overlay project was last rebuilt; render it again';
   const extra = video.durationSec - cut.durationSec;
   if (extra < -0.15 || extra > MAX_END_CARD_SEC) {
     return `runs ${video.durationSec.toFixed(2)}s, but the current cut is ${cut.durationSec.toFixed(2)}s (plus at most a ${MAX_END_CARD_SEC}s end card); run overlay again and render it`;
