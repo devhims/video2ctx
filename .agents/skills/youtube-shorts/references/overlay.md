@@ -7,7 +7,7 @@
 - **Name tag and context cards**: a dark card with a label-coloured rule. They never overlap each other: later ones wait their turn, and an item with no room before the short ends is dropped with a warning.
 - **Captions**: 1 to 3 words per group, with `emphasis` words in the accent colour.
 - **Zooms and scenes**: camera moves on key lines, and hand-made animations in the bottom half or over the whole frame. See [motion.md](motion.md) before adding either.
-- **End card**: 2.8 s after the last word. The final frame freezes and blurs, the source video's thumbnail lands with a riser and a hit, a tap presses its play button, and a chip points at the related-video link below the Short. The publish skill sets that link to the episode.
+- **End card**: 2.8 s after the last word. The final frame freezes and blurs, the source video's thumbnail lands with a riser and a hit, a tap presses its play button, and a chip points at the related-video link below the Short. Set that link to the episode in YouTube Studio (Related video).
 
 `overlay` fetches the thumbnail from YouTube and takes sound effects from HyperFrames' bundled library (offline, no account), caching them in `<project>/overlay/.sfx`. When either is unavailable it warns and carries on: a text-only end card, silent cues.
 

@@ -19,7 +19,7 @@ Run `node <skill-directory>/scripts/shorts.mjs <command>`, resolving `scripts/sh
 | The youtube-ctx skill (`npx skills add devhims/video2ctx --skill youtube-ctx`) | Researching the channel's look before overlays (step 7) |
 | yt-dlp, installed by the user (optional) | `fetch`, a 1080p source when there is no master |
 
-Publishing copy and covers come next, in the separate youtube-shorts-publish skill.
+This skill stops at rendered files. Titles, descriptions, covers and scheduling are set in YouTube Studio.
 
 ## 1. Settle the footing
 
@@ -117,4 +117,4 @@ Done when: every face report and motion warning from `overlay` is fixed or accep
 
 ## 8. Report
 
-For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. For titles, descriptions, covers and a schedule, continue with the youtube-shorts-publish skill on the same project.
+For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. Titles, descriptions, covers and scheduling are set in YouTube Studio; offer the title ideas and hooks as a starting point.
