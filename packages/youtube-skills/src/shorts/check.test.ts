@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem } from './check';
+import { edgeHasSpeech, edgeHuggingChanges, flashShots, overlayVideoProblem, sourceTooSoft } from './check';
 
 describe('flashShots', () => {
   test('finds a one-frame shot between two changes', () => {
@@ -56,5 +56,28 @@ describe('overlayVideoProblem', () => {
 
   test('flags a video built from a longer, older cut', () => {
     expect(overlayVideoProblem({ durationSec: 59.37 + 0.2 + 3.5, modifiedMs: 3_000 }, cut)).toMatch(/runs 63\.07s/);
+  });
+});
+
+describe('sourceTooSoft', () => {
+  test('passes 1080p and larger, landscape or vertical', () => {
+    expect(sourceTooSoft({ width: 1920, height: 1080 })).toBeUndefined();
+    expect(sourceTooSoft({ width: 1080, height: 1920 })).toBeUndefined();
+    expect(sourceTooSoft({ width: 3840, height: 2160 })).toBeUndefined();
+  });
+
+  test('flags anything whose shorter side is under 1080 px', () => {
+    expect(sourceTooSoft({ width: 640, height: 360 })).toMatch(/640x360/);
+    expect(sourceTooSoft({ width: 1280, height: 720 })).toMatch(/at least 1080/);
+  });
+
+  test('points 720p to the opt-in, and accepts it once the user has opted in', () => {
+    expect(sourceTooSoft({ width: 1280, height: 720 })).toMatch(/--allow-720p/);
+    expect(sourceTooSoft({ width: 1280, height: 720 }, 720)).toBeUndefined();
+    expect(sourceTooSoft({ width: 854, height: 480 }, 720)).toMatch(/854x480/);
+  });
+
+  test('says nothing when the source is unknown', () => {
+    expect(sourceTooSoft(undefined)).toBeUndefined();
   });
 });

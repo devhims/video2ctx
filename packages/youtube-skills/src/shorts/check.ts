@@ -70,3 +70,24 @@ export function overlayVideoProblem(
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
+
+/** A deliverable short is cut from a source at least this sharp on its shorter side (1080p, landscape or vertical). */
+export const MIN_SOURCE_SHORT_SIDE = 1080;
+/** The softest source a user may accept for deliverables, with --allow-720p. */
+export const OPT_IN_SOURCE_SHORT_SIDE = 720;
+
+/**
+ * Why a source is too soft for a deliverable render, if it is. A 9:16 crop keeps about a third of a
+ * 16:9 frame's width, so a 1080p source is upscaled about 1.8x and a 720p one about 2.7x; YouTube's
+ * 360p review stream is never a deliverable. `floor` is 720 once the user has accepted a 720p master.
+ */
+export function sourceTooSoft(source: { width: number; height: number } | undefined, floor: number = MIN_SOURCE_SHORT_SIDE): string | undefined {
+  if (!source) return undefined;
+  const shorter = Math.min(source.width, source.height);
+  if (shorter >= floor) return undefined;
+  const size = `${source.width}x${source.height}`;
+  if (floor > OPT_IN_SOURCE_SHORT_SIDE && shorter >= OPT_IN_SOURCE_SHORT_SIDE) {
+    return `the source is ${size}; deliverable shorts need at least 1080p, or 720p with --allow-720p once the user accepts softer video`;
+  }
+  return `the source is ${size}; deliverable shorts need at least 1080p (720p with --allow-720p)`;
+}

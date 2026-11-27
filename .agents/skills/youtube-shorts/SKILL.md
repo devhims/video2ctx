@@ -1,6 +1,6 @@
 ---
 name: youtube-shorts
-description: Turn a long YouTube video into vertical Shorts. Finds standalone moments in the transcript, cuts them at word boundaries, plans a 9:16 framing for every camera shot, and renders 1080x1920 clips with captions and channel-styled overlays from the creator's master file or a YouTube review copy. Use for Shorts, Reels, TikToks, clips, or highlights cut from a long video, and for a ranked cut list when no master file is available. Requires Node.js 18.17+, FFmpeg, HyperFrames (via npx) for overlays and missing captions, and the youtube-ctx skill for overlay design research.
+description: Turn a long YouTube video into vertical Shorts. Finds standalone moments in the transcript, cuts them at word boundaries, plans a 9:16 framing for every camera shot, and renders 1080x1920 clips with captions and channel-styled overlays from the creator's master file (at least 1080p; YouTube's own stream gives review previews only). Use for Shorts, Reels, TikToks, clips, or highlights cut from a long video, and for a ranked cut list when no master file is available. Requires Node.js 18.17+, FFmpeg, HyperFrames (via npx) for overlays and missing captions, and the youtube-ctx skill for overlay design research.
 ---
 
 # YouTube Shorts
@@ -17,15 +17,21 @@ Run `node <skill-directory>/scripts/shorts.mjs <command>`, resolving `scripts/sh
 | FFmpeg | `shots`, `render`, `overlay`, `check`, `fit`, `fetch`, `transcribe` |
 | HyperFrames, run through `npx hyperframes@0.9.22` | Rendering overlays and their bundled sound effects; measuring scenes for `fit`; also installs whisper.cpp (`whisper-cli`) and the Whisper model the first time `transcribe` runs |
 | The youtube-ctx skill (`npx skills add devhims/video2ctx --skill youtube-ctx`) | Researching the channel's look before overlays (step 7) |
-| yt-dlp, installed by the user (optional) | `fetch`, a 1080p source when there is no master |
+| yt-dlp, installed by the user (recommended when they own the video but have no master file) | `fetch`, a 1080p source from the upload |
 
 This skill stops at rendered files. Titles, descriptions, covers and scheduling are set in YouTube Studio.
 
 ## 1. Settle the footing
 
-Get the video ID and ask whether the user has the master file for this exact upload and the right to clip it. A different edit (a re-export with a new intro, say) shifts every timestamp. Without a master, `shots` and `render` take `--from-youtube` instead of `--master <file>`. That streams YouTube's own video with audio at 360p, the only quality YouTube serves without sign-in: right for reviewing cuts, framing, and sound, too soft to publish. For 1080p, ask the channel owner for the master or their own download of the upload (YouTube Studio or Google Takeout). If the user has installed yt-dlp and confirms they own the video or have permission to download it, `shorts.mjs fetch --project <dir>` runs their yt-dlp for the best H.264 up to 1080p plus audio and prints the file to pass as `--master`. When it fails, report yt-dlp's error and point the user to yt-dlp's own setup guide. Leave their yt-dlp configuration (cookies, plugins) to them. A 4K master or per-person camera recordings give the sharpest vertical crops, since a 9:16 crop uses about a third of a 16:9 frame's width.
+Get the video ID, then settle the source for the deliverable renders, in this order:
 
-Done when: you know the source: the master, or a YouTube review copy.
+1. **A master file on disk.** Ask whether the user has the master for this exact upload and the right to clip it. A different edit (a re-export with a new intro, say) shifts every timestamp. A 4K master or per-person camera recordings give the sharpest vertical crops, since a 9:16 crop uses about a third of a 16:9 frame's width.
+2. **Only a link.** Ask whether the user owns the video or has permission to download it. If so, `shorts.mjs fetch --project <dir>` runs their yt-dlp for the best H.264 up to 1080p plus audio and prints the file to pass as `--master`. If yt-dlp is missing, recommend installing it from [its installation guide](https://github.com/yt-dlp/yt-dlp#installation) rather than installing it yourself, and leave its configuration (cookies, plugins) to the user. When `fetch` fails, report yt-dlp's error and point to that guide. The channel owner can also download the original upload through Google Takeout.
+3. **Neither.** Steps 2 to 5 and preview renders still work from YouTube's own stream (`--from-youtube`, 360p, the only quality YouTube serves without sign-in), so the moments, cuts and framing can be planned and reviewed. Deliverables wait for a master.
+
+`render` writes deliverables only from a source of at least 1080p on its shorter side. A 720p master upscales each crop about 2.7x, against 1.8x from 1080p: tell the user it will look soft, and pass `--allow-720p` only once they accept that. Anything softer, YouTube's stream included, renders only with `--preview`, into `render/preview/`, which `overlay` and `check` never use.
+
+Done when: you know the deliverable source (a master of at least 1080p, or a 720p master the user accepted), or the user agreed to stop at previews.
 
 ## 2. Read the whole video
 
@@ -79,8 +85,10 @@ Done when: every shot `n` of every short has a layout entry, and `plan` reports 
 ## 6. Render and check
 
 ```bash
-node <skill-directory>/scripts/shorts.mjs render --project <dir> --master <file>  # or --from-youtube
+node <skill-directory>/scripts/shorts.mjs render --project <dir> --master <file>
 ```
+
+Without a deliverable source, render previews with `--from-youtube --preview` (or `--master <file> --preview`) and review them from `render/preview/`; render the deliverables once the master arrives.
 
 `render` moves each cut's edges into a pause in the audio: the start into the pause before the first word, the end into the pause after the last word and before the next one. A short never ends on the first syllable of the next sentence ("so that…") or starts on the tail of the previous one. A warning that there was "no pause" at an edge means the speech runs straight through it, so a word may be clipped or the next one may start. Those edges get a longer fade. For each one, try moving the `from` or `to` phrase to a sentence end and rerender. If none fits, find the quietest moment between the two words in the audio (a 10 ms loudness profile shows it) and pin `endMs` or `startMs` there. Either let the last word finish or cut before the next one starts, never partway into it.
 
@@ -111,7 +119,7 @@ node <skill-directory>/scripts/shorts.mjs fit --project <dir>       # when the s
 node <skill-directory>/scripts/shorts.mjs overlay --project <dir>
 ```
 
-`fit` centres each scene's drawing in its area and sizes it to fill it (see motion.md); run it before `overlay` whenever a scene is new or changed. `overlay` copies each short's current render into its project. After any later `render` (a moved edge, a new layout entry), run `overlay` again before rendering the overlay video, or it plays the old cut. After rendering the overlay videos, run `check` once more: it fails when an overlay project was built from an older cut, or when an overlay video is older than its cut or than its overlay project's last rebuild, or isn't the cut's length plus at most an end card. Pass `--variant <name>` when the finished files are `render/<id>-<name>.mp4` rather than `<id>-overlay.mp4`.
+`fit` centres each scene's drawing in its area and sizes it to fill it (see motion.md); run it before `overlay` whenever a scene is new or changed. `overlay` copies each short's current render into its project. After any later `render` (a moved edge, a new layout entry), run `overlay` again before rendering the overlay video, or it plays the old cut. After rendering the overlay videos, run `check` once more: it fails when a render was cut from a source under 1080p (without `--allow-720p`), when an overlay project was built from an older cut, or when an overlay video is older than its cut or than its overlay project's last rebuild, or isn't the cut's length plus at most an end card. Pass `--variant <name>` when the finished files are `render/<id>-<name>.mp4` rather than `<id>-overlay.mp4`.
 
 Done when: every face report and motion warning from `overlay` is fixed or accepted after looking at its snapshot, every short's snapshots pass the checks in both references, `<id>-overlay.mp4` is rendered, and `check` passes on it.
 

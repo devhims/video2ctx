@@ -22361,6 +22361,18 @@ function overlayVideoProblem(video, cut, project) {
   return void 0;
 }
 var round = (value) => Math.round(value * 100) / 100;
+var MIN_SOURCE_SHORT_SIDE = 1080;
+var OPT_IN_SOURCE_SHORT_SIDE = 720;
+function sourceTooSoft(source, floor = MIN_SOURCE_SHORT_SIDE) {
+  if (!source) return void 0;
+  const shorter = Math.min(source.width, source.height);
+  if (shorter >= floor) return void 0;
+  const size = `${source.width}x${source.height}`;
+  if (floor > OPT_IN_SOURCE_SHORT_SIDE && shorter >= OPT_IN_SOURCE_SHORT_SIDE) {
+    return `the source is ${size}; deliverable shorts need at least 1080p, or 720p with --allow-720p once the user accepts softer video`;
+  }
+  return `the source is ${size}; deliverable shorts need at least 1080p (720p with --allow-720p)`;
+}
 
 // src/shorts/fit.ts
 var FIT_AREAS = {
@@ -23760,7 +23772,7 @@ Usage:
   shorts.mjs read   --video-id <id> --project <dir> [--lang <code>] [--proxy <url>]
   shorts.mjs plan   --project <dir>
   shorts.mjs shots  --project <dir> (--master <file> | --from-youtube) [--only <id,...>] [--scene <0-1>]
-  shorts.mjs render --project <dir> (--master <file> | --from-youtube) [--only <id,...>]
+  shorts.mjs render --project <dir> (--master <file> | --from-youtube --preview) [--preview] [--allow-720p] [--only <id,...>]
   shorts.mjs overlay --project <dir> [--only <id,...>]
   shorts.mjs check  --project <dir> [--master <file>] [--only <id,...>] [--variant <name>]
   shorts.mjs fit    --project <dir> [--only <id,...>]
@@ -23778,7 +23790,11 @@ Commands:
           <id>.srt, <id>.ass, <id>-preview.jpg, and <id>-captioned.mp4 when
           FFmpeg can burn subtitles. Moves each cut edge into the nearest
           pause in the audio and warns where none exists (likely clipped
-          words); the final edges go to <id>.cuts.json for overlay
+          words); the final edges and the source size go to <id>.cuts.json
+          for overlay. Needs a source of at least 1080p, or 720p with
+          --allow-720p; with --preview it renders any source, YouTube's
+          included, into <project>/render/preview instead, which overlay and
+          check never use
   fetch   Download a master with your own yt-dlp (best H.264 up to --max-height,
           default 1080, plus AAC audio) into <project>/source; pass the printed
           path to shots and render as --master. Only for videos you own or
@@ -23797,8 +23813,9 @@ Commands:
   check   Check every rendered short for what a viewer notices: shots under
           1 s (flashes of the wrong framing), speech at a cut edge (a clipped
           word, or the next one starting; needs --master), cuts ending on a
-          word that starts the next thought, an overlay project built from an
-          older cut, and an overlay video that no longer matches its cut
+          word that starts the next thought, a render from a source under
+          1080p, an overlay project built from an older cut, and an overlay
+          video that no longer matches its cut
   fit     Centre each scene's drawing in its area and size it to fill it: renders
           every scene on its own with HyperFrames, measures what its [data-fit]
           element draws, and writes the translate and scale into the scene's
@@ -23807,7 +23824,12 @@ Commands:
 Options:
   --master <file>       The creator's source file for this exact upload
   --from-youtube        Review copy: stream YouTube's own video with audio (usually
-                        360p) instead of a master. Not publishing quality
+                        360p) instead of a master. Fine for shots and transcribe;
+                        render accepts it only with --preview
+  --preview             render into <project>/render/preview for review only; required
+                        for --from-youtube or a master under 1080p
+  --allow-720p          render deliverables from a 720p master; only after the user
+                        accepts that the crops will look soft
   --only <id,...>       Limit shots, render, overlay or check to these short ids
   --variant <name>      Overlay video for check to compare: render/<id>-<name>.mp4; default overlay
   --scene <0-1>         Shot-change sensitivity; default 0.3 (lower finds more)
@@ -23826,14 +23848,14 @@ var commandFlags = {
   read: ["video-id", "project", "lang", "proxy"],
   plan: ["project"],
   shots: ["project", "master", "from-youtube", "only", "scene", "ffmpeg-path", "proxy"],
-  render: ["project", "master", "from-youtube", "only", "ffmpeg-path", "proxy", "silence-db"],
+  render: ["project", "master", "from-youtube", "preview", "allow-720p", "only", "ffmpeg-path", "proxy", "silence-db"],
   overlay: ["project", "only", "ffmpeg-path"],
   check: ["project", "master", "only", "variant", "ffmpeg-path"],
   fit: ["project", "only", "ffmpeg-path"],
   fetch: ["project", "max-height", "yt-dlp-path", "ffmpeg-path", "proxy"],
   transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"]
 };
-var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["pretty", "from-youtube"]);
+var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["pretty", "from-youtube", "preview", "allow-720p"]);
 var DependencyError = class extends Error {
   code = "DEPENDENCY_MISSING";
 };
@@ -23943,7 +23965,7 @@ async function prepareMedia(flags, environment, video) {
   if (expected !== void 0 && Math.abs(masterInfo.durationSec - expected) > 2) {
     warnings.push(`Master runs ${masterInfo.durationSec.toFixed(1)}s but the upload runs ${expected}s. Transcript times only line up with the exact uploaded cut.`);
   }
-  if (masterInfo.height < 1080) warnings.push(`Master is ${masterInfo.width}x${masterInfo.height}; a 9:16 crop will be upscaled and soft.`);
+  if (sourceTooSoft(masterInfo)) warnings.push(`Master is ${masterInfo.width}x${masterInfo.height}; a 9:16 crop will be upscaled and soft, so render takes it only with --preview.`);
   if (!masterInfo.hasAudio) warnings.push("Master has no audio stream.");
   return { master, label: master, ffmpeg, masterInfo, warnings, close: async () => {
   } };
@@ -24182,22 +24204,36 @@ async function commandRender(flags, environment) {
   const project = resolve3(required(flags, "project"));
   const { words, edl, video } = await loadProject(project);
   const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
+  const preview = flags.preview === true;
+  if (flags["from-youtube"] === true && typeof flags.master !== "string" && !preview) {
+    throw new ShortsInputError("YouTube's stream is a 360p review copy. Render a preview from it with --preview, and render the deliverable from a master of at least 1080p (--master <file>).");
+  }
   const media = await prepareMedia(flags, environment, video);
   try {
     const silenceDb = typeof flags["silence-db"] === "string" ? Number(flags["silence-db"]) : -35;
     if (!(silenceDb < 0 && silenceDb > -90)) throw new ShortsInputError("--silence-db must be between -90 and 0.");
-    return await renderFrom(project, words, edl, shorts, media, issues, silenceDb);
+    const { width, height } = media.masterInfo;
+    const floor = flags["allow-720p"] === true && sourceTooSoft(media.masterInfo) ? OPT_IN_SOURCE_SHORT_SIDE : MIN_SOURCE_SHORT_SIDE;
+    const soft = sourceTooSoft(media.masterInfo, floor);
+    if (soft && !preview) {
+      throw new ShortsInputError(`${width}x${height} master: ${soft}. Use a sharper master, or pass --preview to render a review copy into render/preview.`);
+    }
+    if (preview) {
+      media.warnings.push(`Preview from a ${width}x${height} source in render/preview: for checking cuts, framing and sound only. overlay and check use render/, which needs a master of at least 1080p (720p with --allow-720p).`);
+    } else if (floor < MIN_SOURCE_SHORT_SIDE) {
+      media.warnings.push(`Rendering deliverables from a ${width}x${height} master because of --allow-720p: each crop is upscaled about ${(1920 / Math.min(width, height)).toFixed(1)}x and will look soft next to 1080p.`);
+    }
+    return await renderFrom(project, words, edl, shorts, media, issues, silenceDb, preview ? join6(project, "render", "preview") : join6(project, "render"), floor);
   } finally {
     await media.close();
   }
 }
-async function renderFrom(project, words, edl, shorts, media, issues, silenceDb) {
+async function renderFrom(project, words, edl, shorts, media, issues, silenceDb, directory, floor) {
   const { master, ffmpeg, masterInfo, warnings } = media;
   const capabilities = await detectCapabilities(ffmpeg);
   if (!capabilities.canBurnCaptions) {
     warnings.push("This FFmpeg build has no subtitles filter (libass), so captions are written as .srt and .ass sidecars only.");
   }
-  const directory = join6(project, "render");
   await mkdir4(directory, { recursive: true });
   const output = [];
   for (let short of shorts) {
@@ -24233,7 +24269,7 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
       const srt = join6(directory, `${id}.srt`);
       const ass = join6(directory, `${id}.ass`);
       await writeFile4(srt, toSrt(cues));
-      await writeFile4(join6(directory, `${id}.cuts.json`), `${JSON.stringify({ id, cuts: short.cuts }, null, 2)}
+      await writeFile4(join6(directory, `${id}.cuts.json`), `${JSON.stringify({ id, source: { width: masterInfo.width, height: masterInfo.height }, ...floor < MIN_SOURCE_SHORT_SIDE ? { sourceFloor: floor } : {}, cuts: short.cuts }, null, 2)}
 `);
       await writeFile4(ass, toAss(cues, short.spec.hook));
       let captioned;
@@ -24368,6 +24404,8 @@ async function commandOverlay(flags, environment, dependencies) {
     if (!Array.isArray(manifest.cuts) || manifest.cuts.length !== short.cuts.length) {
       throw new ShortsInputError(`${id}.cuts.json does not match edl.json; rerun render for ${id}.`);
     }
+    const soft = sourceTooSoft(manifest.source, manifest.sourceFloor);
+    if (soft) throw new ShortsInputError(`render/${id}.mp4 was cut from a ${manifest.source.width}x${manifest.source.height} source: ${soft}. Render ${id} again from the master.`);
     const rendered = { ...short, cuts: manifest.cuts };
     const directory = join6(project, "overlay", id);
     await mkdir4(join6(directory, "assets"), { recursive: true });
@@ -24490,6 +24528,9 @@ async function commandCheck(flags, environment) {
       continue;
     }
     const cutInfo = await probeMaster(ffmpeg, cutVideo);
+    const recorded = await readFile2(join6(project, "render", `${id}.cuts.json`), "utf8").then((text) => JSON.parse(text)).catch(() => void 0);
+    const soft = sourceTooSoft(recorded?.source, recorded?.sourceFloor);
+    if (soft) issues.push({ short: id, level: "error", message: `render/${id}.mp4 was cut from a ${recorded.source.width}x${recorded.source.height} source: ${soft}. Render it again from the master.` });
     const flashes = flashShots(await detectSceneChanges(ffmpeg, cutVideo), cutInfo.durationSec);
     for (const flash of flashes) {
       issues.push({
