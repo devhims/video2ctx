@@ -102,6 +102,26 @@
   },
   "redirects": [
     {
+      "source": "/api/auth/device/code",
+      "destination": "/api-reference/authentication/start-cli-device-authorization",
+      "permanent": true
+    },
+    {
+      "source": "/api/auth/device/token",
+      "destination": "/api-reference/authentication/poll-for-an-approved-cli-session",
+      "permanent": true
+    },
+    {
+      "source": "/v1/account",
+      "destination": "/api-reference/account/get-the-authenticated-account-identity",
+      "permanent": true
+    },
+    {
+      "source": "/v1/monitors",
+      "destination": "/api/monitoring",
+      "permanent": true
+    },
+    {
       "source": "/skills/youtube-direct",
       "destination": "/skills/youtube-ctx",
       "permanent": true
