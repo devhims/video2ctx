@@ -48,6 +48,12 @@ describe('overlayVideoProblem', () => {
     expect(overlayVideoProblem({ durationSec: 58.37, modifiedMs: 1_000 }, cut)).toMatch(/rendered before the current cut/);
   });
 
+  test('flags a video rendered before its overlay project was rebuilt', () => {
+    const video = { durationSec: 58.37, modifiedMs: 3_000 };
+    expect(overlayVideoProblem(video, cut, { modifiedMs: 2_500 })).toBeUndefined();
+    expect(overlayVideoProblem(video, cut, { modifiedMs: 4_000 })).toMatch(/rendered before its overlay project was last rebuilt/);
+  });
+
   test('flags a video built from a longer, older cut', () => {
     expect(overlayVideoProblem({ durationSec: 59.37 + 0.2 + 3.5, modifiedMs: 3_000 }, cut)).toMatch(/runs 63\.07s/);
   });

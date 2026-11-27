@@ -88,6 +88,7 @@ node <skill-directory>/scripts/shorts.mjs fit --project <dir>
 `fit` renders each scene on its own (no footage, captions or wordmark in the way), snapshots its middle and its final state, and measures what the `data-fit` element draws against the background. It writes the translate and scale that centre the drawing in the scene's area and fill it into that scene's `"fit"` in `edl.json`; `overlay` applies it as it copies the scene in, so a rerun keeps it. Run `fit` again after changing a scene's drawing or timing.
 
 - A drawing that has to shrink below 0.75x is reported: check its strokes and icons still read at phone size, or simplify it.
+- A bottom scene with an expand isn't fitted, because one scale can't suit both the bottom half and the full frame; `fit` warns and removes any earlier fit it saved. Size that drawing by hand and snapshot it before and after the expand.
 - Set `"fit": false` on a scene that is meant to span the frame edge to edge, such as a row of tiles flowing across it.
 - It measures the scene's final state too, so a part that appears late (a finish flag) is included and nothing jumps.
 

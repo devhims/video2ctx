@@ -879,9 +879,12 @@ async function commandCheck(flags: Flags, environment: NodeJS.ProcessEnv) {
     const overlayStat = await stat(overlayVideo).catch(() => undefined);
     if (overlayStat?.isFile()) {
       const overlayInfo = await probeMaster(ffmpeg, overlayVideo);
+      // `overlay` rewrites index.html on every run, so its time marks the project's latest revision.
+      const projectStat = await stat(join(project, 'overlay', id, 'index.html')).catch(() => undefined);
       const problem = overlayVideoProblem(
         { durationSec: overlayInfo.durationSec, modifiedMs: overlayStat.mtimeMs },
         { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs },
+        projectStat?.isFile() ? { modifiedMs: projectStat.mtimeMs } : undefined,
       );
       if (problem) issues.push({ short: id, level: 'error', message: `${basename(overlayVideo)} ${problem}.` });
     }
@@ -944,6 +947,7 @@ async function commandFit(flags: Flags, environment: NodeJS.ProcessEnv) {
   const edlPath = join(project, 'edl.json');
   const raw = JSON.parse(await readFile(edlPath, 'utf8')) as { shorts: Array<{ id: string; overlay?: { scenes?: Array<Record<string, unknown>> } }> };
   const fitted: Array<{ id: string; scene: string; mode: 'bottom' | 'full'; box: { x1: number; y1: number; x2: number; y2: number }; fit: SceneFit }> = [];
+  let cleared = false;
   for (const short of shorts) {
     const id = short.spec.id;
     const scenes = short.spec.overlay?.scenes ?? [];
@@ -989,6 +993,18 @@ async function commandFit(flags: Flags, environment: NodeJS.ProcessEnv) {
         issues.push({ short: id, level: 'warning', message: `${scene.src} isn't placed in the short (run overlay to see why); not fitted.` });
         continue;
       }
+      if (window.expandSec !== undefined) {
+        // fit measures one area. A scene that grows from the bottom half to the full frame has two,
+        // and a scale chosen for the bottom half can push its full-frame artwork off screen.
+        const rawScene = entry?.overlay?.scenes?.[index];
+        const dropped = Boolean(rawScene && typeof rawScene.fit === 'object');
+        if (dropped) {
+          delete rawScene!.fit;
+          cleared = true;
+        }
+        issues.push({ short: id, level: 'warning', message: `${scene.src} expands to the full frame at ${window.expandSec.toFixed(2)}s, so it isn't auto-fitted${dropped ? ' (its earlier fit was removed)' : ''}. Size its drawing to work in both the bottom half and the full frame, and check snapshots of both.` });
+        continue;
+      }
       const measured = await measureScene(ffmpeg, text, basename(scene.src), window.endSec - window.startSec, window.mode);
       if (!measured.box) {
         issues.push({ short: id, level: 'warning', message: measured.error ?? `${scene.src} could not be measured.` });
@@ -1002,8 +1018,8 @@ async function commandFit(flags: Flags, environment: NodeJS.ProcessEnv) {
       fitted.push({ id, scene: scene.src, mode: window.mode, box: measured.box, fit });
     }
   }
-  if (fitted.length) await writeFile(edlPath, `${JSON.stringify(raw, null, 2)}\n`);
-  return { edl: edlPath, scenes: fitted, next: fitted.length ? 'Run overlay to apply the fits, then snapshot each scene.' : undefined, issues };
+  if (fitted.length || cleared) await writeFile(edlPath, `${JSON.stringify(raw, null, 2)}\n`);
+  return { edl: edlPath, scenes: fitted, next: fitted.length || cleared ? 'Run overlay to apply the fits, then snapshot each scene.' : undefined, issues };
 }
 
 function errorPayload(error: unknown): { error: Record<string, unknown> } {

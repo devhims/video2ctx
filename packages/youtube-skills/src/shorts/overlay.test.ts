@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { buildOverlay, captionGroups, placeY, timelineSegments, typicalFaces } from './overlay';
+import { buildOverlay, captionGroups, placeY, sceneWindows, timelineSegments, typicalFaces } from './overlay';
 import type { CaptionWord, ResolvedShort } from './edl';
 
 const words: CaptionWord[] = [
@@ -209,6 +209,18 @@ describe('end card, zooms and scenes', () => {
     expect(tooLate.html).not.toContain('tl.to("#cam"');
   });
 
+  test('keeps the camera cut as a hard boundary when a full-frame scene covers the zoom', () => {
+    const cutToSplit = [
+      { inMs: 0, outMs: 3_000, layout: { atMs: 0, mode: 'crop' as const, x: 0.5 } },
+      { inMs: 3_000, outMs: 20_000, layout: { atMs: 3_000, mode: 'stack' as const } },
+    ];
+    // The iris opens at 2.99 s, just before the 3.00 s cut to a split screen.
+    const plan = buildOverlay({ ...base, segments: cutToSplit, brand: {}, sceneFiles: [{ compositionId: 'cake', file: 'cake.html' }],
+      overlay: { zooms: [{ atSec: 1.5 }], scenes: [{ src: 'cake.html', mode: 'full', atSec: 2.99, durationSec: 2 }] } });
+    expect(plan.html).toContain('tl.set("#cam", { scale: 1 }, 3);');
+    expect(plan.html).not.toContain('tl.set("#cam", { scale: 1 }, 3.39);');
+  });
+
   test('mounts scenes in the bottom half or over the frame, with captions on the seam or low', () => {
     const plan = buildOverlay({ ...base, brand: {}, sfx, overlay: { scenes: [
       { src: 'scenes/net.html', mode: 'bottom', atPhrase: 'the minions', endPhrase: 'come on', expandAtPhrase: 'what the' },
@@ -223,6 +235,15 @@ describe('end card, zooms and scenes', () => {
     expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="5"[^>]*style="top:909px/);
     expect(plan.html).toMatch(/id="cap-\d+"[^>]*data-start="9"[^>]*style="top:1422px/);
     expect(plan.issues).toEqual(expect.arrayContaining([expect.stringMatching(/scene 3: scenes\/none\.html has no data-composition-id/)]));
+  });
+
+  test('reports when a bottom scene expands to the full frame', () => {
+    const windows = sceneWindows({ ...base, brand: {}, overlay: { scenes: [
+      { src: 'scenes/net.html', mode: 'bottom', atPhrase: 'the minions', endPhrase: 'come on', expandAtPhrase: 'what the' },
+      { src: 'scenes/cake.html', mode: 'full', atSec: 1, durationSec: 2 },
+    ] }, sceneFiles: [{ compositionId: 'net', file: 'net.html' }, { compositionId: 'cake', file: 'cake.html' }] });
+    expect(windows.find((window) => window.file === 'net.html')).toMatchObject({ mode: 'bottom', expandSec: 9 });
+    expect(windows.find((window) => window.file === 'cake.html')?.expandSec).toBeUndefined();
   });
 
   test('appears with a cut to a split screen, warns when it starts just after one, and can close silently', () => {

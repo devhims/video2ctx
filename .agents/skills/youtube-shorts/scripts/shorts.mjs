@@ -22351,8 +22351,9 @@ function edgeHuggingChanges(changesMs, inMs, outMs, windowMs = MIN_SHOT_SEC * 1e
 function edgeHasSpeech(levelDb, thresholdDb = EDGE_SPEECH_DB) {
   return Number.isFinite(levelDb) && levelDb > thresholdDb;
 }
-function overlayVideoProblem(video, cut) {
+function overlayVideoProblem(video, cut, project) {
   if (video.modifiedMs < cut.modifiedMs) return "was rendered before the current cut; run overlay again and render it";
+  if (project && video.modifiedMs < project.modifiedMs) return "was rendered before its overlay project was last rebuilt; render it again";
   const extra = video.durationSec - cut.durationSec;
   if (extra < -0.15 || extra > MAX_END_CARD_SEC) {
     return `runs ${video.durationSec.toFixed(2)}s, but the current cut is ${cut.durationSec.toFixed(2)}s (plus at most a ${MAX_END_CARD_SEC}s end card); run overlay again and render it`;
@@ -22588,7 +22589,7 @@ function cardHeight(title, body, source) {
 var SCENE_CUT_FLASH_SEC = 0.6;
 var SCENE_ON_CUT_SEC = 0.05;
 function sceneWindows(input) {
-  return placeScenes(input, timelineSegments(input.segments), []).map(({ file, mode, startSec, endSec }) => ({ file, mode, startSec, endSec }));
+  return placeScenes(input, timelineSegments(input.segments), []).map(({ file, mode, startSec, endSec, expandSec }) => ({ file, mode, startSec, endSec, ...expandSec === void 0 ? {} : { expandSec } }));
 }
 function placeScenes(input, segments, issues) {
   const placed = [];
@@ -22828,7 +22829,7 @@ function buildOverlay(input) {
     tweens.push(`tl.to("#cam", { scale: ${zoom.scale ?? kind.scale}, duration: ${kind.inSec}, ease: "${kind.ease}" }, ${sec(startSec)});`);
     const covering = scenes.find((scene) => scene.startSec >= peakSec - 0.05 && scene.startSec < releaseSec + ZOOM_RELEASE_SEC && scene.mode === "full");
     if (covering) {
-      releaseSec = covering.startSec + 0.4;
+      releaseSec = Math.min(covering.startSec + 0.4, shotEndSec);
       tweens.push(`tl.set("#cam", { scale: 1 }, ${sec(releaseSec)});`);
     } else {
       tweens.push(`tl.to("#cam", { scale: 1, duration: ${ZOOM_RELEASE_SEC}, ease: "power2.inOut" }, ${sec(releaseSec)});`);
@@ -24522,9 +24523,11 @@ async function commandCheck(flags, environment) {
     const overlayStat = await stat2(overlayVideo).catch(() => void 0);
     if (overlayStat?.isFile()) {
       const overlayInfo = await probeMaster(ffmpeg, overlayVideo);
+      const projectStat = await stat2(join6(project, "overlay", id, "index.html")).catch(() => void 0);
       const problem = overlayVideoProblem(
         { durationSec: overlayInfo.durationSec, modifiedMs: overlayStat.mtimeMs },
-        { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs }
+        { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs },
+        projectStat?.isFile() ? { modifiedMs: projectStat.mtimeMs } : void 0
       );
       if (problem) issues.push({ short: id, level: "error", message: `${basename2(overlayVideo)} ${problem}.` });
     }
@@ -24582,6 +24585,7 @@ async function commandFit(flags, environment) {
   const edlPath = join6(project, "edl.json");
   const raw = JSON.parse(await readFile2(edlPath, "utf8"));
   const fitted = [];
+  let cleared = false;
   for (const short of shorts) {
     const id = short.spec.id;
     const scenes = short.spec.overlay?.scenes ?? [];
@@ -24627,6 +24631,16 @@ async function commandFit(flags, environment) {
         issues.push({ short: id, level: "warning", message: `${scene.src} isn't placed in the short (run overlay to see why); not fitted.` });
         continue;
       }
+      if (window.expandSec !== void 0) {
+        const rawScene2 = entry?.overlay?.scenes?.[index];
+        const dropped = Boolean(rawScene2 && typeof rawScene2.fit === "object");
+        if (dropped) {
+          delete rawScene2.fit;
+          cleared = true;
+        }
+        issues.push({ short: id, level: "warning", message: `${scene.src} expands to the full frame at ${window.expandSec.toFixed(2)}s, so it isn't auto-fitted${dropped ? " (its earlier fit was removed)" : ""}. Size its drawing to work in both the bottom half and the full frame, and check snapshots of both.` });
+        continue;
+      }
       const measured = await measureScene(ffmpeg, text, basename2(scene.src), window.endSec - window.startSec, window.mode);
       if (!measured.box) {
         issues.push({ short: id, level: "warning", message: measured.error ?? `${scene.src} could not be measured.` });
@@ -24640,9 +24654,9 @@ async function commandFit(flags, environment) {
       fitted.push({ id, scene: scene.src, mode: window.mode, box: measured.box, fit });
     }
   }
-  if (fitted.length) await writeFile4(edlPath, `${JSON.stringify(raw, null, 2)}
+  if (fitted.length || cleared) await writeFile4(edlPath, `${JSON.stringify(raw, null, 2)}
 `);
-  return { edl: edlPath, scenes: fitted, next: fitted.length ? "Run overlay to apply the fits, then snapshot each scene." : void 0, issues };
+  return { edl: edlPath, scenes: fitted, next: fitted.length || cleared ? "Run overlay to apply the fits, then snapshot each scene." : void 0, issues };
 }
 function errorPayload(error) {
   if (error instanceof YouTubeClientError) {
