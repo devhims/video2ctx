@@ -38,7 +38,7 @@ export interface ReviewComment {
   id: string;
   /** Seconds into `file` (or into the short when no file is given). */
   atSec: number;
-  /** Project-relative video the comment was made on, such as render/S1-overlay.mp4. */
+  /** Project-relative video the comment was made on, such as render/S1-overlay.mp4 or render/preview/S1.mp4. */
   file?: string;
   /** That video's revision when the comment was started. */
   revision?: number;
@@ -157,8 +157,8 @@ export interface ReviewScope {
 /** Reads the render an action was taken on: both file and revision, or neither. */
 function renderRefOf(action: Record<string, unknown>): RenderRef | undefined {
   if (action.file === undefined && action.revision === undefined) return undefined;
-  if (typeof action.file !== 'string' || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file)) {
-    throw new ShortsInputError('file must be a video under render/.');
+  if (typeof action.file !== 'string' || !/^render\/(preview\/)?[A-Za-z0-9_-]+\.mp4$/.test(action.file)) {
+    throw new ShortsInputError('file must be a video under render/ or render/preview/.');
   }
   if (typeof action.revision !== 'number' || !Number.isFinite(action.revision) || action.revision < 0) {
     throw new ShortsInputError('file needs the revision of the render that was reviewed.');
@@ -390,16 +390,22 @@ function parseParagraphs(markdown: string): { atMs: number; text: string }[] {
   return paragraphs;
 }
 
+/** Finals first, then previews (render --preview, from a source too soft for deliverables). */
 const VIDEO_ORDER = ['overlay', 'captioned', 'cut'];
+const RENDER_FOLDERS = [
+  { folder: 'render', label: (suffix: string) => suffix || 'cut', rank: 0 },
+  { folder: 'render/preview', label: (suffix: string) => (suffix ? `preview ${suffix}` : 'preview'), rank: 100 },
+];
 
 /** Everything the page shows, read from files the other commands already write. */
 export async function projectState(project: string): Promise<ProjectState> {
-  const [edlRaw, video, transcript, review, render, shotFiles] = await Promise.all([
+  const [edlRaw, video, transcript, review, render, previewRender, shotFiles] = await Promise.all([
     readJsonFile(join(project, 'edl.json')).catch((error: unknown) => error instanceof SyntaxError ? new Error('edl.json is not valid JSON.') : new Error('No edl.json yet.')),
     readJsonFile(join(project, 'video.json')).catch(() => undefined),
     readFile(join(project, 'transcript.md'), 'utf8').catch(() => ''),
     readReview(project),
     listDirectory(join(project, 'render')),
+    listDirectory(join(project, 'render', 'preview')),
     listDirectory(join(project, 'shots')),
   ]);
   const paragraphs = parseParagraphs(transcript);
@@ -430,17 +436,20 @@ export async function projectState(project: string): Promise<ProjectState> {
       const excerpt = typeof cut.text === 'string' && cut.text ? cut.text : paragraph?.text ?? quoted;
       return { atMs, durationMs, excerpt };
     });
-    const videos: StateVideo[] = [];
-    for (const [name, mtime] of render) {
-      if (extname(name) !== '.mp4') continue;
-      const stem = name.slice(0, -4);
-      if (ownerOf(stem) !== id) continue;
-      const suffix = stem.slice(id.length + 1);
-      const label = suffix || 'cut';
-      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime), revision: mtime });
+    const videos: (StateVideo & { order: number })[] = [];
+    for (const [index, files] of [render, previewRender].entries()) {
+      const { folder, label, rank: folderRank } = RENDER_FOLDERS[index]!;
+      for (const [name, mtime] of files) {
+        if (extname(name) !== '.mp4') continue;
+        const stem = name.slice(0, -4);
+        if (ownerOf(stem) !== id) continue;
+        const suffix = stem.slice(id.length + 1);
+        const known = VIDEO_ORDER.indexOf(suffix || 'cut');
+        const path = `${folder}/${name}`;
+        videos.push({ label: label(suffix), path, src: fileUrl(path, mtime), revision: mtime, order: folderRank + (known < 0 ? VIDEO_ORDER.length : known) });
+      }
     }
-    const order = (label: string) => (VIDEO_ORDER.includes(label) ? VIDEO_ORDER.indexOf(label) : VIDEO_ORDER.length);
-    videos.sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
+    videos.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
     const snapshots: string[] = [];
     for (const folder of ['snapshots', 'snaps']) {
       const images = await listDirectory(join(project, 'overlay', id, folder));
@@ -449,7 +458,9 @@ export async function projectState(project: string): Promise<ProjectState> {
       }
     }
     const sheet = shotFiles.get(`${id}.jpg`);
-    const preview = render.get(`${id}-preview.jpg`);
+    // Frames of the final render when there is one, else of the preview render.
+    const previewImage = render.has(`${id}-preview.jpg`) ? 'render' : previewRender.has(`${id}-preview.jpg`) ? 'render/preview' : undefined;
+    const preview = previewImage === 'render' ? render.get(`${id}-preview.jpg`) : previewRender.get(`${id}-preview.jpg`);
     return {
       id,
       rank: ownRank,
@@ -461,8 +472,8 @@ export async function projectState(project: string): Promise<ProjectState> {
       variants: ids.filter((other) => baseOf(other) === id),
       cuts,
       sheet: sheet === undefined ? undefined : fileUrl(`shots/${id}.jpg`, sheet),
-      preview: preview === undefined ? undefined : fileUrl(`render/${id}-preview.jpg`, preview),
-      videos,
+      preview: previewImage && preview !== undefined ? fileUrl(`${previewImage}/${id}-preview.jpg`, preview) : undefined,
+      videos: videos.map(({ order: _order, ...video }) => video),
       snapshots,
     };
   }));
@@ -472,7 +483,10 @@ export async function projectState(project: string): Promise<ProjectState> {
     videoId: isRecord(edlRaw) && typeof edlRaw.videoId === 'string' ? edlRaw.videoId : undefined,
     edlError: edlRaw instanceof Error ? edlRaw.message : !rawShorts.length ? 'edl.json has no shorts yet.' : undefined,
     shorts,
-    review: annotateReview(review, new Map([...render].map(([name, mtime]) => [`render/${name}`, mtime]))),
+    review: annotateReview(review, new Map([
+      ...[...render].map(([name, mtime]) => [`render/${name}`, mtime] as const),
+      ...[...previewRender].map(([name, mtime]) => [`render/preview/${name}`, mtime] as const),
+    ])),
   };
   return { version: createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 12), ...body };
 }

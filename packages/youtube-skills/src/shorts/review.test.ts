@@ -272,6 +272,30 @@ describe('projectState', () => {
     expect(scopeOf(state).variants.get('S1')).toEqual(['S1-b']);
   });
 
+  test('lists preview renders after the finals, and accepts notes on them', async () => {
+    const { project } = await fixture();
+    await mkdir(join(project, 'render', 'preview'));
+    for (const name of ['S2.mp4', 'S2-captioned.mp4', 'S2-preview.jpg', 'S1.mp4']) await writeFile(join(project, 'render', 'preview', name), name);
+    const state = await projectState(project);
+    const [s1, , s2] = state.shorts;
+    expect(s1!.videos.map((video) => video.label)).toEqual(['overlay', 'captioned', 'cut', 'preview']);
+    expect(s1!.preview).toMatch(/^\/files\/render\/S1-preview\.jpg/);
+    expect(s2!.videos.map((video) => [video.label, video.path])).toEqual([
+      ['preview captioned', 'render/preview/S2-captioned.mp4'],
+      ['preview', 'render/preview/S2.mp4'],
+    ]);
+    expect(s2!.preview).toMatch(/^\/files\/render\/preview\/S2-preview\.jpg\?v=\d+$/);
+
+    const reviewed = { file: 'render/preview/S2.mp4', revision: s2!.videos[1]!.revision };
+    await updateReview(project, [{ type: 'status', short: 'S2', status: 'changes', ...reviewed }, { type: 'comment', short: 'S2', atSec: 1, text: 'Tighter', ...reviewed }]);
+    let s2Review = (await projectState(project)).review.shorts.S2!;
+    expect(s2Review).toMatchObject({ current: 'changes', statusStale: false, comments: [{ stale: false }] });
+    const later = new Date(Date.now() + 5_000);
+    await utimes(join(project, 'render', 'preview', 'S2.mp4'), later, later);
+    s2Review = (await projectState(project)).review.shorts.S2!;
+    expect(s2Review).toMatchObject({ current: 'pending', statusStale: true, comments: [{ stale: true }] });
+  });
+
   test('reports a missing or broken edl instead of failing', async () => {
     const { project } = await fixture();
     await rm(join(project, 'edl.json'));
