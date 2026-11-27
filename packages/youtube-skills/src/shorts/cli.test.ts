@@ -125,6 +125,16 @@ describe('shorts CLI', () => {
     }
   });
 
+  test('render from YouTube needs --preview, before any network request', async () => {
+    const directory = await readProject();
+    await writeFile(join(directory, 'edl.json'), JSON.stringify({
+      videoId: 'abcdefghijk', shorts: [{ id: 'S1', hook: 'H', cuts: [{ from: 'minions love', to: 'bake cake' }] }],
+    }));
+    const capture = io();
+    expect(await runShortsCli(['render', '--project', directory, '--from-youtube'], capture)).toBe(2);
+    expect(JSON.parse(capture.errors.join('')).error.message).toMatch(/--preview/);
+  });
+
   test('fetch explains how to get yt-dlp when it is missing', async () => {
     const directory = await readProject();
     const capture = io();
@@ -171,8 +181,8 @@ console.log(out);
     const master = join(directory, 'master.mp4');
     const made = spawnSync(ffmpeg, [
       '-hide_banner', '-loglevel', 'error', '-y',
-      '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25',
-      '-f', 'lavfi', '-i', 'smptebars=size=1280x720:rate=25',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=25',
+      '-f', 'lavfi', '-i', 'smptebars=size=1920x1080:rate=25',
       '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000',
       '-filter_complex', "[0:v][1:v]overlay=enable='gte(t,3)'[v]",
       '-map', '[v]', '-map', '2:a', '-t', '8', '-c:a', 'aac', master,
@@ -199,6 +209,7 @@ console.log(out);
     expect(Math.abs(result.shorts[0].durationSec - 5.4)).toBeLessThan(0.3);
     expect(await readFile(result.shorts[0].srt, 'utf8')).toContain('minions love Guru.');
     await stat(result.shorts[0].preview);
+    expect(JSON.parse(await readFile(join(directory, 'render', 'S1.cuts.json'), 'utf8')).source).toEqual({ width: 1920, height: 1080 });
 
     // Overlay: end card on the final frame with the thumbnail, a zoom, a mounted scene, bundled sounds.
     await writeFile(join(directory, 'scene.html'), '<template><div id="root" data-composition-id="demo-scene" data-width="1080" data-height="1920">' +
@@ -227,5 +238,66 @@ console.log(out);
     expect(requested[0]).toEqual(expect.arrayContaining(['riser', 'pop', 'sparkle']));
     for (const file of ['endcard/freeze.jpg', 'endcard/freeze-blur.jpg', 'sfx/sparkle.mp3']) await stat(join(built.project, 'assets', file));
     await stat(join(built.project, 'compositions', 'scene.html'));
+  }, 180_000);
+  test('keeps renders from a source under 1080p as previews that overlay refuses', async () => {
+    const directory = await readProject();
+    const master = join(directory, 'master-720p.mp4');
+    const made = spawnSync(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25',
+      '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000',
+      '-t', '8', '-c:a', 'aac', master,
+    ]);
+    expect(made.status).toBe(0);
+    await writeFile(join(directory, 'edl.json'), JSON.stringify({
+      videoId: 'abcdefghijk',
+      shorts: [{ id: 'S1', hook: 'Minions', cuts: [{ from: 'minions love', to: 'bake cake' }], layout: [{ atMs: 0, mode: 'crop', x: 0.5 }] }],
+    }));
+
+    const refused = io();
+    expect(await runShortsCli(['render', '--project', directory, '--master', master], refused)).toBe(2);
+    expect(JSON.parse(refused.errors.join('')).error.message).toMatch(/1280x720.*--preview/);
+
+    const preview = io();
+    expect(await runShortsCli(['render', '--project', directory, '--master', master, '--preview'], preview), preview.errors.join('')).toBe(0);
+    const result = JSON.parse(preview.output.join(''));
+    expect(result.shorts[0].video).toBe(join(directory, 'render', 'preview', 'S1.mp4'));
+    expect(await stat(join(directory, 'render', 'S1.mp4')).catch(() => undefined)).toBeUndefined();
+
+    // With only a preview, check fails: nothing deliverable was checked.
+    const previewOnly = io();
+    expect(await runShortsCli(['check', '--project', directory], previewOnly), previewOnly.errors.join('')).toBe(0);
+    const previewResult = JSON.parse(previewOnly.output.join(''));
+    expect(previewResult.ok).toBe(false);
+    expect(previewResult.issues).toEqual(expect.arrayContaining([expect.objectContaining({ short: 'S1', level: 'error', message: expect.stringMatching(/No final render.*render\/preview/) })]));
+
+    // A render from before sources were recorded ({ id, cuts } only) is unverified: overlay refuses, check fails.
+    const previewManifest = JSON.parse(await readFile(join(directory, 'render', 'preview', 'S1.cuts.json'), 'utf8'));
+    await writeFile(join(directory, 'render', 'S1.mp4'), await readFile(result.shorts[0].video));
+    await writeFile(join(directory, 'render', 'S1.cuts.json'), JSON.stringify({ id: 'S1', cuts: previewManifest.cuts }));
+    const legacyOverlay = io();
+    expect(await runShortsCli(['overlay', '--project', directory], legacyOverlay)).toBe(2);
+    expect(JSON.parse(legacyOverlay.errors.join('')).error.message).toMatch(/no recorded source size/);
+    const legacyCheck = io();
+    expect(await runShortsCli(['check', '--project', directory], legacyCheck), legacyCheck.errors.join('')).toBe(0);
+    const legacyResult = JSON.parse(legacyCheck.output.join(''));
+    expect(legacyResult.ok).toBe(false);
+    expect(legacyResult.issues).toEqual(expect.arrayContaining([expect.objectContaining({ level: 'error', message: expect.stringMatching(/no recorded source size/) })]));
+
+    // A render copied by hand with its 720p manifest still can't get overlays.
+    await writeFile(join(directory, 'render', 'S1.mp4'), await readFile(result.shorts[0].video));
+    await writeFile(join(directory, 'render', 'S1.cuts.json'), await readFile(join(directory, 'render', 'preview', 'S1.cuts.json')));
+    const overlay = io();
+    expect(await runShortsCli(['overlay', '--project', directory], overlay)).toBe(2);
+    expect(JSON.parse(overlay.errors.join('')).error.message).toMatch(/1280x720.*at least 1080/);
+
+    // With the user's OK, 720p renders as a deliverable and check accepts it.
+    const allowed = io();
+    expect(await runShortsCli(['render', '--project', directory, '--master', master, '--allow-720p'], allowed), allowed.errors.join('')).toBe(0);
+    expect(JSON.parse(allowed.output.join('')).warnings).toEqual(expect.arrayContaining([expect.stringMatching(/--allow-720p.*soft/)]));
+    expect(JSON.parse(await readFile(join(directory, 'render', 'S1.cuts.json'), 'utf8'))).toMatchObject({ source: { width: 1280, height: 720 }, sourceFloor: 720 });
+    const checked = io();
+    expect(await runShortsCli(['check', '--project', directory], checked), checked.errors.join('')).toBe(0);
+    expect(JSON.parse(checked.output.join('')).issues.filter((issue: { message: string }) => /source/.test(issue.message))).toEqual([]);
   }, 180_000);
 });
