@@ -19021,11 +19021,11 @@ var require_undici = __commonJS({
 });
 
 // src/shorts/cli.ts
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile2, readdir as readdir2, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
+import { createHash as createHash2 } from "node:crypto";
+import { createReadStream as createReadStream2 } from "node:fs";
+import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile3, readdir as readdir3, rm as rm4, stat as stat3, writeFile as writeFile5 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
-import { basename as basename2, extname as extname2, join as join6, resolve as resolve3 } from "node:path";
+import { basename as basename2, extname as extname3, join as join7, resolve as resolve3 } from "node:path";
 
 // ../all-things-youtube/src/youtube-client.ts
 var import_he = __toESM(require_he());
@@ -20358,7 +20358,7 @@ function playlistHeaderData(root) {
         (row) => array(object4(row).metadataParts).map((part) => rendererText(object4(part).text)).filter((value) => Boolean(value))
       )
     ),
-    ...array(primary.stats).map((stat3) => rendererText(stat3)).filter((value) => Boolean(value))
+    ...array(primary.stats).map((stat4) => rendererText(stat4)).filter((value) => Boolean(value))
   ];
   const videoCountText = rendererText(legacy.numVideosText) ?? metadataValues.find((value) => /^\s*[\d,.]+\s+videos?\s*$/i.test(value));
   const channelCandidates = [
@@ -23751,6 +23751,819 @@ function dtwPreset(model) {
   return model.replace(/^large-v(\d)/, "large.v$1");
 }
 
+// src/shorts/review.ts
+import { createHash, randomBytes as randomBytes2 } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { readFile as readFile2, readdir as readdir2, realpath, rename, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
+import { createServer as createServer2 } from "node:http";
+import { extname as extname2, join as join6, sep } from "node:path";
+
+// src/shorts/review-page.ts
+function reviewPage(nonce) {
+  return String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shorts review</title>
+<style nonce="${nonce}">
+:root {
+  color-scheme: dark;
+  --bg: #0e0f11; --panel: #17181b; --panel-2: #1f2125; --line: #2a2d33; --text: #e9eaec; --muted: #9a9fa8;
+  --accent: #ff4d3d; --ok: #3ccf7a; --warn: #f3b33d; --bad: #ff6b6b; --radius: 10px;
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; cursor: pointer; }
+button:hover { border-color: #444851; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.small { padding: 2px 8px; font-size: 12px; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; padding: 10px 20px; background: rgba(14,15,17,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 650; white-space: nowrap; }
+.brand small { display: block; color: var(--muted); font-weight: 400; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.tabs { display: flex; gap: 4px; }
+.tabs a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 7px; }
+.tabs a.active { color: var(--text); background: var(--panel-2); }
+.tabs a .count { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.live { margin-left: auto; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(60,207,122,.15); }
+.live.off::before { background: var(--bad); box-shadow: none; }
+main.view { padding: 20px; }
+.empty { color: var(--muted); padding: 60px 20px; text-align: center; }
+.moments { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 9px; }
+.card.selected { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+.card header { display: flex; align-items: baseline; gap: 9px; }
+.card h3 { margin: 0; font-size: 15px; flex: 1; }
+.rank { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.hook { margin: 0; font-size: 16px; font-weight: 600; }
+.hook::before { content: "Hook  "; color: var(--muted); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+.meta { color: var(--muted); font-size: 12px; }
+blockquote { margin: 0; padding: 7px 10px; background: var(--panel-2); border-radius: 7px; color: #c9ccd1; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+blockquote.open { -webkit-line-clamp: unset; }
+blockquote time { color: var(--muted); font-size: 12px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+.sheet { width: 100%; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.card footer { margin-top: auto; display: flex; align-items: center; gap: 8px; }
+.keep { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; }
+.keep input { width: 16px; height: 16px; accent-color: var(--ok); }
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pill.approved { color: var(--ok); border-color: rgba(60,207,122,.4); }
+.pill.changes { color: var(--warn); border-color: rgba(243,179,61,.4); }
+.pill.rejected { color: var(--bad); border-color: rgba(255,107,107,.4); }
+.group { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
+.group > header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.group h3 { margin: 0; font-size: 15px; flex: 1; }
+.variants { display: flex; gap: 14px; flex-wrap: wrap; }
+.variant { width: 230px; display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 9px; border: 1px solid transparent; }
+.variant.chosen { border-color: var(--accent); background: rgba(255,77,61,.06); }
+.vlabel { font-weight: 650; }
+.vlabel span { color: var(--muted); font-weight: 400; }
+.frame { aspect-ratio: 9 / 16; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.frame video, .frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.variant .hook { font-size: 14px; min-height: 3em; }
+.player { display: grid; grid-template-columns: 220px auto minmax(280px, 460px); gap: 24px; align-items: start; }
+.list { display: flex; flex-direction: column; gap: 3px; position: sticky; top: 74px; }
+.list button { text-align: left; background: transparent; border-color: transparent; display: flex; gap: 8px; align-items: center; }
+.list button.active { background: var(--panel-2); border-color: var(--line); }
+.list button .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.approved { background: var(--ok); } .dot.changes { background: var(--warn); } .dot.rejected { background: var(--bad); }
+.list .variant-of { padding-left: 22px; }
+.stage { position: sticky; top: 74px; display: flex; flex-direction: column; gap: 10px; width: min(100%, calc((100vh - 250px) * 9 / 16)); min-width: 300px; }
+.stage .frame { width: 100%; }
+.sources, .statuses { display: flex; gap: 6px; flex-wrap: wrap; }
+.sources button.active, .statuses button.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.statuses button.active.approved { background: var(--ok); border-color: var(--ok); }
+.statuses button.active.changes { background: var(--warn); border-color: var(--warn); }
+.statuses button.active.rejected { background: var(--bad); border-color: var(--bad); }
+form.comment { display: flex; gap: 6px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 5px 5px 9px; }
+form.comment input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: inherit; outline: none; }
+.at { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 650; font-size: 12px; }
+.side h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.side h2 { margin: 0 0 4px; font-size: 17px; }
+.side .hook { margin-bottom: 14px; }
+ol.comments { list-style: none; padding: 0; margin: 0 0 20px; display: flex; flex-direction: column; gap: 6px; }
+ol.comments li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; display: flex; gap: 8px; align-items: baseline; }
+ol.comments li.resolved { opacity: .55; }
+ol.comments li.resolved .text { text-decoration: line-through; }
+ol.comments .text { flex: 1; white-space: pre-wrap; }
+ol.comments .where { color: var(--muted); font-size: 11px; display: block; }
+ol.comments button.at { background: none; border: 0; padding: 0; }
+.stills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stills a { display: block; }
+.stills img { width: 100%; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.stills a.wide { grid-column: 1 / -1; }
+.grow { flex: 1; }
+.hint { color: var(--muted); font-size: 12px; }
+kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+@media (max-width: 1000px) { .player { grid-template-columns: 1fr; } .stage, .list { position: static; flex-direction: row; flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">Shorts review<small id="title"></small></div>
+  <nav class="tabs">
+    <a href="#moments" data-view="moments">Moments<span class="count" id="count-moments"></span></a>
+    <a href="#hooks" data-view="hooks">Hooks<span class="count" id="count-hooks"></span></a>
+    <a href="#player" data-view="player">Player<span class="count" id="count-player"></span></a>
+  </nav>
+  <div class="live" id="live">Watching project files</div>
+</div>
+<main class="view" id="view"></main>
+<script nonce="${nonce}">
+"use strict";
+var state = null;
+var view = "moments";
+var current = null;
+var chosenSource = {};
+var pinnedAt = null;
+var videos = new Map();
+var playerShell = null;
+var PILL_LABELS = { approved: "Approved", changes: "Needs changes", rejected: "Rejected" };
+var STATUS_LABELS = { pending: "Pending", approved: "Approve", changes: "Needs changes", rejected: "Reject" };
+
+function el(tag, props) {
+  var node = document.createElement(tag);
+  props = props || {};
+  Object.keys(props).forEach(function (key) {
+    var value = props[key];
+    if (value === undefined || value === null || value === false) return;
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.slice(0, 2) === "on") node.addEventListener(key.slice(2), value);
+    else if (key === "checked") node.checked = true;
+    else node.setAttribute(key, value === true ? "" : value);
+  });
+  for (var i = 2; i < arguments.length; i++) append(node, arguments[i]);
+  return node;
+}
+function append(node, child) {
+  if (child === undefined || child === null || child === false) return;
+  if (Array.isArray(child)) { child.forEach(function (c) { append(node, c); }); return; }
+  node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+}
+function clock(seconds) {
+  if (seconds === undefined || seconds === null || isNaN(seconds)) return "";
+  var m = Math.floor(seconds / 60);
+  var s = seconds - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+function wholeClock(seconds) {
+  var m = Math.floor(seconds / 60), s = Math.floor(seconds % 60);
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+function byId(id) { return state.shorts.find(function (s) { return s.id === id; }); }
+function rev(id) { return (state.review.shorts[id]) || { comments: [] }; }
+function pill(status) { return status && status !== "pending" ? el("span", { class: "pill " + status, text: PILL_LABELS[status] }) : null; }
+function bestVideo(short) { return short && short.videos[0]; }
+function sourceFor(short) {
+  var label = chosenSource[short.id];
+  return short.videos.find(function (v) { return v.label === label; }) || bestVideo(short);
+}
+function video(src) {
+  var node = videos.get(src);
+  if (!node) {
+    node = el("video", { src: src, preload: "metadata", playsinline: true, controls: true });
+    node.addEventListener("timeupdate", function () {
+      var limit = Number(node.dataset.limit || 0);
+      if (limit && node.currentTime >= limit) { node.pause(); node.currentTime = 0; }
+      if (node === activeVideo()) showTime();
+    });
+    videos.set(src, node);
+  }
+  return node;
+}
+
+async function send(action) {
+  var response = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) });
+  var body = await response.json();
+  if (!response.ok) { alert(body.error ? body.error.message : "Could not save."); return; }
+  apply(body);
+}
+
+function apply(next) {
+  state = next;
+  document.getElementById("title").textContent = state.title || state.videoId || "";
+  var bases = state.shorts.filter(function (s) { return !s.variantOf; });
+  var kept = bases.filter(function (s) { return rev(s.id).selected; }).length;
+  document.getElementById("count-moments").textContent = bases.length ? kept + "/" + bases.length : "";
+  var groups = bases.filter(function (s) { return s.variants.length; });
+  var picked = groups.filter(function (s) { return rev(s.id).variant; }).length;
+  document.getElementById("count-hooks").textContent = groups.length ? picked + "/" + groups.length : "";
+  var rendered = state.shorts.filter(function (s) { return s.videos.length; }).length;
+  document.getElementById("count-player").textContent = rendered ? String(rendered) : "";
+  render();
+}
+
+function route() {
+  var hash = location.hash.slice(1).split("/");
+  view = ["moments", "hooks", "player"].indexOf(hash[0]) >= 0 ? hash[0] : "moments";
+  if (view === "player" && hash[1]) current = decodeURIComponent(hash[1]);
+  document.querySelectorAll(".tabs a").forEach(function (a) { a.classList.toggle("active", a.dataset.view === view); });
+  if (state) render(true);
+}
+
+function render(switched) {
+  var root = document.getElementById("view");
+  if (state.edlError && !state.shorts.length) { root.replaceChildren(el("div", { class: "empty", text: state.edlError + " The page updates when it appears." })); playerShell = null; return; }
+  if (view === "player") { renderPlayer(root, switched); return; }
+  playerShell = null;
+  root.replaceChildren(view === "hooks" ? renderHooks() : renderMoments());
+}
+
+function renderMoments() {
+  var bases = state.shorts.filter(function (s) { return !s.variantOf; });
+  return el("div", { class: "moments" }, bases.map(function (s) {
+    var r = rev(s.id);
+    var meta = [s.id, s.durationSec ? s.durationSec.toFixed(1) + " s" : null, s.variants.length ? (s.variants.length + 1) + " hook variants" : null, s.videos.length ? "rendered" : null].filter(Boolean).join(" · ");
+    return el("article", { class: "card" + (r.selected ? " selected" : "") },
+      el("header", {}, el("span", { class: "rank", text: "#" + s.rank }), el("h3", { text: s.title || s.id }), pill(r.status)),
+      s.hook ? el("p", { class: "hook", text: s.hook }) : null,
+      el("div", { class: "meta", text: meta }),
+      s.cuts.map(function (c) {
+        return el("blockquote", { title: "Click to expand", onclick: function (e) { e.currentTarget.classList.toggle("open"); } },
+          c.atMs !== undefined ? el("time", { text: wholeClock(c.atMs / 1000) }) : null, c.excerpt);
+      }),
+      s.notes ? el("div", { class: "meta", text: s.notes }) : null,
+      s.sheet ? el("img", { class: "sheet", src: s.sheet, alt: "Contact sheet for " + s.id, loading: "lazy" }) : null,
+      el("footer", {},
+        el("label", { class: "keep" }, el("input", { type: "checkbox", checked: r.selected === true, onchange: function (e) { send({ type: "select", short: s.id, selected: e.target.checked }); } }), "Keep"),
+        r.comments.length ? el("span", { class: "meta", text: r.comments.length + " comment" + (r.comments.length > 1 ? "s" : "") }) : null,
+        el("span", { class: "grow" }),
+        el("button", { class: "small", onclick: function () { location.hash = "player/" + encodeURIComponent(s.id); } }, "Open"))
+    );
+  }));
+}
+
+function renderHooks() {
+  var groups = state.shorts.filter(function (s) { return s.variants.length; });
+  if (!groups.length) return el("div", { class: "empty", text: "No hook variants yet. Variants are shorts named <id>-b and <id>-c in edl.json." });
+  return el("div", {}, el("p", { class: "hint", text: "Each player stops at 6 s. Compare the openings and pick one per short." }), groups.map(function (base) {
+    var ids = [base.id].concat(base.variants);
+    var chosen = rev(base.id).variant;
+    var players = [];
+    var cols = ids.map(function (id, index) {
+      var s = byId(id);
+      var source = bestVideo(s);
+      var player = source ? video(source.src) : null;
+      if (player) { player.dataset.limit = "6"; players.push(player); }
+      var isChosen = chosen === id;
+      return el("div", { class: "variant" + (isChosen ? " chosen" : "") },
+        el("div", { class: "vlabel" }, "ABCDEFGHIJ".charAt(index) + " ", el("span", { text: id + (source ? " · " + source.label : "") })),
+        el("div", { class: "frame" }, player || "Not rendered yet"),
+        el("p", { class: "hook", text: s.hook || "" }),
+        el("button", { class: isChosen ? "primary" : "", onclick: function () { send({ type: "variant", short: base.id, choice: id }); } }, isChosen ? "Chosen" : "Pick " + "ABCDEFGHIJ".charAt(index)));
+    });
+    return el("section", { class: "group" },
+      el("header", {}, el("h3", {}, el("span", { class: "rank", text: "#" + base.rank + " " }), base.title || base.id), pill(rev(base.id).status),
+        players.length > 1 ? el("button", { onclick: function () { players.forEach(function (p) { p.muted = true; p.currentTime = 0; p.play(); }); } }, "Play openings together (muted)") : null),
+      el("div", { class: "variants" }, cols));
+  }));
+}
+
+function activeVideo() { return playerShell && playerShell.stage.querySelector("video"); }
+function showTime() {
+  if (!playerShell) return;
+  var v = activeVideo();
+  playerShell.at.textContent = clock(pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0);
+}
+
+function buildPlayerShell(root) {
+  var at = el("span", { class: "at", text: "0:00.0" });
+  var input = el("input", { placeholder: "Comment at this moment… (press c)", maxlength: "2000", "aria-label": "Comment" });
+  input.addEventListener("focus", function () { var v = activeVideo(); if (v) { v.pause(); pinnedAt = v.currentTime; } showTime(); });
+  input.addEventListener("blur", function () { if (!input.value) { pinnedAt = null; showTime(); } });
+  input.addEventListener("keydown", function (e) { if (e.key === "Escape") { input.value = ""; input.blur(); } });
+  var form = el("form", { class: "comment" }, at, input, el("button", { class: "small primary", type: "submit" }, "Add"));
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    var short = byId(current);
+    if (!text || !short) return;
+    var v = activeVideo();
+    var source = sourceFor(short);
+    var atSec = pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0;
+    input.value = "";
+    pinnedAt = null;
+    send({ type: "comment", short: short.id, atSec: atSec, text: text, file: source ? source.path : undefined });
+  });
+  var shell = {
+    list: el("nav", { class: "list" }),
+    sources: el("div", { class: "sources" }),
+    stage: el("div", { class: "frame" }),
+    statuses: el("div", { class: "statuses" }),
+    side: el("div", { class: "side" }),
+    at: at, input: input, key: ""
+  };
+  shell.node = el("div", { class: "player" }, shell.list,
+    el("div", { class: "stage" }, shell.sources, shell.stage, form, shell.statuses,
+      el("div", { class: "hint" }, "Comments pin to the paused time. ", el("kbd", { text: "c" }), " comment · ", el("kbd", { text: "k" }), " play/pause · ", el("kbd", { text: "←" }), el("kbd", { text: "→" }), " 1 s")),
+    shell.side);
+  root.replaceChildren(shell.node);
+  return shell;
+}
+
+function renderPlayer(root, switched) {
+  if (!playerShell || !root.contains(playerShell.node)) playerShell = buildPlayerShell(root);
+  var shell = playerShell;
+  if (!current || !byId(current)) current = (state.shorts.find(function (s) { return s.videos.length; }) || state.shorts[0]).id;
+  var short = byId(current);
+  var r = rev(short.id);
+
+  shell.list.replaceChildren.apply(shell.list, state.shorts.map(function (s) {
+    var sr = rev(s.id);
+    return el("button", { class: (s.id === current ? "active " : "") + (s.variantOf ? "variant-of" : ""), title: s.title || s.id, onclick: function () { location.hash = "player/" + encodeURIComponent(s.id); } },
+      el("span", { class: "rank", text: s.variantOf ? s.id.slice(s.variantOf.length + 1).toUpperCase() : "#" + s.rank }),
+      el("span", { class: "t", text: (s.variantOf ? s.hook : s.title) || s.id }),
+      sr.comments.length ? el("span", { class: "meta", text: String(sr.comments.length) }) : null,
+      sr.status && sr.status !== "pending" ? el("span", { class: "dot " + sr.status, title: PILL_LABELS[sr.status] }) : null);
+  }));
+
+  var source = sourceFor(short);
+  var key = short.id + "|" + (source ? source.src : "");
+  shell.sources.replaceChildren.apply(shell.sources, short.videos.map(function (v) {
+    return el("button", { class: "small" + (source && v.src === source.src ? " active" : ""), onclick: function () { chosenSource[short.id] = v.label; render(); } }, v.label);
+  }));
+  if (shell.key !== key) {
+    var old = activeVideo();
+    var keepTime = old && source && shell.key.split("|")[0] === short.id ? old.currentTime : 0;
+    if (old) old.pause();
+    if (source) {
+      var player = video(source.src);
+      player.dataset.limit = "";
+      player.muted = false;
+      if (keepTime) player.currentTime = keepTime;
+      shell.stage.replaceChildren(player);
+    } else {
+      shell.stage.replaceChildren(el("div", { text: "Not rendered yet" }));
+    }
+    shell.key = key;
+    pinnedAt = null;
+    showTime();
+  }
+
+  shell.statuses.replaceChildren.apply(shell.statuses, ["approved", "changes", "rejected", "pending"].map(function (status) {
+    var active = (r.status || "pending") === status;
+    return el("button", { class: "small " + status + (active ? " active" : ""), onclick: function () { send({ type: "status", short: short.id, status: status }); } }, STATUS_LABELS[status]);
+  }));
+
+  var comments = r.comments.map(function (c) {
+    var where = c.file && (!source || c.file !== source.path) ? c.file.replace(/^render\//, "") : null;
+    return el("li", { class: c.resolved ? "resolved" : "" },
+      el("button", { class: "at", title: "Seek here", onclick: function () {
+        var target = short.videos.find(function (v) { return v.path === c.file; });
+        if (target && (!source || target.src !== source.src)) { chosenSource[short.id] = target.label; render(); }
+        var v = activeVideo(); if (v) { v.currentTime = c.atSec; v.pause(); }
+      } }, clock(c.atSec)),
+      el("span", { class: "text" }, c.text, where ? el("span", { class: "where", text: "on " + where }) : null, c.resolved ? el("span", { class: "where", text: "resolved by the agent" }) : null),
+      el("button", { class: "small", title: "Delete comment", onclick: function () { send({ type: "uncomment", short: short.id, id: c.id }); } }, "×"));
+  });
+  var stills = [];
+  if (short.preview) stills.push(el("a", { class: "wide", href: short.preview, target: "_blank", rel: "noopener" }, el("img", { src: short.preview, alt: "Preview frames" })));
+  short.snapshots.forEach(function (src) { stills.push(el("a", { href: src, target: "_blank", rel: "noopener" }, el("img", { src: src, alt: "Overlay snapshot", loading: "lazy" }))); });
+  if (short.sheet) stills.push(el("a", { class: "wide", href: short.sheet, target: "_blank", rel: "noopener" }, el("img", { src: short.sheet, alt: "Contact sheet", loading: "lazy" })));
+  shell.side.replaceChildren(
+    el("h2", {}, el("span", { class: "rank", text: (short.variantOf ? "#" + short.rank + short.id.slice(short.variantOf.length + 1).toUpperCase() : "#" + short.rank) + " " }), short.title || short.id),
+    short.hook ? el("p", { class: "hook", text: short.hook }) : null,
+    el("h4", { text: "Comments" + (r.comments.length ? " (" + r.comments.length + ")" : "") }),
+    r.comments.length ? el("ol", { class: "comments" }, comments) : el("p", { class: "hint", text: "No comments yet. Pause where something is off and type what to change." }),
+    stills.length ? el("h4", { text: "Stills" }) : null,
+    el("div", { class: "stills" }, stills));
+  if (switched && document.activeElement !== shell.input) window.scrollTo(0, 0);
+}
+
+document.addEventListener("keydown", function (e) {
+  if (view !== "player" || !playerShell || e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
+  var v = activeVideo();
+  if (e.key === "c") { e.preventDefault(); playerShell.input.focus(); }
+  else if (e.key === "k" && v) { e.preventDefault(); if (v.paused) v.play(); else v.pause(); }
+  else if (e.key === "ArrowLeft" && v) { v.currentTime = Math.max(0, v.currentTime - 1); }
+  else if (e.key === "ArrowRight" && v) { v.currentTime = v.currentTime + 1; }
+});
+
+async function poll() {
+  var live = document.getElementById("live");
+  try {
+    var response = await fetch("/api/state?since=" + encodeURIComponent(state ? state.version : ""), { cache: "no-store" });
+    if (response.status === 200) apply(await response.json());
+    live.classList.remove("off");
+    live.textContent = "Watching project files";
+  } catch (error) {
+    live.classList.add("off");
+    live.textContent = "Review server stopped";
+  }
+  setTimeout(poll, 1500);
+}
+
+window.addEventListener("hashchange", route);
+route();
+poll();
+</script>
+</body>
+</html>
+`;
+}
+
+// src/shorts/review.ts
+var SERVED_TYPES = {
+  ".mp4": "video/mp4",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".json": "application/json; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".srt": "text/plain; charset=utf-8",
+  ".ass": "text/plain; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8"
+};
+var REVIEW_FILE = "review.json";
+var REVIEW_STATUSES = ["pending", "approved", "changes", "rejected"];
+var MAX_COMMENT_CHARS = 2e3;
+var MAX_BODY_BYTES = 64 * 1024;
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseReview(value) {
+  const shorts = {};
+  if (isRecord2(value) && isRecord2(value.shorts)) {
+    for (const [id, entry] of Object.entries(value.shorts)) {
+      if (!isRecord2(entry)) continue;
+      const comments = Array.isArray(entry.comments) ? entry.comments.filter((comment) => isRecord2(comment) && typeof comment.id === "string" && typeof comment.text === "string" && typeof comment.atSec === "number") : [];
+      shorts[id] = { ...entry, comments };
+    }
+  }
+  return { version: 1, updatedAt: isRecord2(value) && typeof value.updatedAt === "string" ? value.updatedAt : void 0, shorts };
+}
+async function readReview(project, strict = false) {
+  let text;
+  try {
+    text = await readFile2(join6(project, REVIEW_FILE), "utf8");
+  } catch {
+    return parseReview(void 0);
+  }
+  try {
+    return parseReview(JSON.parse(text));
+  } catch {
+    if (strict) throw new ShortsInputError(`${REVIEW_FILE} is not valid JSON; fix or delete it before recording more decisions.`);
+    return parseReview(void 0);
+  }
+}
+function applyReviewAction(review, action, scope, now = /* @__PURE__ */ new Date()) {
+  if (!isRecord2(action) || typeof action.type !== "string") throw new ShortsInputError("A review action needs a type.");
+  const short = action.short;
+  if (typeof short !== "string" || !scope.shorts.has(short)) throw new ShortsInputError(`Unknown short: ${String(short)}.`);
+  const next = { ...review, shorts: { ...review.shorts } };
+  const entry = { ...next.shorts[short] ?? {}, comments: [...next.shorts[short]?.comments ?? []] };
+  switch (action.type) {
+    case "select":
+      if (typeof action.selected !== "boolean") throw new ShortsInputError("select needs selected: true or false.");
+      entry.selected = action.selected;
+      break;
+    case "status":
+      if (!REVIEW_STATUSES.includes(action.status)) {
+        throw new ShortsInputError(`status must be one of ${REVIEW_STATUSES.join(", ")}.`);
+      }
+      entry.status = action.status;
+      break;
+    case "variant": {
+      const options = [short, ...scope.variants.get(short) ?? []];
+      if (options.length < 2 || typeof action.choice !== "string" || !options.includes(action.choice)) {
+        throw new ShortsInputError(`choice must be one of ${options.join(", ")}.`);
+      }
+      entry.variant = action.choice;
+      break;
+    }
+    case "comment": {
+      const text = typeof action.text === "string" ? action.text.trim() : "";
+      if (!text || text.length > MAX_COMMENT_CHARS) throw new ShortsInputError(`A comment needs 1 to ${MAX_COMMENT_CHARS} characters.`);
+      if (typeof action.atSec !== "number" || !Number.isFinite(action.atSec) || action.atSec < 0) {
+        throw new ShortsInputError("A comment needs atSec, a time in seconds.");
+      }
+      if (action.file !== void 0 && (typeof action.file !== "string" || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file))) {
+        throw new ShortsInputError("A comment file must be a video under render/.");
+      }
+      entry.comments.push({
+        id: randomBytes2(4).toString("hex"),
+        atSec: Math.round(action.atSec * 10) / 10,
+        ...action.file ? { file: action.file } : {},
+        text,
+        createdAt: now.toISOString()
+      });
+      entry.comments.sort((a, b) => a.atSec - b.atSec);
+      break;
+    }
+    case "uncomment":
+      entry.comments = entry.comments.filter((comment) => comment.id !== action.id);
+      break;
+    default:
+      throw new ShortsInputError(`Unknown review action: ${action.type}.`);
+  }
+  next.shorts[short] = entry;
+  next.updatedAt = now.toISOString();
+  return next;
+}
+async function writeReview(project, review) {
+  const path = join6(project, REVIEW_FILE);
+  const temporary = `${path}.${randomBytes2(4).toString("hex")}.tmp`;
+  await writeFile4(temporary, `${JSON.stringify(review, null, 2)}
+`);
+  await rename(temporary, path);
+}
+async function resolveProjectFile(project, urlPath) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return void 0;
+  }
+  if (decoded.includes("\0") || decoded.includes("\\")) return void 0;
+  const parts = decoded.split("/").filter(Boolean);
+  if (!parts.length || parts.some((part) => part.startsWith("."))) return void 0;
+  let root;
+  let real;
+  try {
+    root = await realpath(project);
+    real = await realpath(join6(root, ...parts));
+  } catch {
+    return void 0;
+  }
+  if (!real.startsWith(root + sep)) return void 0;
+  if (!SERVED_TYPES[extname2(real).toLowerCase()] || !SERVED_TYPES[extname2(parts.at(-1)).toLowerCase()]) return void 0;
+  const info = await stat2(real).catch(() => void 0);
+  return info?.isFile() ? real : void 0;
+}
+async function readJsonFile(path) {
+  return JSON.parse(await readFile2(path, "utf8"));
+}
+async function listDirectory(path) {
+  const files = /* @__PURE__ */ new Map();
+  const names = await readdir2(path).catch(() => []);
+  await Promise.all(names.map(async (name) => {
+    if (name.startsWith(".")) return;
+    const info = await stat2(join6(path, name)).catch(() => void 0);
+    if (info?.isFile()) files.set(name, Math.round(info.mtimeMs));
+  }));
+  return files;
+}
+function fileUrl(path, mtimeMs) {
+  return `/files/${path.split("/").map(encodeURIComponent).join("/")}?v=${mtimeMs}`;
+}
+function parseParagraphs(markdown) {
+  const paragraphs = [];
+  for (const line of markdown.split("\n")) {
+    const match = /^\[(\d+:\d{2}(?::\d{2})?)\] (.+)$/.exec(line);
+    if (match) paragraphs.push({ atMs: parseTime(match[1]), text: match[2] });
+  }
+  return paragraphs;
+}
+var VIDEO_ORDER = ["overlay", "captioned", "cut"];
+async function projectState(project) {
+  const [edlRaw, video, transcript, review, render, shotFiles] = await Promise.all([
+    readJsonFile(join6(project, "edl.json")).catch((error) => error instanceof SyntaxError ? new Error("edl.json is not valid JSON.") : new Error("No edl.json yet.")),
+    readJsonFile(join6(project, "video.json")).catch(() => void 0),
+    readFile2(join6(project, "transcript.md"), "utf8").catch(() => ""),
+    readReview(project),
+    listDirectory(join6(project, "render")),
+    listDirectory(join6(project, "shots"))
+  ]);
+  const paragraphs = parseParagraphs(transcript);
+  const rawShorts = isRecord2(edlRaw) && Array.isArray(edlRaw.shorts) ? edlRaw.shorts.filter((short) => isRecord2(short) && typeof short.id === "string" && /^[A-Za-z0-9_-]+$/.test(short.id)) : [];
+  const ids = rawShorts.map((short) => short.id);
+  const idSet = new Set(ids);
+  const baseOf = (id) => {
+    const match = /^(.+)-([b-z])$/.exec(id);
+    return match && idSet.has(match[1]) ? match[1] : void 0;
+  };
+  const ownerOf = (stem) => ids.filter((id) => stem === id || stem.startsWith(`${id}-`)).sort((a, b) => b.length - a.length)[0];
+  let rank = 0;
+  const shorts = await Promise.all(rawShorts.map(async (short) => {
+    const id = short.id;
+    const variantOf = baseOf(id);
+    const ownRank = variantOf ? 0 : rank += 1;
+    const cuts = (Array.isArray(short.cuts) ? short.cuts : []).filter(isRecord2).map((cut) => {
+      const atMs = typeof cut.startMs === "number" ? cut.startMs : void 0;
+      const durationMs = atMs !== void 0 && typeof cut.endMs === "number" ? cut.endMs - atMs : void 0;
+      const paragraph = atMs === void 0 ? void 0 : paragraphs.filter((entry) => entry.atMs <= atMs).at(-1);
+      const quoted = [cut.from, cut.to].filter((phrase) => typeof phrase === "string").map((phrase) => `“${String(phrase)}”`).join(" … ");
+      const excerpt = typeof cut.text === "string" && cut.text ? cut.text : paragraph?.text ?? quoted;
+      return { atMs, durationMs, excerpt };
+    });
+    const videos = [];
+    for (const [name, mtime] of render) {
+      if (extname2(name) !== ".mp4") continue;
+      const stem = name.slice(0, -4);
+      if (ownerOf(stem) !== id) continue;
+      const suffix = stem.slice(id.length + 1);
+      const label = suffix || "cut";
+      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime) });
+    }
+    const order = (label) => VIDEO_ORDER.includes(label) ? VIDEO_ORDER.indexOf(label) : VIDEO_ORDER.length;
+    videos.sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
+    const snapshots = [];
+    for (const folder of ["snapshots", "snaps"]) {
+      const images = await listDirectory(join6(project, "overlay", id, folder));
+      for (const [name, mtime] of [...images].sort(([a], [b]) => a.localeCompare(b))) {
+        if (/\.(png|jpe?g|webp)$/i.test(name)) snapshots.push(fileUrl(`overlay/${id}/${folder}/${name}`, mtime));
+      }
+    }
+    const sheet = shotFiles.get(`${id}.jpg`);
+    const preview = render.get(`${id}-preview.jpg`);
+    return {
+      id,
+      rank: ownRank,
+      title: typeof short.title === "string" ? short.title : void 0,
+      hook: typeof short.hook === "string" ? short.hook : void 0,
+      notes: typeof short.notes === "string" ? short.notes : void 0,
+      durationSec: typeof short.durationSec === "number" ? short.durationSec : void 0,
+      variantOf,
+      variants: ids.filter((other) => baseOf(other) === id),
+      cuts,
+      sheet: sheet === void 0 ? void 0 : fileUrl(`shots/${id}.jpg`, sheet),
+      preview: preview === void 0 ? void 0 : fileUrl(`render/${id}-preview.jpg`, preview),
+      videos,
+      snapshots
+    };
+  }));
+  for (const short of shorts) if (short.variantOf) short.rank = shorts.find((base) => base.id === short.variantOf).rank;
+  const body = {
+    title: isRecord2(video) && typeof video.title === "string" ? video.title : void 0,
+    videoId: isRecord2(edlRaw) && typeof edlRaw.videoId === "string" ? edlRaw.videoId : void 0,
+    edlError: edlRaw instanceof Error ? edlRaw.message : !rawShorts.length ? "edl.json has no shorts yet." : void 0,
+    shorts,
+    review
+  };
+  return { version: createHash("sha1").update(JSON.stringify(body)).digest("hex").slice(0, 12), ...body };
+}
+function scopeOf(state) {
+  return {
+    shorts: new Set(state.shorts.map((short) => short.id)),
+    variants: new Map(state.shorts.filter((short) => short.variants.length).map((short) => [short.id, short.variants]))
+  };
+}
+var DEFAULT_IDLE_MS = 30 * 6e4;
+function send(response, status, body, type = "text/plain; charset=utf-8", headers = {}) {
+  response.writeHead(status, { "Content-Type": type, "Content-Length": Buffer.byteLength(body), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...headers });
+  response.end(body);
+}
+function sendJson(response, status, value) {
+  send(response, status, JSON.stringify(value), "application/json; charset=utf-8");
+}
+async function sendFile(request, response, file) {
+  const { size } = await stat2(file);
+  const headers = {
+    "Content-Type": SERVED_TYPES[extname2(file).toLowerCase()],
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-cache",
+    "X-Content-Type-Options": "nosniff"
+  };
+  let start = 0;
+  let end = size - 1;
+  let status = 200;
+  const range = request.headers.range;
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (match && (match[1] || match[2])) {
+      if (match[1]) {
+        start = Number(match[1]);
+        if (match[2]) end = Math.min(Number(match[2]), size - 1);
+      } else {
+        start = Math.max(0, size - Number(match[2]));
+      }
+    }
+    if (!match || !match[1] && !match[2] || start > end || start >= size) {
+      response.writeHead(416, { "Content-Range": `bytes */${size}` });
+      response.end();
+      return;
+    }
+    status = 206;
+    headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+  }
+  headers["Content-Length"] = size ? end - start + 1 : 0;
+  response.writeHead(status, headers);
+  if (request.method === "HEAD" || !size) {
+    response.end();
+    return;
+  }
+  createReadStream(file, { start, end }).on("error", () => response.destroy()).pipe(response);
+}
+async function readBody(request) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > MAX_BODY_BYTES) throw new ShortsInputError("Request body is too large.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+async function startReviewServer(options) {
+  const project = options.project;
+  const info = await stat2(project).catch(() => void 0);
+  if (!info?.isDirectory()) throw new ShortsInputError(`Project directory not found: ${project}.`);
+  const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
+  const nonce = randomBytes2(16).toString("base64");
+  let origins = /* @__PURE__ */ new Set();
+  let lastRequest = Date.now();
+  let writes = Promise.resolve();
+  const handle = async (request, response) => {
+    lastRequest = Date.now();
+    if (!origins.has(`http://${request.headers.host ?? ""}`)) {
+      send(response, 403, "Forbidden host.");
+      return;
+    }
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (request.method === "GET" && url.pathname === "/") {
+      send(response, 200, reviewPage(nonce), "text/html; charset=utf-8", {
+        "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src 'self'; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        "Referrer-Policy": "no-referrer"
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/state") {
+      const state = await projectState(project);
+      if (url.searchParams.get("since") === state.version) {
+        response.writeHead(204, { "Cache-Control": "no-store" });
+        response.end();
+        return;
+      }
+      sendJson(response, 200, state);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/review") {
+      const origin = request.headers.origin;
+      if (origin !== void 0 && !origins.has(origin) || !String(request.headers["content-type"]).startsWith("application/json")) {
+        send(response, 403, "Forbidden.");
+        return;
+      }
+      const body = await readBody(request);
+      let action;
+      try {
+        action = JSON.parse(body);
+      } catch {
+        throw new ShortsInputError("The request body is not valid JSON.");
+      }
+      const write2 = writes.then(async () => {
+        const state = await projectState(project);
+        await writeReview(project, applyReviewAction(await readReview(project, true), action, scopeOf(state)));
+      });
+      writes = write2.catch(() => void 0);
+      await write2;
+      sendJson(response, 200, await projectState(project));
+      return;
+    }
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname.startsWith("/files/")) {
+      const file = await resolveProjectFile(project, url.pathname.slice("/files/".length));
+      if (!file) {
+        send(response, 404, "Not found.");
+        return;
+      }
+      await sendFile(request, response, file);
+      return;
+    }
+    send(response, 404, "Not found.");
+  };
+  const server = createServer2((request, response) => {
+    handle(request, response).catch((error) => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      if (error instanceof ShortsInputError) sendJson(response, 400, { error: { code: error.code, message: error.message } });
+      else sendJson(response, 500, { error: { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : "Unexpected failure." } });
+    });
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
+      server.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const { port } = server.address();
+  origins = /* @__PURE__ */ new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+  let resolveClosed;
+  const closed = new Promise((resolve4) => {
+    resolveClosed = resolve4;
+  });
+  let stopping;
+  const stop = (reason) => {
+    stopping ??= new Promise((resolveStop) => {
+      clearInterval(timer);
+      server.close(() => resolveStop());
+      server.closeAllConnections();
+    }).then(() => resolveClosed(reason));
+    return stopping;
+  };
+  const timer = setInterval(() => {
+    if (Date.now() - lastRequest >= idleMs) void stop("idle");
+  }, Math.min(idleMs, 3e4));
+  timer.unref();
+  return { url: `http://127.0.0.1:${port}/`, closed, close: () => stop("stopped") };
+}
+
 // src/shorts/cli.ts
 var HELP = `youtube-shorts
 
@@ -23766,6 +24579,7 @@ Usage:
   shorts.mjs fit    --project <dir> [--only <id,...>]
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
+  shorts.mjs review --project <dir> [--port <n>] [--idle-minutes <n>]
 
 Commands:
   read    Fetch metadata and a word-timed transcript into the project:
@@ -23819,6 +24633,8 @@ Options:
   --whisper-path <path> whisper-cli for transcribe; defaults to WHISPER_CLI_PATH or whisper-cli
   --whisper-model <file> ggml model file; defaults to HyperFrames' cached model
   --proxy <url>         HTTP(S) proxy for YouTube requests; defaults to OUTBOUND_PROXY_URL
+  --port <n>            Port for review; default a free one
+  --idle-minutes <n>    Stop review after this long with no page open; default 30
   --pretty              Pretty-print JSON
 `;
 var HYPERFRAMES_VERSION = "0.9.22";
@@ -23831,7 +24647,8 @@ var commandFlags = {
   check: ["project", "master", "only", "variant", "ffmpeg-path"],
   fit: ["project", "only", "ffmpeg-path"],
   fetch: ["project", "max-height", "yt-dlp-path", "ffmpeg-path", "proxy"],
-  transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"]
+  transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"],
+  review: ["project", "port", "idle-minutes"]
 };
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["pretty", "from-youtube"]);
 var DependencyError = class extends Error {
@@ -23876,7 +24693,7 @@ function onlySet(flags) {
 async function readJson(path, what) {
   let text;
   try {
-    text = await readFile2(path, "utf8");
+    text = await readFile3(path, "utf8");
   } catch {
     throw new ShortsInputError(`${what} not found at ${path}.`);
   }
@@ -23887,9 +24704,9 @@ async function readJson(path, what) {
   }
 }
 async function loadProject(project) {
-  const transcript = await readJson(join6(project, "words.json"), "words.json (run read first)");
-  const edl = parseEdl(await readJson(join6(project, "edl.json"), "edl.json"));
-  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
+  const transcript = await readJson(join7(project, "words.json"), "words.json (run read first)");
+  const edl = parseEdl(await readJson(join7(project, "edl.json"), "edl.json"));
+  const video = await readJson(join7(project, "video.json"), "video.json (run read first)");
   if (edl.videoId !== video.videoId) {
     throw new ShortsInputError(`edl.json videoId ${edl.videoId} does not match video.json ${String(video.videoId)}.`);
   }
@@ -23936,7 +24753,7 @@ async function prepareMedia(flags, environment, video) {
     }
   }
   const master = resolve3(required(flags, "master"));
-  const info = await stat2(master).catch(() => void 0);
+  const info = await stat3(master).catch(() => void 0);
   if (!info?.isFile()) throw new ShortsInputError(`Master file not found: ${master}.`);
   const masterInfo = await probeMaster(ffmpeg, master);
   const expected = typeof video.durationSeconds === "number" ? video.durationSeconds : void 0;
@@ -23960,10 +24777,10 @@ async function writeTranscript(project, video, transcript) {
   const words = flattenWords(transcript.segments);
   const chapters = parseChapters(video.description);
   await Promise.all([
-    writeFile4(join6(project, "video.json"), `${JSON.stringify({ ...video, track: transcript.track }, null, 2)}
+    writeFile5(join7(project, "video.json"), `${JSON.stringify({ ...video, track: transcript.track }, null, 2)}
 `),
-    writeFile4(join6(project, "words.json"), JSON.stringify(transcript)),
-    writeFile4(join6(project, "transcript.md"), renderTranscript(words, {
+    writeFile5(join7(project, "words.json"), JSON.stringify(transcript)),
+    writeFile5(join7(project, "transcript.md"), renderTranscript(words, {
       title: video.title,
       videoId: video.videoId,
       durationSeconds: video.durationSeconds,
@@ -23992,17 +24809,17 @@ async function commandRead(flags, environment, dependencies) {
     };
     await mkdir4(project, { recursive: true });
     const files = {
-      transcript: join6(project, "transcript.md"),
-      words: join6(project, "words.json"),
-      video: join6(project, "video.json"),
-      edl: join6(project, "edl.json")
+      transcript: join7(project, "transcript.md"),
+      words: join7(project, "words.json"),
+      video: join7(project, "video.json"),
+      edl: join7(project, "edl.json")
     };
     let transcript;
     try {
       transcript = await (dependencies.getTranscript ?? getTranscript)({ videoId, lang, granularity: "word", fetch: fetchResource.fetch });
     } catch (error) {
       if (!(error instanceof YouTubeClientError) || !NO_CAPTIONS.has(error.code)) throw error;
-      await writeFile4(files.video, `${JSON.stringify({ ...video, track: null }, null, 2)}
+      await writeFile5(files.video, `${JSON.stringify({ ...video, track: null }, null, 2)}
 `);
       return {
         project,
@@ -24030,19 +24847,19 @@ async function commandRead(flags, environment, dependencies) {
 }
 async function resolveWhisper(flags, environment, model) {
   const command = (typeof flags["whisper-path"] === "string" ? flags["whisper-path"] : void 0) ?? environment.WHISPER_CLI_PATH ?? "whisper-cli";
-  const modelPath = resolve3((typeof flags["whisper-model"] === "string" ? flags["whisper-model"] : void 0) ?? join6(environment.HOME ?? homedir(), ".cache", "hyperframes", "whisper", "models", `ggml-${model}.bin`));
+  const modelPath = resolve3((typeof flags["whisper-model"] === "string" ? flags["whisper-model"] : void 0) ?? join7(environment.HOME ?? homedir(), ".cache", "hyperframes", "whisper", "models", `ggml-${model}.bin`));
   const find = async () => ({
     cli: await resolveFfmpegExecutable(command, environment).catch(() => void 0),
-    model: (await stat2(modelPath).catch(() => void 0))?.isFile() ?? false
+    model: (await stat3(modelPath).catch(() => void 0))?.isFile() ?? false
   });
   let found = await find();
   if (!found.cli || !found.model) {
     const npx = await resolveFfmpegExecutable("npx", environment).catch(() => void 0);
     if (npx) {
-      const work = await mkdtemp2(join6(tmpdir2(), "shorts-whisper-setup-"));
+      const work = await mkdtemp2(join7(tmpdir2(), "shorts-whisper-setup-"));
       try {
         const ffmpeg = await resolveFfmpeg(flags, environment);
-        const silence = join6(work, "silence.wav");
+        const silence = join7(work, "silence.wav");
         await runCommand(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "1", silence]);
         await runCommand(npx, ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "transcribe", silence, "--engine", "whisper", "--model", model, "--json", "-d", work]);
       } finally {
@@ -24057,15 +24874,15 @@ async function resolveWhisper(flags, environment, model) {
 }
 async function commandTranscribe(flags, environment) {
   const project = resolve3(required(flags, "project"));
-  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
+  const video = await readJson(join7(project, "video.json"), "video.json (run read first)");
   const model = typeof flags.model === "string" ? flags.model : "small.en";
   const language = typeof flags.language === "string" ? flags.language : "en";
   if (!/^[a-z0-9.-]+$/i.test(model) || !/^[a-z]{2,3}$/i.test(language)) throw new ShortsInputError("--model or --language has an unexpected value.");
   const whisper = await resolveWhisper(flags, environment, model);
   const media = await prepareMedia(flags, environment, video);
-  const work = await mkdtemp2(join6(tmpdir2(), "shorts-whisper-"));
+  const work = await mkdtemp2(join7(tmpdir2(), "shorts-whisper-"));
   try {
-    const wav = join6(work, "speech-16k.wav");
+    const wav = join7(work, "speech-16k.wav");
     await extractSpeechAudio(media.ffmpeg, media.master, wav);
     const result = await runCommand(whisper.cli, [
       "-m",
@@ -24079,7 +24896,7 @@ async function commandTranscribe(flags, environment) {
       "-nfa",
       "-ojf",
       "-of",
-      join6(work, "whisper"),
+      join7(work, "whisper"),
       "-np",
       "-t",
       String(Math.max(1, Math.min(8, cpus().length)))
@@ -24088,14 +24905,14 @@ async function commandTranscribe(flags, environment) {
       const detail = result.stderr.trim().split("\n").slice(-3).join(" ");
       throw new MediaError(`Whisper transcription failed: ${detail}`, result.stderr);
     }
-    const words = parseWhisperCliJson(await readJson(join6(work, "whisper.json"), "whisper-cli output"));
+    const words = parseWhisperCliJson(await readJson(join7(work, "whisper.json"), "whisper-cli output"));
     if (!words.length) throw new MediaError("Whisper found no speech in the source.");
     const count = await writeTranscript(project, video, whisperToTranscript(video.videoId, words, model, language));
     return {
       project,
       captions: `whisper:${model}`,
       words: count,
-      files: { transcript: join6(project, "transcript.md"), words: join6(project, "words.json") },
+      files: { transcript: join7(project, "transcript.md"), words: join7(project, "words.json") },
       warnings: [...media.warnings, "Whisper mishears names too: build the glossary as with YouTube captions. There are no speaker-change marks (>>)."]
     };
   } finally {
@@ -24119,11 +24936,11 @@ async function commandPlan(flags) {
     });
     spec.durationSec = Math.round(short.durationMs / 100) / 10;
   }
-  await writeFile4(join6(project, "edl.json"), `${JSON.stringify(edl, null, 2)}
+  await writeFile5(join7(project, "edl.json"), `${JSON.stringify(edl, null, 2)}
 `);
   return {
     ok: errorsOf(issues).length === 0,
-    edl: join6(project, "edl.json"),
+    edl: join7(project, "edl.json"),
     shorts: shorts.map((short) => ({
       id: short.spec.id,
       durationSec: Math.round(short.durationMs / 100) / 10,
@@ -24149,7 +24966,7 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
   const { master, ffmpeg, masterInfo, warnings } = media;
   const output = [];
   for (const short of shorts) {
-    const directory = join6(project, "shots", short.spec.id);
+    const directory = join7(project, "shots", short.spec.id);
     await rm4(directory, { recursive: true, force: true });
     const shots = [];
     for (const [cutIndex, cut] of short.cuts.entries()) {
@@ -24167,12 +24984,12 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
       for (const [index, startMs] of starts.entries()) {
         const endMs = starts[index + 1] ?? cut.outMs;
         const n = shots.length + 1;
-        const thumb = join6(directory, `${String(n).padStart(2, "0")}.jpg`);
+        const thumb = join7(directory, `${String(n).padStart(2, "0")}.jpg`);
         await extractThumbnail(ffmpeg, master, Math.round((startMs + endMs) / 2), thumb);
         shots.push({ n, atMs: startMs, at: formatTime(startMs), durationSec: Math.round((endMs - startMs) / 100) / 10, cut: cutIndex, thumb });
       }
     }
-    const sheet = join6(project, "shots", `${short.spec.id}.jpg`);
+    const sheet = join7(project, "shots", `${short.spec.id}.jpg`);
     await tileImages(ffmpeg, shots.map((shot) => shot.thumb), sheet, 4);
     output.push({ id: short.spec.id, sheet, sheetOrder: "left to right, top to bottom, matching n", shots });
   }
@@ -24197,12 +25014,12 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
   if (!capabilities.canBurnCaptions) {
     warnings.push("This FFmpeg build has no subtitles filter (libass), so captions are written as .srt and .ass sidecars only.");
   }
-  const directory = join6(project, "render");
+  const directory = join7(project, "render");
   await mkdir4(directory, { recursive: true });
   const output = [];
   for (let short of shorts) {
     const id = short.spec.id;
-    const parts = join6(directory, `${id}.parts`);
+    const parts = join7(directory, `${id}.parts`);
     await rm4(parts, { recursive: true, force: true });
     await mkdir4(parts, { recursive: true });
     const snapped = [];
@@ -24223,29 +25040,29 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
     const files = [];
     try {
       for (const [index, segment] of segments.entries()) {
-        const file = join6(parts, `${String(index).padStart(3, "0")}.mp4`);
+        const file = join7(parts, `${String(index).padStart(3, "0")}.mp4`);
         await renderSegment(ffmpeg, master, masterInfo, segment, capabilities, file);
         files.push(file);
       }
-      const videoPath = join6(directory, `${id}.mp4`);
+      const videoPath = join7(directory, `${id}.mp4`);
       await assembleShort(ffmpeg, master, files, short.cuts, videoPath, masterInfo.hasAudio);
       const cues = buildCues(captionWords(words, short, edl.glossary));
-      const srt = join6(directory, `${id}.srt`);
-      const ass = join6(directory, `${id}.ass`);
-      await writeFile4(srt, toSrt(cues));
-      await writeFile4(join6(directory, `${id}.cuts.json`), `${JSON.stringify({ id, cuts: short.cuts }, null, 2)}
+      const srt = join7(directory, `${id}.srt`);
+      const ass = join7(directory, `${id}.ass`);
+      await writeFile5(srt, toSrt(cues));
+      await writeFile5(join7(directory, `${id}.cuts.json`), `${JSON.stringify({ id, cuts: short.cuts }, null, 2)}
 `);
-      await writeFile4(ass, toAss(cues, short.spec.hook));
+      await writeFile5(ass, toAss(cues, short.spec.hook));
       let captioned;
       if (capabilities.canBurnCaptions) {
-        captioned = join6(directory, `${id}-captioned.mp4`);
+        captioned = join7(directory, `${id}-captioned.mp4`);
         await burnCaptions(ffmpeg, videoPath, ass, captioned, capabilities);
       }
       const rendered = await probeMaster(ffmpeg, captioned ?? videoPath);
       if (Math.abs(rendered.durationSec * 1e3 - short.durationMs) > 300) {
         warnings.push(`${id} rendered at ${rendered.durationSec.toFixed(2)}s, expected ${(short.durationMs / 1e3).toFixed(2)}s.`);
       }
-      const preview = join6(directory, `${id}-preview.jpg`);
+      const preview = join7(directory, `${id}-preview.jpg`);
       await previewSheet(ffmpeg, captioned ?? videoPath, short.durationMs, preview);
       output.push({
         id,
@@ -24266,7 +25083,7 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
 }
 async function commandFetch(flags, environment) {
   const project = resolve3(required(flags, "project"));
-  const video = await readJson(join6(project, "video.json"), "video.json (run read first)");
+  const video = await readJson(join7(project, "video.json"), "video.json (run read first)");
   const videoId = String(video.videoId);
   const maxHeight = typeof flags["max-height"] === "string" ? Number(flags["max-height"]) : 1080;
   if (!Number.isSafeInteger(maxHeight) || maxHeight < 144 || maxHeight > 4320) {
@@ -24280,7 +25097,7 @@ async function commandFetch(flags, environment) {
   } catch {
     throw new DependencyError("yt-dlp is not installed. Install it yourself (https://github.com/yt-dlp/yt-dlp#installation), set YT_DLP_PATH, or pass --yt-dlp-path. Otherwise use the master file with --master.");
   }
-  const directory = join6(project, "source");
+  const directory = join7(project, "source");
   await mkdir4(directory, { recursive: true });
   const proxy = (typeof flags.proxy === "string" ? flags.proxy : void 0) ?? environment.OUTBOUND_PROXY_URL;
   const nodeMajor = Number(process.versions.node.split(".")[0]);
@@ -24314,8 +25131,8 @@ function bundledSfx(environment) {
     const missing = [];
     const npx = await resolveFfmpegExecutable("npx", environment).catch(() => void 0);
     for (const key of keys) {
-      const target = join6(cache, `${key}.mp3`);
-      if ((await stat2(target).catch(() => void 0))?.isFile()) {
+      const target = join7(cache, `${key}.mp3`);
+      if ((await stat3(target).catch(() => void 0))?.isFile()) {
         files[key] = target;
         continue;
       }
@@ -24341,10 +25158,10 @@ async function extractEndFrames(ffmpeg, video, directory) {
     ["blur", "freeze-blur.jpg", "scale=1080:1920,gblur=sigma=38,hue=s=0.75,scale=out_range=full", "3"]
   ];
   for (const [key, file, filter, quality] of variants) {
-    const target = join6(directory, file);
+    const target = join7(directory, file);
     await rm4(target, { force: true });
     await runFfmpeg(ffmpeg, ["-loglevel", "error", "-y", "-sseof", "-0.25", "-i", video, "-an", "-vf", filter, "-pix_fmt", "yuvj420p", "-q:v", quality, "-update", "1", target]);
-    if ((await stat2(target).catch(() => void 0))?.isFile()) output[key] = `endcard/${file}`;
+    if ((await stat3(target).catch(() => void 0))?.isFile()) output[key] = `endcard/${file}`;
   }
   return output;
 }
@@ -24359,26 +25176,26 @@ async function commandOverlay(flags, environment, dependencies) {
   const sfxReported = /* @__PURE__ */ new Set();
   for (const short of shorts) {
     const id = short.spec.id;
-    const video = join6(project, "render", `${id}.mp4`);
-    if (!(await stat2(video).catch(() => void 0))?.isFile()) {
+    const video = join7(project, "render", `${id}.mp4`);
+    if (!(await stat3(video).catch(() => void 0))?.isFile()) {
       throw new ShortsInputError(`${video} not found. Run render for ${id} first.`);
     }
     const info = await probeMaster(ffmpeg, video);
-    const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+    const manifest = await readJson(join7(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
     if (!Array.isArray(manifest.cuts) || manifest.cuts.length !== short.cuts.length) {
       throw new ShortsInputError(`${id}.cuts.json does not match edl.json; rerun render for ${id}.`);
     }
     const rendered = { ...short, cuts: manifest.cuts };
-    const directory = join6(project, "overlay", id);
-    await mkdir4(join6(directory, "assets"), { recursive: true });
-    await copyFile2(video, join6(directory, "assets", `${id}.mp4`));
+    const directory = join7(project, "overlay", id);
+    await mkdir4(join7(directory, "assets"), { recursive: true });
+    await copyFile2(video, join7(directory, "assets", `${id}.mp4`));
     let hookImageFile;
     const hookImage = short.spec.overlay?.hookImage;
     if (hookImage) {
       const source = resolve3(project, hookImage.src);
-      if (!(await stat2(source).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${id} hookImage not found at ${source}.`);
-      hookImageFile = `hook-image${extname2(source).toLowerCase() || ".jpg"}`;
-      await copyFile2(source, join6(directory, "assets", hookImageFile));
+      if (!(await stat3(source).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${id} hookImage not found at ${source}.`);
+      hookImageFile = `hook-image${extname3(source).toLowerCase() || ".jpg"}`;
+      await copyFile2(source, join7(directory, "assets", hookImageFile));
     }
     const spec = short.spec.overlay ?? {};
     const durationSec = Math.floor(info.durationSec * 100) / 100;
@@ -24386,38 +25203,38 @@ async function commandOverlay(flags, environment, dependencies) {
     const sceneSfx = /* @__PURE__ */ new Set();
     for (const [index, scene] of (spec.scenes ?? []).entries()) {
       const source = resolve3(project, scene.src);
-      const text = await readFile2(source, "utf8").catch(() => void 0);
+      const text = await readFile3(source, "utf8").catch(() => void 0);
       if (text === void 0) throw new ShortsInputError(`${id} scene ${index + 1} not found at ${source}.`);
       const file = basename2(source);
       if (sceneFiles.some((other) => other?.file === file)) throw new ShortsInputError(`${id} uses ${file} for two scenes; give each scene its own file.`);
-      await mkdir4(join6(directory, "compositions"), { recursive: true });
+      await mkdir4(join7(directory, "compositions"), { recursive: true });
       if (scene.fit && !hasFitTarget(text)) issues.push({ short: id, level: "warning", message: `${scene.src} has a fit but no [data-fit] element; it plays as written.` });
-      await writeFile4(join6(directory, "compositions", file), scene.fit && hasFitTarget(text) ? applyFit(text, scene.fit) : text);
+      await writeFile5(join7(directory, "compositions", file), scene.fit && hasFitTarget(text) ? applyFit(text, scene.fit) : text);
       const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1];
       sceneFiles.push(compositionId ? { compositionId, file } : void 0);
       for (const match of text.matchAll(/assets\/sfx\/([a-z0-9-]+)\.mp3/g)) sceneSfx.add(match[1]);
     }
     let endCardFiles;
     if (edl.brand?.endCard) {
-      await mkdir4(join6(directory, "assets", "endcard"), { recursive: true });
-      endCardFiles = await extractEndFrames(ffmpeg, video, join6(directory, "assets", "endcard"));
+      await mkdir4(join7(directory, "assets", "endcard"), { recursive: true });
+      endCardFiles = await extractEndFrames(ffmpeg, video, join7(directory, "assets", "endcard"));
       if (!endCardFiles.freeze) issues.push({ short: id, level: "warning", message: "Could not extract the final frame; the end card plays on black." });
       if (thumbnail === null) {
         thumbnail = await (dependencies.fetchThumbnail ?? downloadThumbnail)(edl.videoId).catch(() => void 0);
         if (!thumbnail) issues.push({ short: id, level: "warning", message: `Could not fetch the thumbnail of ${edl.videoId}; the end card shows text only.` });
       }
       if (thumbnail) {
-        await writeFile4(join6(directory, "assets", "endcard", "thumbnail.jpg"), thumbnail);
+        await writeFile5(join7(directory, "assets", "endcard", "thumbnail.jpg"), thumbnail);
         endCardFiles.thumbnail = "endcard/thumbnail.jpg";
       }
     }
     const sfx = {};
     if (edl.brand?.endCard || spec.zooms?.length || spec.scenes?.length) {
       const keys = [.../* @__PURE__ */ new Set([...OVERLAY_SFX, ...sceneSfx])];
-      const found = await resolveSfx(keys, join6(project, "overlay", ".sfx"));
-      await mkdir4(join6(directory, "assets", "sfx"), { recursive: true });
+      const found = await resolveSfx(keys, join7(project, "overlay", ".sfx"));
+      await mkdir4(join7(directory, "assets", "sfx"), { recursive: true });
       for (const [key, path] of Object.entries(found.files)) {
-        await copyFile2(path, join6(directory, "assets", "sfx", `${key}.mp3`));
+        await copyFile2(path, join7(directory, "assets", "sfx", `${key}.mp3`));
         if (OVERLAY_SFX.includes(key)) sfx[key] = `sfx/${key}.mp3`;
       }
       const missing = found.missing.filter((key) => !sfxReported.has(key));
@@ -24427,7 +25244,7 @@ async function commandOverlay(flags, environment, dependencies) {
       }
     }
     const faces = await detectFaces(ffmpeg, video);
-    if (faces) await writeFile4(join6(directory, "faces.json"), `${JSON.stringify(faces)}
+    if (faces) await writeFile5(join7(directory, "faces.json"), `${JSON.stringify(faces)}
 `);
     else issues.push({ short: id, level: "warning", message: "Face detection needs macOS (Vision); placing overlays around typical face areas for each framing. Check snapshots closely." });
     const plan = buildOverlay({
@@ -24447,10 +25264,10 @@ async function commandOverlay(flags, environment, dependencies) {
       overlay: spec
     });
     await Promise.all([
-      writeFile4(join6(directory, "index.html"), plan.html),
-      writeFile4(join6(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" }, media: { autoProxy: true } }, null, 2)}
+      writeFile5(join7(directory, "index.html"), plan.html),
+      writeFile5(join7(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" }, media: { autoProxy: true } }, null, 2)}
 `),
-      writeFile4(join6(directory, "meta.json"), `${JSON.stringify({ id: `${edl.videoId}-${id}`, name: short.spec.title ?? id }, null, 2)}
+      writeFile5(join7(directory, "meta.json"), `${JSON.stringify({ id: `${edl.videoId}-${id}`, name: short.spec.title ?? id }, null, 2)}
 `)
     ]);
     for (const message of plan.issues) issues.push({ short: id, level: "warning", message });
@@ -24458,15 +25275,15 @@ async function commandOverlay(flags, environment, dependencies) {
       id,
       project: directory,
       durationSec: plan.durationSec,
-      output: join6(project, "render", `${id}-overlay.mp4`),
-      render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join6(project, "render", `${id}-overlay.mp4`)}`
+      output: join7(project, "render", `${id}-overlay.mp4`),
+      render: `npx hyperframes@${HYPERFRAMES_VERSION} render ${directory} -o ${join7(project, "render", `${id}-overlay.mp4`)}`
     });
   }
   return { shorts: output, issues };
 }
 async function fileDigest(path) {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  const hash = createHash2("sha256");
+  for await (const chunk of createReadStream2(path)) hash.update(chunk);
   return hash.digest("hex");
 }
 async function commandCheck(flags, environment) {
@@ -24475,7 +25292,7 @@ async function commandCheck(flags, environment) {
   const { shorts, issues: planIssues } = requireResolved(words, edl, onlySet(flags));
   const ffmpeg = await resolveFfmpeg(flags, environment);
   const master = typeof flags.master === "string" ? resolve3(flags.master) : void 0;
-  if (master && !(await stat2(master).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${master} not found.`);
+  if (master && !(await stat3(master).catch(() => void 0))?.isFile()) throw new ShortsInputError(`${master} not found.`);
   const variant = typeof flags.variant === "string" ? flags.variant : "overlay";
   const issues = planIssues.filter((issue) => / ends on "/.test(issue.message));
   const warnings = [];
@@ -24483,8 +25300,8 @@ async function commandCheck(flags, environment) {
   const output = [];
   for (const short of shorts) {
     const id = short.spec.id;
-    const cutVideo = join6(project, "render", `${id}.mp4`);
-    const cutStat = await stat2(cutVideo).catch(() => void 0);
+    const cutVideo = join7(project, "render", `${id}.mp4`);
+    const cutStat = await stat3(cutVideo).catch(() => void 0);
     if (!cutStat?.isFile()) {
       issues.push({ short: id, level: "warning", message: "Not rendered yet; run render first." });
       continue;
@@ -24500,7 +25317,7 @@ async function commandCheck(flags, environment) {
     }
     const edges = [];
     if (master) {
-      const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+      const manifest = await readJson(join7(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
       for (const [index, cut] of (manifest.cuts ?? []).entries()) {
         const startDb = await audioLevelDb(ffmpeg, master, cut.inMs, EDGE_WINDOW_MS);
         const endDb = await audioLevelDb(ffmpeg, master, cut.outMs - EDGE_WINDOW_MS, EDGE_WINDOW_MS);
@@ -24513,17 +25330,17 @@ async function commandCheck(flags, environment) {
         }
       }
     }
-    const asset = join6(project, "overlay", id, "assets", `${id}.mp4`);
-    const assetStat = await stat2(asset).catch(() => void 0);
+    const asset = join7(project, "overlay", id, "assets", `${id}.mp4`);
+    const assetStat = await stat3(asset).catch(() => void 0);
     const staleProject = Boolean(assetStat?.isFile() && (assetStat.size !== cutStat.size || await fileDigest(asset) !== await fileDigest(cutVideo)));
     if (staleProject) {
       issues.push({ short: id, level: "error", message: `overlay/${id} was built from an older cut; run overlay again before rendering it.` });
     }
-    const overlayVideo = join6(project, "render", `${id}-${variant}.mp4`);
-    const overlayStat = await stat2(overlayVideo).catch(() => void 0);
+    const overlayVideo = join7(project, "render", `${id}-${variant}.mp4`);
+    const overlayStat = await stat3(overlayVideo).catch(() => void 0);
     if (overlayStat?.isFile()) {
       const overlayInfo = await probeMaster(ffmpeg, overlayVideo);
-      const projectStat = await stat2(join6(project, "overlay", id, "index.html")).catch(() => void 0);
+      const projectStat = await stat3(join7(project, "overlay", id, "index.html")).catch(() => void 0);
       const problem = overlayVideoProblem(
         { durationSec: overlayInfo.durationSec, modifiedMs: overlayStat.mtimeMs },
         { durationSec: cutInfo.durationSec, modifiedMs: cutStat.mtimeMs },
@@ -24544,13 +25361,13 @@ async function commandCheck(flags, environment) {
 }
 async function measureScene(ffmpeg, text, file, durationSec, mode) {
   const compositionId = /data-composition-id="([^"]+)"/.exec(text)?.[1] ?? "scene";
-  const directory = await mkdtemp2(join6(tmpdir2(), "shorts-fit-"));
+  const directory = await mkdtemp2(join7(tmpdir2(), "shorts-fit-"));
   try {
-    await mkdir4(join6(directory, "compositions"), { recursive: true });
-    await writeFile4(join6(directory, "compositions", file), forMeasuring(text));
-    await writeFile4(join6(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" } }, null, 2)}
+    await mkdir4(join7(directory, "compositions"), { recursive: true });
+    await writeFile5(join7(directory, "compositions", file), forMeasuring(text));
+    await writeFile5(join7(directory, "hyperframes.json"), `${JSON.stringify({ paths: { blocks: "compositions", components: "compositions/components", assets: "assets" } }, null, 2)}
 `);
-    await writeFile4(join6(directory, "index.html"), [
+    await writeFile5(join7(directory, "index.html"), [
       "<!doctype html>",
       '<html lang="en"><head><meta charset="UTF-8" />',
       '<script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>',
@@ -24563,10 +25380,10 @@ async function measureScene(ffmpeg, text, file, durationSec, mode) {
       "</body></html>"
     ].join("\n"));
     const times = [0.35, 0.6, 0.85].map((share) => durationSec * share).concat(Math.max(0, durationSec - 0.3));
-    const snaps = join6(directory, "snaps");
+    const snaps = join7(directory, "snaps");
     const result = await runCommand("npx", ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "snapshot", directory, "--at", times.map((at) => at.toFixed(2)).join(","), "--no-end", "-o", snaps], 18e4);
     if (result.code !== 0) return { error: `HyperFrames could not snapshot ${file}: ${result.stderr.trim().split("\n").slice(-2).join(" ")}` };
-    const images = (await readdir2(snaps).catch(() => [])).filter((name) => /^frame-.*\.png$/.test(name)).map((name) => join6(snaps, name));
+    const images = (await readdir3(snaps).catch(() => [])).filter((name) => /^frame-.*\.png$/.test(name)).map((name) => join7(snaps, name));
     if (!images.length) return { error: `HyperFrames wrote no snapshots for ${file}.` };
     const [width, height] = [270, 480];
     const rows = mode === "bottom" ? [height / 2, height] : [0, height];
@@ -24582,23 +25399,23 @@ async function commandFit(flags, environment) {
   const { words, edl } = await loadProject(project);
   const { shorts, issues } = requireResolved(words, edl, onlySet(flags));
   const ffmpeg = await resolveFfmpeg(flags, environment);
-  const edlPath = join6(project, "edl.json");
-  const raw = JSON.parse(await readFile2(edlPath, "utf8"));
+  const edlPath = join7(project, "edl.json");
+  const raw = JSON.parse(await readFile3(edlPath, "utf8"));
   const fitted = [];
   let cleared = false;
   for (const short of shorts) {
     const id = short.spec.id;
     const scenes = short.spec.overlay?.scenes ?? [];
     if (!scenes.length) continue;
-    const video = join6(project, "render", `${id}.mp4`);
-    if (!(await stat2(video).catch(() => void 0))?.isFile()) {
+    const video = join7(project, "render", `${id}.mp4`);
+    if (!(await stat3(video).catch(() => void 0))?.isFile()) {
       issues.push({ short: id, level: "warning", message: "Not rendered yet; run render before fit." });
       continue;
     }
     const info = await probeMaster(ffmpeg, video);
-    const manifest = await readJson(join6(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
+    const manifest = await readJson(join7(project, "render", `${id}.cuts.json`), `${id}.cuts.json (rerun render for ${id})`);
     const rendered = { ...short, cuts: manifest.cuts ?? short.cuts };
-    const texts = await Promise.all(scenes.map((scene) => readFile2(resolve3(project, scene.src), "utf8").catch(() => void 0)));
+    const texts = await Promise.all(scenes.map((scene) => readFile3(resolve3(project, scene.src), "utf8").catch(() => void 0)));
     const windows = sceneWindows({
       id,
       short: rendered,
@@ -24654,9 +25471,30 @@ async function commandFit(flags, environment) {
       fitted.push({ id, scene: scene.src, mode: window.mode, box: measured.box, fit });
     }
   }
-  if (fitted.length || cleared) await writeFile4(edlPath, `${JSON.stringify(raw, null, 2)}
+  if (fitted.length || cleared) await writeFile5(edlPath, `${JSON.stringify(raw, null, 2)}
 `);
   return { edl: edlPath, scenes: fitted, next: fitted.length || cleared ? "Run overlay to apply the fits, then snapshot each scene." : void 0, issues };
+}
+async function commandReview(flags, io, dependencies) {
+  const project = resolve3(required(flags, "project"));
+  const port = typeof flags.port === "string" ? Number(flags.port) : 0;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new ShortsInputError("--port must be an integer from 0 to 65535.");
+  const idleMinutes = typeof flags["idle-minutes"] === "string" ? Number(flags["idle-minutes"]) : DEFAULT_IDLE_MS / 6e4;
+  if (!Number.isFinite(idleMinutes) || idleMinutes <= 0) throw new ShortsInputError("--idle-minutes must be a positive number.");
+  const server = await startReviewServer({ project, port, idleMs: idleMinutes * 6e4 });
+  const stop = () => void server.close();
+  const signals = ["SIGINT", "SIGTERM"];
+  if (dependencies.reviewSignal) dependencies.reviewSignal.addEventListener("abort", stop, { once: true });
+  else for (const signal of signals) process.once(signal, stop);
+  io.stdout(`${JSON.stringify({
+    url: server.url,
+    review: join7(project, REVIEW_FILE),
+    idleMinutes,
+    next: "Give the user the URL. The page records picks, hook choices, statuses, and timestamped comments in review.json; read it before the next step."
+  }, null, flags.pretty === true ? 2 : void 0)}
+`);
+  await server.closed;
+  if (!dependencies.reviewSignal) for (const signal of signals) process.off(signal, stop);
 }
 function errorPayload(error) {
   if (error instanceof YouTubeClientError) {
@@ -24674,6 +25512,10 @@ async function runShortsCli(argv, io, environment = process.env, dependencies = 
   }
   try {
     const { command, flags } = parseArguments(argv);
+    if (command === "review") {
+      await commandReview(flags, io, dependencies);
+      return 0;
+    }
     const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fit" ? await commandFit(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
