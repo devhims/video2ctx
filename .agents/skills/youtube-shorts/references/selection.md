@@ -38,7 +38,7 @@ Start each cut on the first word of a sentence or speaker turn and end on a sent
 
 ## Write hook variants
 
-The first 3 seconds decide whether anyone stays, and the first try is rarely the best. For each short, write two variants beside the original as their own shorts, `<id>-b` and `<id>-c`, each with its own `hook` text:
+Do this only when the user asked for hook variants (step 1 of SKILL.md). The first 3 seconds decide whether anyone stays, and the first try is rarely the best. For each short, write two variants beside the original as their own shorts, `<id>-b` and `<id>-c`, each with its own `hook` text:
 
 - **Teaser**: the clip's most vivid line, 1.5 to 4 s, as cut 1, then the original cuts. Pick an image or a turn ("sell the house to buy flour for the cake"), not a setup.
 - **Late start**: begin at the strongest sentence and drop the warm-up before it. This often shortens the short too.
@@ -49,7 +49,7 @@ Write hook text for a stranger:
 - Prefer a question, a claim, or a stake ("It may take AI disasters") over a restatement of the topic.
 - Keep the speaker's own hedges: a disputed claim becomes a question.
 
-Use the channel's own title patterns, so they read as the channel's. Render the variants (`plan`, `render`, `overlay`), then compare only their openings: first 6 seconds, each with its hook on screen. Prefer openings on a single-person shot, since a hook over a split screen covers the top person's face. Give the user a ranked pick per short with a reason, and render in full only the variants they choose. Their real view-through results beat your judgment, so offer to swap a variant after a trial.
+Use the channel's own title patterns, so they read as the channel's. Render the variants (`plan`, `render`, and `overlay` when step 7 runs), then compare only their openings: first 6 seconds, each with its hook on screen. Prefer openings on a single-person shot, since a hook over a split screen covers the top person's face. Give the user a ranked pick per short with a reason, and render in full only the variants they choose. Their real view-through results beat your judgment, so offer to swap a variant after a trial.
 
 ## Risks to note in the brief
 

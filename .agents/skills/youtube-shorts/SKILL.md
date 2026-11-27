@@ -31,7 +31,15 @@ Get the video ID, then settle the source for the deliverable renders, in this or
 
 `render` writes deliverables only from a source of at least 1080p on its shorter side. A 720p master upscales each crop about 2.7x, against 1.8x from 1080p: tell the user it will look soft, and pass `--allow-720p` only once they accept that. Anything softer, YouTube's stream included, renders only with `--preview`, into `render/preview/`, which `overlay` and `check` never use.
 
-Done when: you know the deliverable source (a master of at least 1080p, or a 720p master the user accepted), or the user agreed to stop at previews.
+Ask for the output in the same message as the source, so the run doesn't stop for it later. Offer the defaults, and take "defaults" as an answer:
+
+1. **How many shorts** (default: 5 to 10, ranked).
+2. **Captions** (default: burned in): plain captions burned into the video (`<id>-captioned.mp4`), captions styled in the channel's look as part of the overlay, or caption files only (`.srt` to upload to YouTube or import into an editor).
+3. **Overlays** (default: none): none, or the channel's look: wordmark, hook title, name tags, context cards and an end card. Styled captions or the channel's look mean step 7 runs; it needs HyperFrames and the youtube-ctx skill, so check them now.
+4. **Motion** (default: off): zooms on key lines and animated scenes that act an idea out. Only with overlays; they take the longest to review.
+5. **Hook variants** (default: off): two alternative openings per short, compared before the full renders.
+
+Done when: you know the deliverable source (a master of at least 1080p, or a 720p master the user accepted), or the user agreed to stop at previews, and you have the user's answers to all five output choices.
 
 ## 2. Read the whole video
 
@@ -53,7 +61,7 @@ Done when: every paragraph of `transcript.md` is read and the glossary candidate
 
 Follow [references/selection.md](references/selection.md) to find, score, and shape candidates, then write `<project>/edl.json` in the format in [references/edl.md](references/edl.md). Anchor each cut with `from` and `to` phrases quoted from the transcript, plus `after` to pin repeated phrases.
 
-Done when: `edl.json` holds 5 to 10 ranked shorts, each with a hook, and every rejected candidate had a reason.
+Done when: `edl.json` holds the number of ranked shorts the user chose (5 to 10 by default), each with a hook, the hook variants when they asked for them, and every rejected candidate had a reason.
 
 ## 4. Plan and proofread
 
@@ -112,7 +120,7 @@ Done when: every preview passes, `check` reports no errors and every warning was
 
 ## 7. Add overlays
 
-When the user wants on-screen design (captions, a hook title, name tags, an end card, branding), follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. For zooms on key lines and animated scenes that act an idea out, follow [references/motion.md](references/motion.md).
+Run this step when the user chose styled captions or the channel's look in step 1; otherwise go to step 8. Follow [references/overlay.md](references/overlay.md). It covers taking the look from the channel's own videos, the `brand`, `speakers` and `overlay` fields, and how to render with HyperFrames. Add zooms and scenes only when the user chose motion, following [references/motion.md](references/motion.md).
 
 ```bash
 node <skill-directory>/scripts/shorts.mjs fit --project <dir>       # when the shorts have scenes
@@ -125,4 +133,4 @@ Done when: every face report and motion warning from `overlay` is fixed or accep
 
 ## 8. Report
 
-For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. Titles, descriptions, covers and scheduling are set in YouTube Studio; offer the title ideas and hooks as a starting point.
+For each short give its rank, title idea, hook, duration, and output files, including `<id>-overlay.mp4` when step 7 ran, and confirm they match the output choices from step 1. Say whether captions were burned in (`<id>-captioned.mp4` or the overlay) or written as `.srt`/`.ass` sidecars only, and how to use them (upload the SRT to YouTube or import it into an editor). When captions are burned in and an `.srt` with the same name sits beside the video, players such as QuickTime show it as a second caption set; say so, so the user doesn't mistake it for a rendering fault. List claims in the clips that you have not verified, any policy risks you noted, and every edge flagged as a likely clipped word. Leave the project directory in place so the user can adjust `edl.json` and rerender. Titles, descriptions, covers and scheduling are set in YouTube Studio; offer the title ideas and hooks as a starting point.
