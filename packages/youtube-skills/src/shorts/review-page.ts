@@ -91,6 +91,10 @@ form.comment input { flex: 1; min-width: 0; background: transparent; border: 0; 
 ol.comments { list-style: none; padding: 0; margin: 0 0 20px; display: flex; flex-direction: column; gap: 6px; }
 ol.comments li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; display: flex; gap: 8px; align-items: baseline; }
 ol.comments li.resolved { opacity: .55; }
+ol.comments li.previous { border-style: dashed; opacity: .7; }
+.error { display: flex; gap: 10px; align-items: center; color: var(--bad); font-size: 13px; background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.35); border-radius: 8px; padding: 6px 9px; }
+.error[hidden] { display: none; }
+#error { margin: 12px 20px 0; }
 ol.comments li.resolved .text { text-decoration: line-through; }
 ol.comments .text { flex: 1; white-space: pre-wrap; }
 ol.comments .where { color: var(--muted); font-size: 11px; display: block; }
@@ -115,6 +119,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
   </nav>
   <div class="live" id="live">Watching project files</div>
 </div>
+<div class="error" id="error" hidden role="alert"></div>
 <main class="view" id="view"></main>
 <script nonce="${nonce}">
 "use strict";
@@ -122,7 +127,8 @@ var state = null;
 var view = "moments";
 var current = null;
 var chosenSource = {};
-var pinnedAt = null;
+// The moment a comment was started: short, time, and the exact render (path and revision) on screen.
+var pinned = null;
 var videos = new Map();
 var playerShell = null;
 var PILL_LABELS = { approved: "Approved", changes: "Needs changes", rejected: "Rejected" };
@@ -159,7 +165,7 @@ function wholeClock(seconds) {
   return m + ":" + (s < 10 ? "0" : "") + s;
 }
 function byId(id) { return state.shorts.find(function (s) { return s.id === id; }); }
-function rev(id) { return (state.review.shorts[id]) || { comments: [] }; }
+function rev(id) { return (state.review.shorts[id]) || { comments: [], current: "pending", statusStale: false }; }
 function pill(status) { return status && status !== "pending" ? el("span", { class: "pill " + status, text: PILL_LABELS[status] }) : null; }
 function bestVideo(short) { return short && short.videos[0]; }
 function sourceFor(short) {
@@ -180,11 +186,22 @@ function video(src) {
   return node;
 }
 
-async function send(action) {
-  var response = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) });
-  var body = await response.json();
-  if (!response.ok) { alert(body.error ? body.error.message : "Could not save."); return; }
-  apply(body);
+// Saves one action. On failure, shows a retryable error in slot (the banner by default) and resolves false.
+async function send(action, slot, retry) {
+  slot = slot || document.getElementById("error");
+  var message, saved = null;
+  try {
+    var response = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) });
+    var body = await response.json().catch(function () { return {}; });
+    if (response.ok) saved = body;
+    else message = "Not saved: " + (body.error ? body.error.message : "the server answered " + response.status + ".");
+  } catch (error) {
+    message = "Not saved: the review server can't be reached. Ask the agent to start review again, then retry.";
+  }
+  if (saved) { slot.replaceChildren(); slot.hidden = true; apply(saved); return true; }
+  slot.replaceChildren(el("span", { text: message }), el("button", { class: "small", type: "button", onclick: retry || function () { send(action, slot); } }, "Retry"));
+  slot.hidden = false;
+  return false;
 }
 
 function apply(next) {
@@ -223,7 +240,7 @@ function renderMoments() {
     var r = rev(s.id);
     var meta = [s.id, s.durationSec ? s.durationSec.toFixed(1) + " s" : null, s.variants.length ? (s.variants.length + 1) + " hook variants" : null, s.videos.length ? "rendered" : null].filter(Boolean).join(" · ");
     return el("article", { class: "card" + (r.selected ? " selected" : "") },
-      el("header", {}, el("span", { class: "rank", text: "#" + s.rank }), el("h3", { text: s.title || s.id }), pill(r.status)),
+      el("header", {}, el("span", { class: "rank", text: "#" + s.rank }), el("h3", { text: s.title || s.id }), pill(r.current)),
       s.hook ? el("p", { class: "hook", text: s.hook }) : null,
       el("div", { class: "meta", text: meta }),
       s.cuts.map(function (c) {
@@ -233,7 +250,7 @@ function renderMoments() {
       s.notes ? el("div", { class: "meta", text: s.notes }) : null,
       s.sheet ? el("img", { class: "sheet", src: s.sheet, alt: "Contact sheet for " + s.id, loading: "lazy" }) : null,
       el("footer", {},
-        el("label", { class: "keep" }, el("input", { type: "checkbox", checked: r.selected === true, onchange: function (e) { send({ type: "select", short: s.id, selected: e.target.checked }); } }), "Keep"),
+        el("label", { class: "keep" }, el("input", { type: "checkbox", checked: r.selected === true, onchange: function (e) { var box = e.target; send({ type: "select", short: s.id, selected: box.checked }).then(function (ok) { if (!ok) box.checked = !box.checked; }); } }), "Keep"),
         r.comments.length ? el("span", { class: "meta", text: r.comments.length + " comment" + (r.comments.length > 1 ? "s" : "") }) : null,
         el("span", { class: "grow" }),
         el("button", { class: "small", onclick: function () { location.hash = "player/" + encodeURIComponent(s.id); } }, "Open"))
@@ -261,7 +278,7 @@ function renderHooks() {
         el("button", { class: isChosen ? "primary" : "", onclick: function () { send({ type: "variant", short: base.id, choice: id }); } }, isChosen ? "Chosen" : "Pick " + "ABCDEFGHIJ".charAt(index)));
     });
     return el("section", { class: "group" },
-      el("header", {}, el("h3", {}, el("span", { class: "rank", text: "#" + base.rank + " " }), base.title || base.id), pill(rev(base.id).status),
+      el("header", {}, el("h3", {}, el("span", { class: "rank", text: "#" + base.rank + " " }), base.title || base.id), pill(rev(base.id).current),
         players.length > 1 ? el("button", { onclick: function () { players.forEach(function (p) { p.muted = true; p.currentTime = 0; p.play(); }); } }, "Play openings together (muted)") : null),
       el("div", { class: "variants" }, cols));
   }));
@@ -271,38 +288,52 @@ function activeVideo() { return playerShell && playerShell.stage.querySelector("
 function showTime() {
   if (!playerShell) return;
   var v = activeVideo();
-  playerShell.at.textContent = clock(pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0);
+  playerShell.at.textContent = clock(pinned ? pinned.atSec : v ? v.currentTime : 0);
+}
+
+function pin() {
+  var short = byId(current);
+  if (!short) return null;
+  var v = activeVideo();
+  var source = sourceFor(short);
+  if (v) v.pause();
+  pinned = { short: short.id, atSec: v ? v.currentTime : 0, file: source ? source.path : undefined, revision: source ? source.revision : undefined };
+  return pinned;
 }
 
 function buildPlayerShell(root) {
   var at = el("span", { class: "at", text: "0:00.0" });
   var input = el("input", { placeholder: "Comment at this moment… (press c)", maxlength: "2000", "aria-label": "Comment" });
-  input.addEventListener("focus", function () { var v = activeVideo(); if (v) { v.pause(); pinnedAt = v.currentTime; } showTime(); });
-  input.addEventListener("blur", function () { if (!input.value) { pinnedAt = null; showTime(); } });
+  // Pin on focus, so a poll that swaps in a newer render mid-comment can't move the note onto it.
+  input.addEventListener("focus", function () { if (!pinned) pin(); showTime(); });
+  input.addEventListener("blur", function () { if (!input.value) { pinned = null; showTime(); } });
   input.addEventListener("keydown", function (e) { if (e.key === "Escape") { input.value = ""; input.blur(); } });
   var form = el("form", { class: "comment" }, at, input, el("button", { class: "small primary", type: "submit" }, "Add"));
-  form.addEventListener("submit", function (e) {
-    e.preventDefault();
+  var error = el("div", { class: "error", hidden: true, role: "alert" });
+  var saving = false;
+  async function submit() {
     var text = input.value.trim();
-    var short = byId(current);
-    if (!text || !short) return;
-    var v = activeVideo();
-    var source = sourceFor(short);
-    var atSec = pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0;
-    input.value = "";
-    pinnedAt = null;
-    send({ type: "comment", short: short.id, atSec: atSec, text: text, file: source ? source.path : undefined });
-  });
+    if (!text || saving) return;
+    var note = pinned || pin();
+    if (!note) return;
+    saving = true;
+    var ok = await send({ type: "comment", short: note.short, atSec: note.atSec, text: text, file: note.file, revision: note.revision }, error, submit);
+    saving = false;
+    // Keep the draft and its pinned moment until the server has it.
+    if (ok && input.value.trim() === text) { input.value = ""; pinned = null; showTime(); }
+  }
+  form.addEventListener("submit", function (e) { e.preventDefault(); submit(); });
   var shell = {
     list: el("nav", { class: "list" }),
     sources: el("div", { class: "sources" }),
     stage: el("div", { class: "frame" }),
     statuses: el("div", { class: "statuses" }),
+    statusNote: el("div", { class: "hint" }),
     side: el("div", { class: "side" }),
     at: at, input: input, key: ""
   };
   shell.node = el("div", { class: "player" }, shell.list,
-    el("div", { class: "stage" }, shell.sources, shell.stage, form, shell.statuses,
+    el("div", { class: "stage" }, shell.sources, shell.stage, form, error, shell.statuses, shell.statusNote,
       el("div", { class: "hint" }, "Comments pin to the paused time. ", el("kbd", { text: "c" }), " comment · ", el("kbd", { text: "k" }), " play/pause · ", el("kbd", { text: "←" }), el("kbd", { text: "→" }), " 1 s")),
     shell.side);
   root.replaceChildren(shell.node);
@@ -322,7 +353,7 @@ function renderPlayer(root, switched) {
       el("span", { class: "rank", text: s.variantOf ? s.id.slice(s.variantOf.length + 1).toUpperCase() : "#" + s.rank }),
       el("span", { class: "t", text: (s.variantOf ? s.hook : s.title) || s.id }),
       sr.comments.length ? el("span", { class: "meta", text: String(sr.comments.length) }) : null,
-      sr.status && sr.status !== "pending" ? el("span", { class: "dot " + sr.status, title: PILL_LABELS[sr.status] }) : null);
+      sr.current !== "pending" ? el("span", { class: "dot " + sr.current, title: PILL_LABELS[sr.current] }) : null);
   }));
 
   var source = sourceFor(short);
@@ -332,7 +363,8 @@ function renderPlayer(root, switched) {
   }));
   if (shell.key !== key) {
     var old = activeVideo();
-    var keepTime = old && source && shell.key.split("|")[0] === short.id ? old.currentTime : 0;
+    var sameShort = shell.key.split("|")[0] === short.id;
+    var keepTime = old && source && sameShort ? old.currentTime : 0;
     if (old) old.pause();
     if (source) {
       var player = video(source.src);
@@ -344,37 +376,40 @@ function renderPlayer(root, switched) {
       shell.stage.replaceChildren(el("div", { text: "Not rendered yet" }));
     }
     shell.key = key;
-    pinnedAt = null;
+    if (!sameShort) pinned = null;
     showTime();
   }
 
   shell.statuses.replaceChildren.apply(shell.statuses, ["approved", "changes", "rejected", "pending"].map(function (status) {
-    var active = (r.status || "pending") === status;
-    return el("button", { class: "small " + status + (active ? " active" : ""), onclick: function () { send({ type: "status", short: short.id, status: status }); } }, STATUS_LABELS[status]);
+    var active = r.current === status;
+    return el("button", { class: "small " + status + (active ? " active" : ""), onclick: function () {
+      send({ type: "status", short: short.id, status: status, file: source ? source.path : undefined, revision: source ? source.revision : undefined });
+    } }, STATUS_LABELS[status]);
   }));
+  shell.statusNote.textContent = r.statusStale ? "Marked " + (PILL_LABELS[r.status] || r.status).toLowerCase() + " on an earlier render of " + r.reviewed.file.replace(/^render\//, "") + "; this one is pending." : "";
 
   var comments = r.comments.map(function (c) {
     var where = c.file && (!source || c.file !== source.path) ? c.file.replace(/^render\//, "") : null;
-    return el("li", { class: c.resolved ? "resolved" : "" },
+    return el("li", { class: (c.resolved ? "resolved " : "") + (c.stale ? "previous" : "") },
       el("button", { class: "at", title: "Seek here", onclick: function () {
         var target = short.videos.find(function (v) { return v.path === c.file; });
         if (target && (!source || target.src !== source.src)) { chosenSource[short.id] = target.label; render(); }
         var v = activeVideo(); if (v) { v.currentTime = c.atSec; v.pause(); }
       } }, clock(c.atSec)),
-      el("span", { class: "text" }, c.text, where ? el("span", { class: "where", text: "on " + where }) : null, c.resolved ? el("span", { class: "where", text: "resolved by the agent" }) : null),
+      el("span", { class: "text" }, c.text, c.stale ? el("span", { class: "where", text: "on a previous render" + (where ? " of " + where : "") }) : where ? el("span", { class: "where", text: "on " + where }) : null, c.resolved ? el("span", { class: "where", text: "resolved by the agent" }) : null),
       el("button", { class: "small", title: "Delete comment", onclick: function () { send({ type: "uncomment", short: short.id, id: c.id }); } }, "×"));
   });
   var stills = [];
   if (short.preview) stills.push(el("a", { class: "wide", href: short.preview, target: "_blank", rel: "noopener" }, el("img", { src: short.preview, alt: "Preview frames" })));
   short.snapshots.forEach(function (src) { stills.push(el("a", { href: src, target: "_blank", rel: "noopener" }, el("img", { src: src, alt: "Overlay snapshot", loading: "lazy" }))); });
   if (short.sheet) stills.push(el("a", { class: "wide", href: short.sheet, target: "_blank", rel: "noopener" }, el("img", { src: short.sheet, alt: "Contact sheet", loading: "lazy" })));
-  shell.side.replaceChildren(
+  shell.side.replaceChildren.apply(shell.side, [
     el("h2", {}, el("span", { class: "rank", text: (short.variantOf ? "#" + short.rank + short.id.slice(short.variantOf.length + 1).toUpperCase() : "#" + short.rank) + " " }), short.title || short.id),
     short.hook ? el("p", { class: "hook", text: short.hook }) : null,
     el("h4", { text: "Comments" + (r.comments.length ? " (" + r.comments.length + ")" : "") }),
     r.comments.length ? el("ol", { class: "comments" }, comments) : el("p", { class: "hint", text: "No comments yet. Pause where something is off and type what to change." }),
     stills.length ? el("h4", { text: "Stills" }) : null,
-    el("div", { class: "stills" }, stills));
+    el("div", { class: "stills" }, stills)].filter(Boolean));
   if (switched && document.activeElement !== shell.input) window.scrollTo(0, 0);
 }
 

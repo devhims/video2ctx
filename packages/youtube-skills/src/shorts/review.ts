@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { extname, join, sep } from 'node:path';
@@ -28,15 +28,23 @@ export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 const MAX_COMMENT_CHARS = 2_000;
 const MAX_BODY_BYTES = 64 * 1024;
 
+/** A render as it was when a person looked at it: its path and its modification time in ms. */
+export interface RenderRef {
+  file: string;
+  revision: number;
+}
+
 export interface ReviewComment {
   id: string;
   /** Seconds into `file` (or into the short when no file is given). */
   atSec: number;
   /** Project-relative video the comment was made on, such as render/S1-overlay.mp4. */
   file?: string;
+  /** That video's revision when the comment was started. */
+  revision?: number;
   text: string;
   createdAt: string;
-  /** Set by the agent once it has acted on the comment. */
+  /** Set through `decisions --resolve` once the agent has acted on the comment. */
   resolved?: boolean;
 }
 
@@ -44,6 +52,8 @@ export interface ShortReview {
   /** Moments view: keep this candidate. */
   selected?: boolean;
   status?: ReviewStatus;
+  /** The render the status was given on; a newer render makes the status stale. */
+  reviewed?: RenderRef;
   /** Hooks view, on the base short: the chosen short id (the base itself or one of its -b/-c variants). */
   variant?: string;
   comments: ReviewComment[];
@@ -56,12 +66,31 @@ export interface Review {
   shorts: Record<string, ShortReview>;
 }
 
+/** A comment as read back: stale when its render has been replaced or removed since. */
+export interface CommentView extends ReviewComment {
+  stale: boolean;
+}
+
+export interface ShortReviewView extends Omit<ShortReview, 'comments'> {
+  /** The status that applies to the current render: pending when the reviewed render was replaced. */
+  current: ReviewStatus;
+  statusStale: boolean;
+  comments: CommentView[];
+}
+
+export interface ReviewView {
+  version: 1;
+  updatedAt?: string;
+  shorts: Record<string, ShortReviewView>;
+}
+
 export type ReviewAction =
   | { type: 'select'; short: string; selected: boolean }
-  | { type: 'status'; short: string; status: ReviewStatus }
+  | { type: 'status'; short: string; status: ReviewStatus; file?: string; revision?: number }
   | { type: 'variant'; short: string; choice: string }
-  | { type: 'comment'; short: string; atSec: number; text: string; file?: string }
-  | { type: 'uncomment'; short: string; id: string };
+  | { type: 'comment'; short: string; atSec: number; text: string; file?: string; revision?: number }
+  | { type: 'uncomment'; short: string; id: string }
+  | { type: 'resolve'; short: string; id: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -99,10 +128,42 @@ export async function readReview(project: string, strict = false): Promise<Revie
   }
 }
 
+/** True when `ref` names a render that has since been replaced or removed. */
+function isStale(ref: { file?: unknown; revision?: unknown } | undefined, revisions: Map<string, number>): boolean {
+  return typeof ref?.file === 'string' && typeof ref.revision === 'number' && revisions.get(ref.file) !== ref.revision;
+}
+
+/** Marks what a review says about renders that are no longer the current ones. */
+export function annotateReview(review: Review, revisions: Map<string, number>): ReviewView {
+  const shorts: Record<string, ShortReviewView> = {};
+  for (const [id, entry] of Object.entries(review.shorts)) {
+    const statusStale = isStale(entry.reviewed, revisions);
+    shorts[id] = {
+      ...entry,
+      current: statusStale ? 'pending' : entry.status ?? 'pending',
+      statusStale,
+      comments: entry.comments.map((comment) => ({ ...comment, stale: isStale(comment, revisions) })),
+    };
+  }
+  return { version: 1, updatedAt: review.updatedAt, shorts };
+}
+
 /** The ids a review may refer to, from edl.json: every short, and each base short's -b/-c variants. */
 export interface ReviewScope {
   shorts: Set<string>;
   variants: Map<string, string[]>;
+}
+
+/** Reads the render an action was taken on: both file and revision, or neither. */
+function renderRefOf(action: Record<string, unknown>): RenderRef | undefined {
+  if (action.file === undefined && action.revision === undefined) return undefined;
+  if (typeof action.file !== 'string' || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file)) {
+    throw new ShortsInputError('file must be a video under render/.');
+  }
+  if (typeof action.revision !== 'number' || !Number.isFinite(action.revision) || action.revision < 0) {
+    throw new ShortsInputError('file needs the revision of the render that was reviewed.');
+  }
+  return { file: action.file, revision: action.revision };
 }
 
 export function applyReviewAction(review: Review, action: unknown, scope: ReviewScope, now = new Date()): Review {
@@ -111,17 +172,26 @@ export function applyReviewAction(review: Review, action: unknown, scope: Review
   if (typeof short !== 'string' || !scope.shorts.has(short)) throw new ShortsInputError(`Unknown short: ${String(short)}.`);
   const next: Review = { ...review, shorts: { ...review.shorts } };
   const entry: ShortReview = { ...(next.shorts[short] ?? {}), comments: [...(next.shorts[short]?.comments ?? [])] };
+  const findComment = () => {
+    const index = entry.comments.findIndex((comment) => comment.id === action.id);
+    if (index < 0) throw new ShortsInputError(`Short ${short} has no comment ${String(action.id)}.`);
+    return index;
+  };
   switch (action.type) {
     case 'select':
       if (typeof action.selected !== 'boolean') throw new ShortsInputError('select needs selected: true or false.');
       entry.selected = action.selected;
       break;
-    case 'status':
+    case 'status': {
       if (!REVIEW_STATUSES.includes(action.status as ReviewStatus)) {
         throw new ShortsInputError(`status must be one of ${REVIEW_STATUSES.join(', ')}.`);
       }
+      const reviewed = renderRefOf(action);
       entry.status = action.status as ReviewStatus;
+      if (reviewed) entry.reviewed = reviewed;
+      else delete entry.reviewed;
       break;
+    }
     case 'variant': {
       const options = [short, ...(scope.variants.get(short) ?? [])];
       if (options.length < 2 || typeof action.choice !== 'string' || !options.includes(action.choice)) {
@@ -136,13 +206,10 @@ export function applyReviewAction(review: Review, action: unknown, scope: Review
       if (typeof action.atSec !== 'number' || !Number.isFinite(action.atSec) || action.atSec < 0) {
         throw new ShortsInputError('A comment needs atSec, a time in seconds.');
       }
-      if (action.file !== undefined && (typeof action.file !== 'string' || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file))) {
-        throw new ShortsInputError('A comment file must be a video under render/.');
-      }
       entry.comments.push({
         id: randomBytes(4).toString('hex'),
         atSec: Math.round(action.atSec * 10) / 10,
-        ...(action.file ? { file: action.file } : {}),
+        ...renderRefOf(action),
         text,
         createdAt: now.toISOString(),
       });
@@ -150,8 +217,13 @@ export function applyReviewAction(review: Review, action: unknown, scope: Review
       break;
     }
     case 'uncomment':
-      entry.comments = entry.comments.filter((comment) => comment.id !== action.id);
+      entry.comments.splice(findComment(), 1);
       break;
+    case 'resolve': {
+      const index = findComment();
+      entry.comments[index] = { ...entry.comments[index]!, resolved: true };
+      break;
+    }
     default:
       throw new ShortsInputError(`Unknown review action: ${action.type}.`);
   }
@@ -161,11 +233,65 @@ export function applyReviewAction(review: Review, action: unknown, scope: Review
 }
 
 /** Writes review.json whole and atomically, so an agent reading it never sees half a file. */
-export async function writeReview(project: string, review: Review): Promise<void> {
+async function writeReview(project: string, review: Review): Promise<void> {
   const path = join(project, REVIEW_FILE);
   const temporary = `${path}.${randomBytes(4).toString('hex')}.tmp`;
   await writeFile(temporary, `${JSON.stringify(review, null, 2)}\n`);
   await rename(temporary, path);
+}
+
+const LOCK_WAIT_MS = 5_000;
+/** A lock older than this was left by a writer that died mid-update. */
+const LOCK_STALE_MS = 10_000;
+
+/** Runs `update` while holding <project>/review.json.lock, so writers in any process take turns. */
+async function withReviewLock<T>(project: string, update: () => Promise<T>): Promise<T> {
+  const lock = join(project, `${REVIEW_FILE}.lock`);
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      await writeFile(lock, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const held = await stat(lock).catch(() => undefined);
+      if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
+        await rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new ShortsInputError(`${REVIEW_FILE} is locked by another writer; try again.`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10 + Math.random() * 20));
+    }
+  }
+  try {
+    return await update();
+  } finally {
+    await rm(lock, { force: true });
+  }
+}
+
+/**
+ * The only way review.json changes: the page (through the server) and the agent (through
+ * `decisions --resolve`) both read, apply and write it here under one lock, so neither loses the other's change.
+ */
+export async function updateReview(project: string, actions: unknown[]): Promise<void> {
+  await withReviewLock(project, async () => {
+    const scope = scopeOf(await projectState(project));
+    let review = await readReview(project, true);
+    for (const action of actions) review = applyReviewAction(review, action, scope);
+    await writeReview(project, review);
+  });
+}
+
+/** Marks comments resolved by id, wherever they are; for the agent once it has acted on them. */
+export async function resolveComments(project: string, ids: string[]): Promise<void> {
+  const review = await readReview(project, true);
+  const actions = ids.map((id) => {
+    const short = Object.keys(review.shorts).find((key) => review.shorts[key]!.comments.some((comment) => comment.id === id));
+    if (!short) throw new ShortsInputError(`No comment ${id} in ${REVIEW_FILE}.`);
+    return { type: 'resolve', short, id };
+  });
+  await updateReview(project, actions);
 }
 
 /**
@@ -207,6 +333,8 @@ export interface StateVideo {
   label: string;
   path: string;
   src: string;
+  /** Modification time in ms; a comment or status records it so a later render can be told apart. */
+  revision: number;
 }
 
 export interface StateShort {
@@ -231,7 +359,7 @@ export interface ProjectState {
   videoId?: string;
   edlError?: string;
   shorts: StateShort[];
-  review: Review;
+  review: ReviewView;
 }
 
 async function readJsonFile(path: string): Promise<unknown> {
@@ -309,7 +437,7 @@ export async function projectState(project: string): Promise<ProjectState> {
       if (ownerOf(stem) !== id) continue;
       const suffix = stem.slice(id.length + 1);
       const label = suffix || 'cut';
-      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime) });
+      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime), revision: mtime });
     }
     const order = (label: string) => (VIDEO_ORDER.includes(label) ? VIDEO_ORDER.indexOf(label) : VIDEO_ORDER.length);
     videos.sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
@@ -344,7 +472,7 @@ export async function projectState(project: string): Promise<ProjectState> {
     videoId: isRecord(edlRaw) && typeof edlRaw.videoId === 'string' ? edlRaw.videoId : undefined,
     edlError: edlRaw instanceof Error ? edlRaw.message : !rawShorts.length ? 'edl.json has no shorts yet.' : undefined,
     shorts,
-    review,
+    review: annotateReview(review, new Map([...render].map(([name, mtime]) => [`render/${name}`, mtime]))),
   };
   return { version: createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 12), ...body };
 }
@@ -440,7 +568,6 @@ export async function startReviewServer(options: ReviewServerOptions): Promise<R
   const nonce = randomBytes(16).toString('base64');
   let origins = new Set<string>();
   let lastRequest = Date.now();
-  let writes: Promise<unknown> = Promise.resolve();
 
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     lastRequest = Date.now();
@@ -481,12 +608,7 @@ export async function startReviewServer(options: ReviewServerOptions): Promise<R
       } catch {
         throw new ShortsInputError('The request body is not valid JSON.');
       }
-      const write = writes.then(async () => {
-        const state = await projectState(project);
-        await writeReview(project, applyReviewAction(await readReview(project, true), action, scopeOf(state)));
-      });
-      writes = write.catch(() => undefined);
-      await write;
+      await updateReview(project, [action]);
       sendJson(response, 200, await projectState(project));
       return;
     }

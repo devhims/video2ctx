@@ -1,5 +1,5 @@
 import { request } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, test } from 'vitest';
@@ -8,6 +8,8 @@ import { runShortsCli } from './cli';
 import {
   applyReviewAction,
   parseReview,
+  resolveComments,
+  updateReview,
   projectState,
   resolveProjectFile,
   scopeOf,
@@ -175,7 +177,7 @@ describe('review server', () => {
       post(server, { type: 'select', short: 'S2', selected: false }),
       post(server, { type: 'variant', short: 'S1', choice: 'S1-b' }),
       post(server, { type: 'status', short: 'S1-b', status: 'approved' }),
-      post(server, { type: 'comment', short: 'S1', atSec: 3.26, text: '  Hook covers the face  ', file: 'render/S1-overlay.mp4' }),
+      post(server, { type: 'comment', short: 'S1', atSec: 3.26, text: '  Hook covers the face  ', file: 'render/S1-overlay.mp4', revision: 1 }),
       post(server, { type: 'comment', short: 'S1', atSec: 0.5, text: 'Start on the laugh' }),
     ]);
     expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200, 200]);
@@ -207,7 +209,12 @@ describe('review server', () => {
       { type: 'variant', short: 'S1', choice: 'S2' },
       { type: 'comment', short: 'S1', atSec: -1, text: 'x' },
       { type: 'comment', short: 'S1', atSec: 1, text: '   ' },
-      { type: 'comment', short: 'S1', atSec: 1, text: 'x', file: '../secret.mp4' },
+      { type: 'comment', short: 'S1', atSec: 1, text: 'x', file: '../secret.mp4', revision: 1 },
+      { type: 'comment', short: 'S1', atSec: 1, text: 'x', file: 'render/S1.mp4' },
+      { type: 'comment', short: 'S1', atSec: 1, text: 'x', revision: 1 },
+      { type: 'status', short: 'S1', status: 'approved', file: 'render/S1.mp4', revision: -1 },
+      { type: 'resolve', short: 'S1', id: 'nope' },
+      { type: 'uncomment', short: 'S1', id: 'nope' },
       { type: 'delete-everything', short: 'S1' },
     ]) {
       const response = await post(server, action);
@@ -271,6 +278,103 @@ describe('projectState', () => {
     expect((await projectState(project)).edlError).toBe('No edl.json yet.');
     await writeFile(join(project, 'edl.json'), '{');
     expect((await projectState(project)).edlError).toBe('edl.json is not valid JSON.');
+  });
+});
+
+describe('render revisions', () => {
+  test('a status and notes given on a render stop applying when a new render replaces it at the same path', async () => {
+    const { project } = await fixture();
+    const server = await serve(project);
+    const stateNow = async () => (await fetch(new URL('/api/state', server.url))).json();
+    const overlay = (await stateNow()).shorts[0].videos.find((video: { label: string }) => video.label === 'overlay');
+    const reviewed = { file: overlay.path, revision: overlay.revision };
+
+    await post(server, { type: 'status', short: 'S1', status: 'approved', ...reviewed });
+    await post(server, { type: 'comment', short: 'S1', atSec: 1, text: 'Nice framing', ...reviewed });
+    let s1 = (await stateNow()).review.shorts.S1;
+    expect(s1).toMatchObject({ status: 'approved', current: 'approved', statusStale: false, reviewed });
+    expect(s1.comments[0]).toMatchObject({ stale: false, ...reviewed });
+
+    await writeFile(join(project, 'render', 'S1-overlay.mp4'), 'a different render');
+    const later = new Date(Date.now() + 5_000);
+    await utimes(join(project, 'render', 'S1-overlay.mp4'), later, later);
+    // A note started on the old render and sent after the swap keeps the revision it was started on.
+    await post(server, { type: 'comment', short: 'S1', atSec: 2, text: 'Started before the swap', ...reviewed });
+
+    s1 = (await stateNow()).review.shorts.S1;
+    expect(s1).toMatchObject({ status: 'approved', current: 'pending', statusStale: true });
+    expect(s1.comments.map((comment: { text: string; stale: boolean }) => [comment.text, comment.stale]))
+      .toEqual([['Nice framing', true], ['Started before the swap', true]]);
+
+    const output: string[] = [];
+    expect(await runShortsCli(['decisions', '--project', project], { stdout: (value) => output.push(value), stderr: () => undefined })).toBe(0);
+    expect(JSON.parse(output[0]!).shorts.S1).toMatchObject({ current: 'pending', statusStale: true, comments: [{ stale: true }, { stale: true }] });
+
+    const fresh = (await stateNow()).shorts[0].videos.find((video: { label: string }) => video.label === 'overlay');
+    await post(server, { type: 'status', short: 'S1', status: 'approved', file: fresh.path, revision: fresh.revision });
+    expect((await stateNow()).review.shorts.S1).toMatchObject({ current: 'approved', statusStale: false });
+  });
+
+  test('a removed render makes what was said about it stale too', async () => {
+    const { project } = await fixture();
+    await updateReview(project, [{ type: 'status', short: 'S2', status: 'rejected', file: 'render/S2.mp4', revision: 5 }]);
+    expect((await projectState(project)).review.shorts.S2).toMatchObject({ current: 'pending', statusStale: true });
+  });
+});
+
+describe('one writer for review.json', () => {
+  test('page saves and the agent resolving comments never overwrite each other', async () => {
+    const { project } = await fixture();
+    const server = await serve(project);
+    await post(server, { type: 'comment', short: 'S2', atSec: 1, text: 'Tighter start' });
+    const id = (await projectState(project)).review.shorts.S2!.comments[0]!.id;
+
+    // Separate writers that share no in-process queue, as the server and the agent's CLI run in different processes.
+    await Promise.all([
+      ...Array.from({ length: 8 }, (_, index) => post(server, { type: 'comment', short: 'S1', atSec: index, text: `note ${index}` })),
+      ...Array.from({ length: 4 }, (_, index) => updateReview(project, [{ type: 'comment', short: 'S1-b', atSec: index, text: `direct ${index}` }])),
+      resolveComments(project, [id]),
+      runShortsCli(['decisions', '--project', project, '--resolve', id], { stdout: () => undefined, stderr: () => undefined }),
+    ]);
+
+    const review = JSON.parse(await readFile(join(project, 'review.json'), 'utf8'));
+    expect(review.shorts.S1.comments).toHaveLength(8);
+    expect(review.shorts['S1-b'].comments).toHaveLength(4);
+    expect(review.shorts.S2.comments[0]).toMatchObject({ id, resolved: true });
+    await expect(readFile(join(project, 'review.json.lock'))).rejects.toThrow();
+  });
+
+  test('waits for a held lock and takes over one left by a writer that died', async () => {
+    const { project } = await fixture();
+    const lock = join(project, 'review.json.lock');
+    await writeFile(lock, '1');
+    const waiting = updateReview(project, [{ type: 'select', short: 'S1', selected: true }]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(readFile(join(project, 'review.json'))).rejects.toThrow();
+    await rm(lock);
+    await waiting;
+    expect((await projectState(project)).review.shorts.S1!.selected).toBe(true);
+
+    await writeFile(lock, '1');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lock, old, old);
+    await updateReview(project, [{ type: 'select', short: 'S2', selected: true }]);
+    expect((await projectState(project)).review.shorts.S2!.selected).toBe(true);
+  });
+
+  test('decisions --resolve marks comments and reports unknown ids', async () => {
+    const { project } = await fixture();
+    await updateReview(project, [{ type: 'comment', short: 'S1', atSec: 1, text: 'Lower the title' }]);
+    const id = (await projectState(project)).review.shorts.S1!.comments[0]!.id;
+    const output: string[] = [];
+    const errors: string[] = [];
+    const io = { stdout: (value: string) => output.push(value), stderr: (value: string) => errors.push(value) };
+    expect(await runShortsCli(['decisions', '--project', project, '--resolve', id], io)).toBe(0);
+    const printed = JSON.parse(output[0]!);
+    expect(printed).toMatchObject({ review: join(project, 'review.json'), resolved: [id] });
+    expect(printed.shorts.S1.comments[0]).toMatchObject({ id, resolved: true, stale: false });
+    expect(await runShortsCli(['decisions', '--project', project, '--resolve', 'nope'], io)).toBe(2);
+    expect(errors.join('')).toContain('No comment nope');
   });
 });
 

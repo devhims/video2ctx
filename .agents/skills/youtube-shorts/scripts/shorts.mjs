@@ -19023,7 +19023,7 @@ var require_undici = __commonJS({
 // src/shorts/cli.ts
 import { createHash as createHash2 } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
-import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile3, readdir as readdir3, rm as rm4, stat as stat3, writeFile as writeFile5 } from "node:fs/promises";
+import { copyFile as copyFile2, mkdir as mkdir4, mkdtemp as mkdtemp2, readFile as readFile3, readdir as readdir3, rm as rm5, stat as stat3, writeFile as writeFile5 } from "node:fs/promises";
 import { cpus, homedir, tmpdir as tmpdir2 } from "node:os";
 import { basename as basename2, extname as extname3, join as join7, resolve as resolve3 } from "node:path";
 
@@ -23754,7 +23754,7 @@ function dtwPreset(model) {
 // src/shorts/review.ts
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile as readFile2, readdir as readdir2, realpath, rename, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
+import { readFile as readFile2, readdir as readdir2, realpath, rename, rm as rm4, stat as stat2, writeFile as writeFile4 } from "node:fs/promises";
 import { createServer as createServer2 } from "node:http";
 import { extname as extname2, join as join6, sep } from "node:path";
 
@@ -23847,6 +23847,10 @@ form.comment input { flex: 1; min-width: 0; background: transparent; border: 0; 
 ol.comments { list-style: none; padding: 0; margin: 0 0 20px; display: flex; flex-direction: column; gap: 6px; }
 ol.comments li { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; display: flex; gap: 8px; align-items: baseline; }
 ol.comments li.resolved { opacity: .55; }
+ol.comments li.previous { border-style: dashed; opacity: .7; }
+.error { display: flex; gap: 10px; align-items: center; color: var(--bad); font-size: 13px; background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.35); border-radius: 8px; padding: 6px 9px; }
+.error[hidden] { display: none; }
+#error { margin: 12px 20px 0; }
 ol.comments li.resolved .text { text-decoration: line-through; }
 ol.comments .text { flex: 1; white-space: pre-wrap; }
 ol.comments .where { color: var(--muted); font-size: 11px; display: block; }
@@ -23871,6 +23875,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
   </nav>
   <div class="live" id="live">Watching project files</div>
 </div>
+<div class="error" id="error" hidden role="alert"></div>
 <main class="view" id="view"></main>
 <script nonce="${nonce}">
 "use strict";
@@ -23878,7 +23883,8 @@ var state = null;
 var view = "moments";
 var current = null;
 var chosenSource = {};
-var pinnedAt = null;
+// The moment a comment was started: short, time, and the exact render (path and revision) on screen.
+var pinned = null;
 var videos = new Map();
 var playerShell = null;
 var PILL_LABELS = { approved: "Approved", changes: "Needs changes", rejected: "Rejected" };
@@ -23915,7 +23921,7 @@ function wholeClock(seconds) {
   return m + ":" + (s < 10 ? "0" : "") + s;
 }
 function byId(id) { return state.shorts.find(function (s) { return s.id === id; }); }
-function rev(id) { return (state.review.shorts[id]) || { comments: [] }; }
+function rev(id) { return (state.review.shorts[id]) || { comments: [], current: "pending", statusStale: false }; }
 function pill(status) { return status && status !== "pending" ? el("span", { class: "pill " + status, text: PILL_LABELS[status] }) : null; }
 function bestVideo(short) { return short && short.videos[0]; }
 function sourceFor(short) {
@@ -23936,11 +23942,22 @@ function video(src) {
   return node;
 }
 
-async function send(action) {
-  var response = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) });
-  var body = await response.json();
-  if (!response.ok) { alert(body.error ? body.error.message : "Could not save."); return; }
-  apply(body);
+// Saves one action. On failure, shows a retryable error in slot (the banner by default) and resolves false.
+async function send(action, slot, retry) {
+  slot = slot || document.getElementById("error");
+  var message, saved = null;
+  try {
+    var response = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) });
+    var body = await response.json().catch(function () { return {}; });
+    if (response.ok) saved = body;
+    else message = "Not saved: " + (body.error ? body.error.message : "the server answered " + response.status + ".");
+  } catch (error) {
+    message = "Not saved: the review server can't be reached. Ask the agent to start review again, then retry.";
+  }
+  if (saved) { slot.replaceChildren(); slot.hidden = true; apply(saved); return true; }
+  slot.replaceChildren(el("span", { text: message }), el("button", { class: "small", type: "button", onclick: retry || function () { send(action, slot); } }, "Retry"));
+  slot.hidden = false;
+  return false;
 }
 
 function apply(next) {
@@ -23979,7 +23996,7 @@ function renderMoments() {
     var r = rev(s.id);
     var meta = [s.id, s.durationSec ? s.durationSec.toFixed(1) + " s" : null, s.variants.length ? (s.variants.length + 1) + " hook variants" : null, s.videos.length ? "rendered" : null].filter(Boolean).join(" · ");
     return el("article", { class: "card" + (r.selected ? " selected" : "") },
-      el("header", {}, el("span", { class: "rank", text: "#" + s.rank }), el("h3", { text: s.title || s.id }), pill(r.status)),
+      el("header", {}, el("span", { class: "rank", text: "#" + s.rank }), el("h3", { text: s.title || s.id }), pill(r.current)),
       s.hook ? el("p", { class: "hook", text: s.hook }) : null,
       el("div", { class: "meta", text: meta }),
       s.cuts.map(function (c) {
@@ -23989,7 +24006,7 @@ function renderMoments() {
       s.notes ? el("div", { class: "meta", text: s.notes }) : null,
       s.sheet ? el("img", { class: "sheet", src: s.sheet, alt: "Contact sheet for " + s.id, loading: "lazy" }) : null,
       el("footer", {},
-        el("label", { class: "keep" }, el("input", { type: "checkbox", checked: r.selected === true, onchange: function (e) { send({ type: "select", short: s.id, selected: e.target.checked }); } }), "Keep"),
+        el("label", { class: "keep" }, el("input", { type: "checkbox", checked: r.selected === true, onchange: function (e) { var box = e.target; send({ type: "select", short: s.id, selected: box.checked }).then(function (ok) { if (!ok) box.checked = !box.checked; }); } }), "Keep"),
         r.comments.length ? el("span", { class: "meta", text: r.comments.length + " comment" + (r.comments.length > 1 ? "s" : "") }) : null,
         el("span", { class: "grow" }),
         el("button", { class: "small", onclick: function () { location.hash = "player/" + encodeURIComponent(s.id); } }, "Open"))
@@ -24017,7 +24034,7 @@ function renderHooks() {
         el("button", { class: isChosen ? "primary" : "", onclick: function () { send({ type: "variant", short: base.id, choice: id }); } }, isChosen ? "Chosen" : "Pick " + "ABCDEFGHIJ".charAt(index)));
     });
     return el("section", { class: "group" },
-      el("header", {}, el("h3", {}, el("span", { class: "rank", text: "#" + base.rank + " " }), base.title || base.id), pill(rev(base.id).status),
+      el("header", {}, el("h3", {}, el("span", { class: "rank", text: "#" + base.rank + " " }), base.title || base.id), pill(rev(base.id).current),
         players.length > 1 ? el("button", { onclick: function () { players.forEach(function (p) { p.muted = true; p.currentTime = 0; p.play(); }); } }, "Play openings together (muted)") : null),
       el("div", { class: "variants" }, cols));
   }));
@@ -24027,38 +24044,52 @@ function activeVideo() { return playerShell && playerShell.stage.querySelector("
 function showTime() {
   if (!playerShell) return;
   var v = activeVideo();
-  playerShell.at.textContent = clock(pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0);
+  playerShell.at.textContent = clock(pinned ? pinned.atSec : v ? v.currentTime : 0);
+}
+
+function pin() {
+  var short = byId(current);
+  if (!short) return null;
+  var v = activeVideo();
+  var source = sourceFor(short);
+  if (v) v.pause();
+  pinned = { short: short.id, atSec: v ? v.currentTime : 0, file: source ? source.path : undefined, revision: source ? source.revision : undefined };
+  return pinned;
 }
 
 function buildPlayerShell(root) {
   var at = el("span", { class: "at", text: "0:00.0" });
   var input = el("input", { placeholder: "Comment at this moment… (press c)", maxlength: "2000", "aria-label": "Comment" });
-  input.addEventListener("focus", function () { var v = activeVideo(); if (v) { v.pause(); pinnedAt = v.currentTime; } showTime(); });
-  input.addEventListener("blur", function () { if (!input.value) { pinnedAt = null; showTime(); } });
+  // Pin on focus, so a poll that swaps in a newer render mid-comment can't move the note onto it.
+  input.addEventListener("focus", function () { if (!pinned) pin(); showTime(); });
+  input.addEventListener("blur", function () { if (!input.value) { pinned = null; showTime(); } });
   input.addEventListener("keydown", function (e) { if (e.key === "Escape") { input.value = ""; input.blur(); } });
   var form = el("form", { class: "comment" }, at, input, el("button", { class: "small primary", type: "submit" }, "Add"));
-  form.addEventListener("submit", function (e) {
-    e.preventDefault();
+  var error = el("div", { class: "error", hidden: true, role: "alert" });
+  var saving = false;
+  async function submit() {
     var text = input.value.trim();
-    var short = byId(current);
-    if (!text || !short) return;
-    var v = activeVideo();
-    var source = sourceFor(short);
-    var atSec = pinnedAt !== null ? pinnedAt : v ? v.currentTime : 0;
-    input.value = "";
-    pinnedAt = null;
-    send({ type: "comment", short: short.id, atSec: atSec, text: text, file: source ? source.path : undefined });
-  });
+    if (!text || saving) return;
+    var note = pinned || pin();
+    if (!note) return;
+    saving = true;
+    var ok = await send({ type: "comment", short: note.short, atSec: note.atSec, text: text, file: note.file, revision: note.revision }, error, submit);
+    saving = false;
+    // Keep the draft and its pinned moment until the server has it.
+    if (ok && input.value.trim() === text) { input.value = ""; pinned = null; showTime(); }
+  }
+  form.addEventListener("submit", function (e) { e.preventDefault(); submit(); });
   var shell = {
     list: el("nav", { class: "list" }),
     sources: el("div", { class: "sources" }),
     stage: el("div", { class: "frame" }),
     statuses: el("div", { class: "statuses" }),
+    statusNote: el("div", { class: "hint" }),
     side: el("div", { class: "side" }),
     at: at, input: input, key: ""
   };
   shell.node = el("div", { class: "player" }, shell.list,
-    el("div", { class: "stage" }, shell.sources, shell.stage, form, shell.statuses,
+    el("div", { class: "stage" }, shell.sources, shell.stage, form, error, shell.statuses, shell.statusNote,
       el("div", { class: "hint" }, "Comments pin to the paused time. ", el("kbd", { text: "c" }), " comment · ", el("kbd", { text: "k" }), " play/pause · ", el("kbd", { text: "←" }), el("kbd", { text: "→" }), " 1 s")),
     shell.side);
   root.replaceChildren(shell.node);
@@ -24078,7 +24109,7 @@ function renderPlayer(root, switched) {
       el("span", { class: "rank", text: s.variantOf ? s.id.slice(s.variantOf.length + 1).toUpperCase() : "#" + s.rank }),
       el("span", { class: "t", text: (s.variantOf ? s.hook : s.title) || s.id }),
       sr.comments.length ? el("span", { class: "meta", text: String(sr.comments.length) }) : null,
-      sr.status && sr.status !== "pending" ? el("span", { class: "dot " + sr.status, title: PILL_LABELS[sr.status] }) : null);
+      sr.current !== "pending" ? el("span", { class: "dot " + sr.current, title: PILL_LABELS[sr.current] }) : null);
   }));
 
   var source = sourceFor(short);
@@ -24088,7 +24119,8 @@ function renderPlayer(root, switched) {
   }));
   if (shell.key !== key) {
     var old = activeVideo();
-    var keepTime = old && source && shell.key.split("|")[0] === short.id ? old.currentTime : 0;
+    var sameShort = shell.key.split("|")[0] === short.id;
+    var keepTime = old && source && sameShort ? old.currentTime : 0;
     if (old) old.pause();
     if (source) {
       var player = video(source.src);
@@ -24100,37 +24132,40 @@ function renderPlayer(root, switched) {
       shell.stage.replaceChildren(el("div", { text: "Not rendered yet" }));
     }
     shell.key = key;
-    pinnedAt = null;
+    if (!sameShort) pinned = null;
     showTime();
   }
 
   shell.statuses.replaceChildren.apply(shell.statuses, ["approved", "changes", "rejected", "pending"].map(function (status) {
-    var active = (r.status || "pending") === status;
-    return el("button", { class: "small " + status + (active ? " active" : ""), onclick: function () { send({ type: "status", short: short.id, status: status }); } }, STATUS_LABELS[status]);
+    var active = r.current === status;
+    return el("button", { class: "small " + status + (active ? " active" : ""), onclick: function () {
+      send({ type: "status", short: short.id, status: status, file: source ? source.path : undefined, revision: source ? source.revision : undefined });
+    } }, STATUS_LABELS[status]);
   }));
+  shell.statusNote.textContent = r.statusStale ? "Marked " + (PILL_LABELS[r.status] || r.status).toLowerCase() + " on an earlier render of " + r.reviewed.file.replace(/^render\//, "") + "; this one is pending." : "";
 
   var comments = r.comments.map(function (c) {
     var where = c.file && (!source || c.file !== source.path) ? c.file.replace(/^render\//, "") : null;
-    return el("li", { class: c.resolved ? "resolved" : "" },
+    return el("li", { class: (c.resolved ? "resolved " : "") + (c.stale ? "previous" : "") },
       el("button", { class: "at", title: "Seek here", onclick: function () {
         var target = short.videos.find(function (v) { return v.path === c.file; });
         if (target && (!source || target.src !== source.src)) { chosenSource[short.id] = target.label; render(); }
         var v = activeVideo(); if (v) { v.currentTime = c.atSec; v.pause(); }
       } }, clock(c.atSec)),
-      el("span", { class: "text" }, c.text, where ? el("span", { class: "where", text: "on " + where }) : null, c.resolved ? el("span", { class: "where", text: "resolved by the agent" }) : null),
+      el("span", { class: "text" }, c.text, c.stale ? el("span", { class: "where", text: "on a previous render" + (where ? " of " + where : "") }) : where ? el("span", { class: "where", text: "on " + where }) : null, c.resolved ? el("span", { class: "where", text: "resolved by the agent" }) : null),
       el("button", { class: "small", title: "Delete comment", onclick: function () { send({ type: "uncomment", short: short.id, id: c.id }); } }, "×"));
   });
   var stills = [];
   if (short.preview) stills.push(el("a", { class: "wide", href: short.preview, target: "_blank", rel: "noopener" }, el("img", { src: short.preview, alt: "Preview frames" })));
   short.snapshots.forEach(function (src) { stills.push(el("a", { href: src, target: "_blank", rel: "noopener" }, el("img", { src: src, alt: "Overlay snapshot", loading: "lazy" }))); });
   if (short.sheet) stills.push(el("a", { class: "wide", href: short.sheet, target: "_blank", rel: "noopener" }, el("img", { src: short.sheet, alt: "Contact sheet", loading: "lazy" })));
-  shell.side.replaceChildren(
+  shell.side.replaceChildren.apply(shell.side, [
     el("h2", {}, el("span", { class: "rank", text: (short.variantOf ? "#" + short.rank + short.id.slice(short.variantOf.length + 1).toUpperCase() : "#" + short.rank) + " " }), short.title || short.id),
     short.hook ? el("p", { class: "hook", text: short.hook }) : null,
     el("h4", { text: "Comments" + (r.comments.length ? " (" + r.comments.length + ")" : "") }),
     r.comments.length ? el("ol", { class: "comments" }, comments) : el("p", { class: "hint", text: "No comments yet. Pause where something is off and type what to change." }),
     stills.length ? el("h4", { text: "Stills" }) : null,
-    el("div", { class: "stills" }, stills));
+    el("div", { class: "stills" }, stills)].filter(Boolean));
   if (switched && document.activeElement !== shell.input) window.scrollTo(0, 0);
 }
 
@@ -24211,23 +24246,58 @@ async function readReview(project, strict = false) {
     return parseReview(void 0);
   }
 }
+function isStale(ref, revisions) {
+  return typeof ref?.file === "string" && typeof ref.revision === "number" && revisions.get(ref.file) !== ref.revision;
+}
+function annotateReview(review, revisions) {
+  const shorts = {};
+  for (const [id, entry] of Object.entries(review.shorts)) {
+    const statusStale = isStale(entry.reviewed, revisions);
+    shorts[id] = {
+      ...entry,
+      current: statusStale ? "pending" : entry.status ?? "pending",
+      statusStale,
+      comments: entry.comments.map((comment) => ({ ...comment, stale: isStale(comment, revisions) }))
+    };
+  }
+  return { version: 1, updatedAt: review.updatedAt, shorts };
+}
+function renderRefOf(action) {
+  if (action.file === void 0 && action.revision === void 0) return void 0;
+  if (typeof action.file !== "string" || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file)) {
+    throw new ShortsInputError("file must be a video under render/.");
+  }
+  if (typeof action.revision !== "number" || !Number.isFinite(action.revision) || action.revision < 0) {
+    throw new ShortsInputError("file needs the revision of the render that was reviewed.");
+  }
+  return { file: action.file, revision: action.revision };
+}
 function applyReviewAction(review, action, scope, now = /* @__PURE__ */ new Date()) {
   if (!isRecord2(action) || typeof action.type !== "string") throw new ShortsInputError("A review action needs a type.");
   const short = action.short;
   if (typeof short !== "string" || !scope.shorts.has(short)) throw new ShortsInputError(`Unknown short: ${String(short)}.`);
   const next = { ...review, shorts: { ...review.shorts } };
   const entry = { ...next.shorts[short] ?? {}, comments: [...next.shorts[short]?.comments ?? []] };
+  const findComment = () => {
+    const index = entry.comments.findIndex((comment) => comment.id === action.id);
+    if (index < 0) throw new ShortsInputError(`Short ${short} has no comment ${String(action.id)}.`);
+    return index;
+  };
   switch (action.type) {
     case "select":
       if (typeof action.selected !== "boolean") throw new ShortsInputError("select needs selected: true or false.");
       entry.selected = action.selected;
       break;
-    case "status":
+    case "status": {
       if (!REVIEW_STATUSES.includes(action.status)) {
         throw new ShortsInputError(`status must be one of ${REVIEW_STATUSES.join(", ")}.`);
       }
+      const reviewed = renderRefOf(action);
       entry.status = action.status;
+      if (reviewed) entry.reviewed = reviewed;
+      else delete entry.reviewed;
       break;
+    }
     case "variant": {
       const options = [short, ...scope.variants.get(short) ?? []];
       if (options.length < 2 || typeof action.choice !== "string" || !options.includes(action.choice)) {
@@ -24242,13 +24312,10 @@ function applyReviewAction(review, action, scope, now = /* @__PURE__ */ new Date
       if (typeof action.atSec !== "number" || !Number.isFinite(action.atSec) || action.atSec < 0) {
         throw new ShortsInputError("A comment needs atSec, a time in seconds.");
       }
-      if (action.file !== void 0 && (typeof action.file !== "string" || !/^render\/[A-Za-z0-9_-]+\.mp4$/.test(action.file))) {
-        throw new ShortsInputError("A comment file must be a video under render/.");
-      }
       entry.comments.push({
         id: randomBytes2(4).toString("hex"),
         atSec: Math.round(action.atSec * 10) / 10,
-        ...action.file ? { file: action.file } : {},
+        ...renderRefOf(action),
         text,
         createdAt: now.toISOString()
       });
@@ -24256,8 +24323,13 @@ function applyReviewAction(review, action, scope, now = /* @__PURE__ */ new Date
       break;
     }
     case "uncomment":
-      entry.comments = entry.comments.filter((comment) => comment.id !== action.id);
+      entry.comments.splice(findComment(), 1);
       break;
+    case "resolve": {
+      const index = findComment();
+      entry.comments[index] = { ...entry.comments[index], resolved: true };
+      break;
+    }
     default:
       throw new ShortsInputError(`Unknown review action: ${action.type}.`);
   }
@@ -24271,6 +24343,49 @@ async function writeReview(project, review) {
   await writeFile4(temporary, `${JSON.stringify(review, null, 2)}
 `);
   await rename(temporary, path);
+}
+var LOCK_WAIT_MS = 5e3;
+var LOCK_STALE_MS = 1e4;
+async function withReviewLock(project, update) {
+  const lock = join6(project, `${REVIEW_FILE}.lock`);
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (; ; ) {
+    try {
+      await writeFile4(lock, String(process.pid), { flag: "wx" });
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const held = await stat2(lock).catch(() => void 0);
+      if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
+        await rm4(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new ShortsInputError(`${REVIEW_FILE} is locked by another writer; try again.`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10 + Math.random() * 20));
+    }
+  }
+  try {
+    return await update();
+  } finally {
+    await rm4(lock, { force: true });
+  }
+}
+async function updateReview(project, actions) {
+  await withReviewLock(project, async () => {
+    const scope = scopeOf(await projectState(project));
+    let review = await readReview(project, true);
+    for (const action of actions) review = applyReviewAction(review, action, scope);
+    await writeReview(project, review);
+  });
+}
+async function resolveComments(project, ids) {
+  const review = await readReview(project, true);
+  const actions = ids.map((id) => {
+    const short = Object.keys(review.shorts).find((key) => review.shorts[key].comments.some((comment) => comment.id === id));
+    if (!short) throw new ShortsInputError(`No comment ${id} in ${REVIEW_FILE}.`);
+    return { type: "resolve", short, id };
+  });
+  await updateReview(project, actions);
 }
 async function resolveProjectFile(project, urlPath) {
   let decoded;
@@ -24358,7 +24473,7 @@ async function projectState(project) {
       if (ownerOf(stem) !== id) continue;
       const suffix = stem.slice(id.length + 1);
       const label = suffix || "cut";
-      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime) });
+      videos.push({ label, path: `render/${name}`, src: fileUrl(`render/${name}`, mtime), revision: mtime });
     }
     const order = (label) => VIDEO_ORDER.includes(label) ? VIDEO_ORDER.indexOf(label) : VIDEO_ORDER.length;
     videos.sort((a, b) => order(a.label) - order(b.label) || a.label.localeCompare(b.label));
@@ -24393,7 +24508,7 @@ async function projectState(project) {
     videoId: isRecord2(edlRaw) && typeof edlRaw.videoId === "string" ? edlRaw.videoId : void 0,
     edlError: edlRaw instanceof Error ? edlRaw.message : !rawShorts.length ? "edl.json has no shorts yet." : void 0,
     shorts,
-    review
+    review: annotateReview(review, new Map([...render].map(([name, mtime]) => [`render/${name}`, mtime])))
   };
   return { version: createHash("sha1").update(JSON.stringify(body)).digest("hex").slice(0, 12), ...body };
 }
@@ -24467,7 +24582,6 @@ async function startReviewServer(options) {
   const nonce = randomBytes2(16).toString("base64");
   let origins = /* @__PURE__ */ new Set();
   let lastRequest = Date.now();
-  let writes = Promise.resolve();
   const handle = async (request, response) => {
     lastRequest = Date.now();
     if (!origins.has(`http://${request.headers.host ?? ""}`)) {
@@ -24505,12 +24619,7 @@ async function startReviewServer(options) {
       } catch {
         throw new ShortsInputError("The request body is not valid JSON.");
       }
-      const write2 = writes.then(async () => {
-        const state = await projectState(project);
-        await writeReview(project, applyReviewAction(await readReview(project, true), action, scopeOf(state)));
-      });
-      writes = write2.catch(() => void 0);
-      await write2;
+      await updateReview(project, [action]);
       sendJson(response, 200, await projectState(project));
       return;
     }
@@ -24580,6 +24689,7 @@ Usage:
   shorts.mjs fetch  --project <dir> [--max-height <px>]
   shorts.mjs transcribe --project <dir> (--master <file> | --from-youtube) [--model small.en]
   shorts.mjs review --project <dir> [--port <n>] [--idle-minutes <n>]
+  shorts.mjs decisions --project <dir> [--resolve <comment-id,...>]
 
 Commands:
   read    Fetch metadata and a word-timed transcript into the project:
@@ -24635,6 +24745,7 @@ Options:
   --proxy <url>         HTTP(S) proxy for YouTube requests; defaults to OUTBOUND_PROXY_URL
   --port <n>            Port for review; default a free one
   --idle-minutes <n>    Stop review after this long with no page open; default 30
+  --resolve <id,...>    Comment ids for decisions to mark resolved
   --pretty              Pretty-print JSON
 `;
 var HYPERFRAMES_VERSION = "0.9.22";
@@ -24648,7 +24759,8 @@ var commandFlags = {
   fit: ["project", "only", "ffmpeg-path"],
   fetch: ["project", "max-height", "yt-dlp-path", "ffmpeg-path", "proxy"],
   transcribe: ["project", "master", "from-youtube", "model", "language", "ffmpeg-path", "proxy", "whisper-path", "whisper-model"],
-  review: ["project", "port", "idle-minutes"]
+  review: ["project", "port", "idle-minutes"],
+  decisions: ["project", "resolve"]
 };
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["pretty", "from-youtube"]);
 var DependencyError = class extends Error {
@@ -24863,7 +24975,7 @@ async function resolveWhisper(flags, environment, model) {
         await runCommand(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "1", silence]);
         await runCommand(npx, ["-y", `hyperframes@${HYPERFRAMES_VERSION}`, "transcribe", silence, "--engine", "whisper", "--model", model, "--json", "-d", work]);
       } finally {
-        await rm4(work, { recursive: true, force: true });
+        await rm5(work, { recursive: true, force: true });
       }
       found = await find();
     }
@@ -24916,7 +25028,7 @@ async function commandTranscribe(flags, environment) {
       warnings: [...media.warnings, "Whisper mishears names too: build the glossary as with YouTube captions. There are no speaker-change marks (>>)."]
     };
   } finally {
-    await rm4(work, { recursive: true, force: true });
+    await rm5(work, { recursive: true, force: true });
     await media.close();
   }
 }
@@ -24967,7 +25079,7 @@ async function shotsFrom(project, shorts, media, threshold, issues) {
   const output = [];
   for (const short of shorts) {
     const directory = join7(project, "shots", short.spec.id);
-    await rm4(directory, { recursive: true, force: true });
+    await rm5(directory, { recursive: true, force: true });
     const shots = [];
     for (const [cutIndex, cut] of short.cuts.entries()) {
       const all = await detectAllShotChanges(ffmpeg, master, cut.inMs, cut.outMs, threshold);
@@ -25020,7 +25132,7 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
   for (let short of shorts) {
     const id = short.spec.id;
     const parts = join7(directory, `${id}.parts`);
-    await rm4(parts, { recursive: true, force: true });
+    await rm5(parts, { recursive: true, force: true });
     await mkdir4(parts, { recursive: true });
     const snapped = [];
     for (const [index, cut] of short.cuts.entries()) {
@@ -25076,7 +25188,7 @@ async function renderFrom(project, words, edl, shorts, media, issues, silenceDb)
         segments: segments.map((segment) => ({ in: formatTime(segment.inMs), out: formatTime(segment.outMs), mode: segment.layout.mode }))
       });
     } finally {
-      await rm4(parts, { recursive: true, force: true });
+      await rm5(parts, { recursive: true, force: true });
     }
   }
   return { encoder: capabilities.encoder, captionsBurned: capabilities.canBurnCaptions, shorts: output, warnings, issues };
@@ -25159,7 +25271,7 @@ async function extractEndFrames(ffmpeg, video, directory) {
   ];
   for (const [key, file, filter, quality] of variants) {
     const target = join7(directory, file);
-    await rm4(target, { force: true });
+    await rm5(target, { force: true });
     await runFfmpeg(ffmpeg, ["-loglevel", "error", "-y", "-sseof", "-0.25", "-i", video, "-an", "-vf", filter, "-pix_fmt", "yuvj420p", "-q:v", quality, "-update", "1", target]);
     if ((await stat3(target).catch(() => void 0))?.isFile()) output[key] = `endcard/${file}`;
   }
@@ -25391,7 +25503,7 @@ async function measureScene(ffmpeg, text, file, durationSec, mode) {
     const box = unionBox(boxes);
     return box ? { box: { x1: box.x1 * 4, y1: box.y1 * 4, x2: box.x2 * 4, y2: box.y2 * 4 } } : { error: `Nothing drawn was found in ${file}; check it renders on its own.` };
   } finally {
-    await rm4(directory, { recursive: true, force: true });
+    await rm5(directory, { recursive: true, force: true });
   }
 }
 async function commandFit(flags, environment) {
@@ -25496,6 +25608,15 @@ async function commandReview(flags, io, dependencies) {
   await server.closed;
   if (!dependencies.reviewSignal) for (const signal of signals) process.off(signal, stop);
 }
+async function commandDecisions(flags) {
+  const project = resolve3(required(flags, "project"));
+  const info = await stat3(project).catch(() => void 0);
+  if (!info?.isDirectory()) throw new ShortsInputError(`Project directory not found: ${project}.`);
+  const ids = typeof flags.resolve === "string" ? flags.resolve.split(",").map((id) => id.trim()).filter(Boolean) : [];
+  if (ids.length) await resolveComments(project, ids);
+  const { review } = await projectState(project);
+  return { review: join7(project, REVIEW_FILE), ...ids.length ? { resolved: ids } : {}, updatedAt: review.updatedAt, shorts: review.shorts };
+}
 function errorPayload(error) {
   if (error instanceof YouTubeClientError) {
     return { error: { code: error.code, message: error.message, status: error.status, retryable: error.retryable } };
@@ -25516,7 +25637,7 @@ async function runShortsCli(argv, io, environment = process.env, dependencies = 
       await commandReview(flags, io, dependencies);
       return 0;
     }
-    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fit" ? await commandFit(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : await commandTranscribe(flags, environment);
+    const result = command === "read" ? await commandRead(flags, environment, dependencies) : command === "plan" ? await commandPlan(flags) : command === "shots" ? await commandShots(flags, environment) : command === "render" ? await commandRender(flags, environment) : command === "overlay" ? await commandOverlay(flags, environment, dependencies) : command === "check" ? await commandCheck(flags, environment) : command === "fit" ? await commandFit(flags, environment) : command === "fetch" ? await commandFetch(flags, environment) : command === "decisions" ? await commandDecisions(flags) : await commandTranscribe(flags, environment);
     io.stdout(`${JSON.stringify(result, null, flags.pretty === true ? 2 : void 0)}
 `);
     return 0;
