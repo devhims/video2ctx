@@ -73,8 +73,9 @@ export async function readAnalysisAssets(
       if (scope) {
         // Read the position from the immutable payload, even when older inventory metadata omits it.
         const time = storedFramePosition.parse(stored.value).frames[0]!.timestampMs;
-        const allowed = scope.savedTimestampsMs.includes(time) || (!requiresRetrieval && scope.captureTimestampsMs.includes(time));
-        if (stored.asset.videoId !== scope.videoId || !allowed)
+        const entry = scope.find(item => item.videoId === stored.asset.videoId) ?? scope.find(item => !item.videoId);
+        const allowed = entry && (entry.savedTimestampsMs.includes(time) || (!requiresRetrieval && entry.captureTimestampsMs.includes(time)));
+        if (!allowed)
           throw new Error('This saved version is outside the requested inspection, or its position still requires a fresh capture.');
       }
       return stored;

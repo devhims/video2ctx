@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["scripts/test-youtube-agent-live.ts", "src/secrets.d.ts", "worker-configuration.d.ts"]
+  "include": ["scripts/test-youtube-agent-live.ts", "scripts/replays/weather-map.live.test.ts", "src/secrets.d.ts", "worker-configuration.d.ts"]
 }

@@ -8,7 +8,9 @@ import {
   type AgentTurnResult,
   type EvidencePacket,
   type FinalizeAnswerInput,
+  type FrameAccess,
 } from './contracts';
+import { frameTurnNotes, type InventoryFrame } from './runtime/frame-access';
 import { appendNotices, playlistCoverageDisclosures } from './playlist-coverage';
 import { CITED_FRAME_PREVIEWS, citedPacketFramePreviews } from './runtime/frame-previews';
 
@@ -28,6 +30,8 @@ export function buildAgentTurnResult(
   packets: EvidencePacket[],
   creditsCharged: number,
   durationLimitContext?: DurationLimitAnswerContext,
+  /** Present when the route asked for frame work: its exact access, and the session's saved frames. */
+  frameTurn?: { access?: FrameAccess; inventory: readonly InventoryFrame[]; startedAt: number },
 ): AgentTurnResult {
   const markers = answerCitationIds(input.answer);
   const citations: AgentCitation[] = [];
@@ -35,6 +39,7 @@ export function buildAgentTurnResult(
   // Which saved previews each cited frame excerpt used, from its own packet. A later answer can
   // hold other captures of the same moment, so time alone never identifies the pixels.
   const citedFrames: Array<{ citationId: string; frames: ReturnType<typeof citedPacketFramePreviews> }> = [];
+  const citedObservations: Parameters<typeof frameTurnNotes>[0]['cited'][number][] = [];
   for (const marker of markers) {
     const matches = packets.flatMap((packet) => packet.excerpts
       .filter((excerpt) => excerpt.id === marker)
@@ -57,6 +62,7 @@ export function buildAgentTurnResult(
       ? citedPacketFramePreviews(packet, excerpt).slice(0, 6) : [];
     // Record a frame citation even without a preview, so it never falls back to matching by time.
     if (source.kind === 'frames') citedFrames.push({ citationId: excerpt.id, frames });
+    if (source.kind === 'frames' && excerpt.startMs !== undefined) citedObservations.push({ packet, startMs: excerpt.startMs, videoId: source.videoId, title: source.title });
     citations.push({
       id: excerpt.id, sourceId: source.id, provider: source.provider,
       videoId: source.videoId, channelId: source.channelId, playlistId: source.playlistId,
@@ -75,7 +81,12 @@ export function buildAgentTurnResult(
 
   // The application states playlist totals, the listing limit and reviewed content itself.
   const playlistCoverage = playlistCoverageDisclosures(packets, citations.map(citation => citation.id));
-  const disclosedAnswer = appendNotices(answer, playlistCoverage.notes);
+  const notes = [...playlistCoverage.notes];
+  // The application, not the model, states which frames this turn actually inspected.
+  if (citedObservations.length || (frameTurn && input.intent !== 'clarification' && input.intent !== 'rejected')) {
+    notes.push(...frameTurnNotes({ runId: identity.runId, startedAt: frameTurn?.startedAt ?? 0, access: frameTurn?.access, inventory: frameTurn?.inventory ?? [], packets, cited: citedObservations }));
+  }
+  const disclosedAnswer = appendNotices(answer, notes);
 
   const warnings = answerWarnings(packets, [
     ...input.warnings,

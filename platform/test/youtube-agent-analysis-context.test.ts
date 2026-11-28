@@ -166,7 +166,7 @@ it.each(['required', 'helpful'] as const)('keeps provider calls for exact frames
     usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
   }) });
   await runResearchAgentWithModel({ model, message: 'Compare the camera angles', context, decision: {
-    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 4, useStoryboard: true, visualEvidence,
+    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 4, useStoryboard: true, visualEvidence, frameAccess: 'agent_selected',
     ...(visualEvidence === 'required' ? { visualRequirements: ['camera angle'] } : {}),
   } });
   const reserve = visualEvidence === 'required' ? 2 : undefined;
@@ -210,7 +210,7 @@ it.each([
     usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
   }) });
   await runResearchAgentWithModel({ model, message: 'Compare how the presenters look and what they say', context, decision: {
-    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 2, useStoryboard: true, visualEvidence: 'required',
+    route: 'topic_research', researchBreadth: 'comparative', researchVideoCount: 2, useStoryboard: true, visualEvidence: 'required', frameAccess: 'agent_selected',
     visualRequirements: ['presenter appearance'], ...(subjects ? { comparisonVideoIds: subjects } : {}),
   } });
   expect(executions.filter(execution => execution.toolName === 'get_video_transcript').map(execution => execution.frameReserveCalls)).toEqual(reserves);
@@ -262,7 +262,7 @@ it.each([
     usage: { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } },
   }) });
   await runResearchAgentWithModel({ model, message: 'Compare how the presenters look and what they say', context, recoveredEvidence: recovered,
-    decision: { route: 'topic_research', comparisonVideoIds: [first, second], useStoryboard: true, visualEvidence: 'required',
+    decision: { route: 'topic_research', comparisonVideoIds: [first, second], useStoryboard: true, visualEvidence: 'required', frameAccess: 'agent_selected',
       visualRequirements: ['presenter appearance'] } });
   expect(executions.find(execution => execution.toolName === 'get_video_transcript')!.frameReserveCalls).toBe(reserve);
 });

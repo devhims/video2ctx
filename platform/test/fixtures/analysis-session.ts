@@ -14,7 +14,8 @@ export function attachTestAssetStore(context: AgentToolContext) {
     details: SessionAsset['details'] = {},
   ) => {
     const version = (++ordinal).toString(16).padStart(64, '0');
-    saved.set(version, { asset: { version, kind, videoId, current: true, collectedAt: 1, details }, value });
+    // Collection order stands in for time, so a test can place a run start between saves.
+    saved.set(version, { asset: { version, kind, videoId, current: true, collectedAt: ordinal, details }, value });
     return version;
   };
   context.session = {
@@ -87,5 +88,7 @@ export function attachTestAssetStore(context: AgentToolContext) {
     generation++;
     if (version) saved.delete(version); else saved.clear();
   };
-  return { saved, put, remove };
+  /** A run start after every save so far. */
+  const runStart = () => ordinal + 0.5;
+  return { saved, put, remove, runStart };
 }

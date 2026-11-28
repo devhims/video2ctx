@@ -497,6 +497,25 @@ describe('YouTube AgentCore loop control', () => {
       decision: { route: 'topic_research', researchBreadth: 'comparative', searchQuery: 'model practical use cases' }, context });
   });
 
+  it('allows completion on the first model step when there is no video for a discovery capture', async () => {
+    const context = inspectContext();
+    context.provider.frames = vi.fn();
+    context.provider.search = vi.fn(async () => ({ cacheStatus: 'miss' as const, value: {
+      query: 'exercise', results: [], videos: [], channels: [], playlists: [],
+      meta: { source: 'allthingsyoutube' as const, fetchedAt: new Date().toISOString(), partial: false, warnings: [] },
+    } }));
+    const model = new MockLanguageModelV4({ doGenerate: async () => modelResult({ toolCallId: 'finish', toolName: 'complete_research', input: '{}' }) });
+    const finalizationModel = new MockLanguageModelV4({ doGenerate: async () => finalizerModelResult({ confidence: 'low', warnings: [],
+      blocks: [{ text: 'No matching video was found.', evidenceIds: [] }] }) });
+    await runResearchAgentWithModel({ model, finalizationModel, context, message: 'Find an exercise video and capture 0:30.',
+      decision: { route: 'topic_research', searchQuery: 'exercise', frameAccess: [{ captureTimestampsMs: [30000], savedTimestampsMs: [] }] } });
+    expect(context.provider.search).toHaveBeenCalledOnce();
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(model.doGenerateCalls[0]?.tools?.map(tool => tool.name)).toContain('complete_research');
+    expect(model.doGenerateCalls[0]?.tools?.map(tool => tool.name)).not.toContain('get_video_frames');
+    expect(context.provider.frames).not.toHaveBeenCalled();
+  });
+
   it('does not retry a failed classified search in the model loop', async () => {
     const context = inspectContext();
     context.provider.search = vi.fn(async () => { throw new Error('Search unavailable'); });

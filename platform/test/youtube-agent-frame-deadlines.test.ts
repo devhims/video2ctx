@@ -47,7 +47,7 @@ function setup(delayMs: number) {
     confidence: 'low', warnings: [], blocks: [{ text: 'The available evidence is limited.', evidenceIds: ['ref_1'] }],
   }) }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] }) });
   const options = { model, finalizationModel: finalizer, context, message: 'Look at frames to confirm player names.',
-    decision: { route: 'inspect_video' as const, videoId, useStoryboard: true, visualEvidence: 'required' as const, visualRequirements: ['player names on shirts'] },
+    decision: { route: 'inspect_video' as const, videoId, useStoryboard: true, visualEvidence: 'required' as const, visualRequirements: ['player names on shirts'], frameAccess: 'agent_selected' as const },
     toolNames: ['get_video_frames', 'analyze_video_frames', 'finalize_answer'] as const };
   return { options, context, analyzed, finalizer };
 }
@@ -123,7 +123,7 @@ test('continues after the transcript target and a failed storyboard to retrieve 
   } });
   const run = runResearchAgentWithModel({ ...options, model,
     message: 'What were the names of the presenters and what were they wearing on stage?',
-    decision: { route: 'topic_research', useStoryboard: true, visualEvidence: 'required', visualRequirements: ['presenter clothing'], researchVideoCount: 1 },
+    decision: { route: 'topic_research', useStoryboard: true, visualEvidence: 'required', visualRequirements: ['presenter clothing'], researchVideoCount: 1, frameAccess: 'agent_selected' },
     recoveredSearchUsed: true, recoveredEvidence: [transcript],
     toolNames: ['get_video_storyboard', 'get_video_frames', 'analyze_video_frames', 'finalize_answer'] });
   await vi.advanceTimersByTimeAsync(0);
@@ -231,7 +231,7 @@ test('does not withhold finalization when visual evidence is only helpful', asyn
     }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] };
   } });
   await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
-    decision: { route: 'inspect_video', videoId, useStoryboard: true, visualEvidence: 'helpful' } });
+    decision: { route: 'inspect_video', videoId, useStoryboard: true, visualEvidence: 'helpful', frameAccess: 'agent_selected' } });
   expect(model.doGenerateCalls).toHaveLength(1);
   expect(context.provider.frames).not.toHaveBeenCalled();
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
@@ -243,8 +243,11 @@ test('names the required visual facts when finalizing without visual observation
   const model = new MockLanguageModelV4({ doGenerate: async () => ({ content: [{ type: 'tool-call', toolCallId: 'finish', toolName: 'finalize_answer',
     input: JSON.stringify({ intent: 'inspect_video', confidence: 'low', artifacts: [], warnings: [], blocks: [{ text: 'Unverified.', evidenceIds: ['ref_1'] }] }) }],
   finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [] }) });
-  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [metadata],
+  // A full warning list must not crowd out the application's own visual-evidence note.
+  const warnings = Array.from({ length: 50 }, (_, index) => ({ code: 'TRANSCRIPT_CONTEXT_TRUNCATED', message: `Omitted passage ${index}.` }));
+  await runResearchAgentWithModel({ ...options, model, recoveredEvidence: [{ ...metadata, warnings }],
     recoveredToolFailures: [{ toolCallId: 'frames', toolName: 'get_video_frames', operation: 'frames', message: 'Frame extraction failed' }] });
+  expect(vi.mocked(context.finalize).mock.calls[0]![1].warnings).toHaveLength(50);
   expect(JSON.stringify(model.doGenerateCalls[0]?.prompt)).toContain('Required visual evidence: player names on shirts');
   expect(context.finalize).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ warnings:
     expect.arrayContaining([expect.objectContaining({ code: 'VISUAL_EVIDENCE_INCOMPLETE', message: expect.stringContaining('player names on shirts') })]) }));
